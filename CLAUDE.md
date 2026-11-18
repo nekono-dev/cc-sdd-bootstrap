@@ -17,13 +17,14 @@ cc-sdd（Kiro 方式の仕様駆動開発）の運用一式を、各プロジェ
 - Claude Code の動作に依存する前提は、設計の承認前に PoC（一時ディレクトリで実際の `claude -p` を動かす検証）で確かめ、再実行できるスクリプトと結果を残す。推測で設計しない。
 - サブエージェント（Agent ツール）を使うときは、必ず `model` を指定し、指揮役（このセッション）と同じモデルにしない。強制のフック（spec: subagent-model-policy）ができるまでは、この決まりを手順で守る。
 
-## cc-sdd の導入（自己適用ができるまでの暫定の手順）
+## cc-sdd の導入（自己適用ができるまでの暫定の仕組み）
 
-導入物（`.claude/skills/kiro-*/`・`.kiro/settings/`）は `.gitignore` の対象で、コミットしない。版は 3.1.0。標準の決まりの文書は、CLAUDE.md を書き換えないよう `.kiro/settings/cc-sdd-guide.md` に出力する。
+導入物（`.claude/skills/kiro-*/`・`.kiro/settings/`）は `.gitignore` の対象で、コミットしない。セッション開始のたびに `scripts/agent/install-cc-sdd.sh --claude`（SessionStart のフック）が固定版（3.1.0）で入れ直す。標準の決まりの文書は、CLAUDE.md を書き換えないよう `.kiro/settings/cc-sdd-guide.md` に出力する。
 
-```sh
-M=$(mktemp) && printf '%s' '{"version":1,"artifacts":[{"id":"skills","source":{"type":"templateDir","fromDir":"templates/agents/{{AGENT}}/skills","toDir":"{{AGENT_COMMANDS_DIR}}"}},{"id":"doc_main","source":{"type":"templateFile","from":"templates/agents/{{AGENT}}/docs/CLAUDE.md","toDir":"{{KIRO_DIR}}/settings","rename":"cc-sdd-guide.md"}},{"id":"settings_templates","source":{"type":"templateDir","fromDir":"templates/shared/settings/templates","toDir":"{{KIRO_DIR}}/settings/templates"}}]}' > "$M" && npx --yes cc-sdd@3.1.0 --yes --overwrite force --manifest "$M" --claude-skills --lang ja; rm -f "$M"
-```
+- 導入に失敗・中断したら `.cache/cc-sdd-install.failed` が残り、`scripts/agent/install-gate.mjs`（UserPromptSubmit のフック）が次の入力を止める。再試行は Claude の外で `scripts/agent/install-cc-sdd.sh --claude`。
+- SKILL.md が見つからないときは、導入が済んでいないと利用者に伝え、上の再試行を勧める。
+- `scripts/agent/` のこの 2 つは、このリポジトリの開発用の暫定の道具（skyshare の同名のものを写した）。製品のコード（配置物・導入コマンド・テスト）には数えず、「実装は `/kiro-impl` でだけ行う」の対象外とする。installer-core の自己適用ができたら、その導入物（CLAUDE.md の管理区画を含む）に置き換えて消す。
+- 版を上げるときは `install-cc-sdd.sh` の `CC_SDD_VERSION` を変え、`poc/self-install/run.sh` で導入と停止を確かめる。
 
 ## ブランチ
 

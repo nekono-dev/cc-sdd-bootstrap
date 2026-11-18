@@ -40,5 +40,6 @@ skyshare の `scripts/agent/` と `.claude/settings.json` に手作りの一式�
 - Node.js 22 以上、外部パッケージなし。
 - 要件の段階で決めること: 設定ファイルの名前、配置先のディレクトリ名（skyshare と同じ `scripts/agent/` にするか）、`update` で利用者が書き換えた共通部分をどう扱うか（上書き・中止・差分の表示）、アンインストールを扱うか。
 - CLAUDE.md の cc-sdd 標準の決まり（cc-sdd の `doc_main`）はコミットしない。導入時に `.kiro/settings/cc-sdd-guide.md` へ出力し、CLAUDE.md の管理区画から `@.kiro/settings/cc-sdd-guide.md` で取り込む（2026-11-18、このリポジトリで採用。取り込みが効くこと・ファイルが無くても壊れないことを PoC で確認済み）。
+- 自己適用のとき、このリポジトリの暫定の導入の仕組み（`scripts/agent/install-cc-sdd.sh`・`install-gate.mjs` と、`.claude/settings.json` のそのフックの登録、CLAUDE.md の「cc-sdd の導入（暫定）」の節）を、導入コマンドの配置物に置き換えて消す（2026-11-18 に暫定で置いた）。
 - PoC: `npx github:<owner>/<repo>` で bin が動くこと（公開リポジトリ、認証なし）。
 - 実現可能性の確認（2026-11-18、discovery Step 5）の指摘: bin の先頭に `#!/usr/bin/env node` が必須。`npx github:` は既定ブランチの先端を取るので、版の固定には `github:nekono-dev/cc-sdd-bootstrap#<タグ>` を案内する。package.json に `name` と `bin` が要る。Windows では `npx` が `npx.cmd` になる。
