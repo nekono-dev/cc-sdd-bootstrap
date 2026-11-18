@@ -1,0 +1,8 @@
+{
+  "extraKnownMarketplaces": {
+    "nekono-dev": { "source": { "source": "github", "repo": "nekono-dev/claude-plugins" } }
+  },
+  "enabledPlugins": {
+    "branch-release-workflow@nekono-dev": true
+  }
+}
