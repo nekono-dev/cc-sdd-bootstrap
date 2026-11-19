@@ -151,7 +151,7 @@
   - _Depends: 6.1, 6.2_
   - _Requirements: 10.1, 10.2, 10.3_
 
-- [ ] 7.2 steering と README を導入コマンドに合わせて更新する
+- [x] 7.2 steering と README を導入コマンドに合わせて更新する
   - structure.md に決めたディレクトリ（入口・処理・配置物・テスト・PoC）を、tech.md の「よく使うコマンド」に単体テストと導入コマンドの例を書く。README に 3 つの操作・引数・版の固定・設定ファイル・書き換えの扱い・同時実行を想定しないことを書く
   - 完了の状態: steering と README に上の内容があり、CLAUDE.md の記述と食い違わない
   - _Requirements: 10.1_
