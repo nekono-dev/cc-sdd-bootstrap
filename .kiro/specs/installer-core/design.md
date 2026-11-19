@@ -95,12 +95,13 @@ graph LR
 
 ### Directory Structure
 ```
-package.json                         # name・version・type: module・bin・files・engines（node >=22）
+package.json                         # name・version・type: module・bin・files・engines（node >=22）。files は bin/・lib/ と配置物のファイルを個別に挙げる（installed.json を配らない）
 bin/
 └── cc-sdd-bootstrap.mjs             # 入口。先頭に #!/usr/bin/env node。Node の版を確かめてから lib/cli.mjs を動的に読み込む
 lib/
+├── node-version.mjs                 # Node の版の判定（decideNodeSupported）。古い Node でも読み込めるよう標準の構文だけで書き、他の lib を import しない
 ├── config-schema.mjs                # 設定の定義（項目の道筋・引数の名前・既定値・検証・質問文）。下流の spec が項目を足す
-├── catalog.mjs                      # カタログ（写すファイル・フックの登録・.gitignore の行・CLAUDE.md の文章）。下流の spec が項目を足す
+├── catalog.mjs                      # 共有の定数（配置先・一式の見分けの文字列・設定ファイル名・記録の道筋）と、カタログ（写すファイル・フックの登録・.gitignore の行・CLAUDE.md の文章）。下流の spec が項目を足す
 ├── config.mjs                       # 設定ファイルの解釈・検証・補い・値の決定・書き出し（純粋）
 ├── ledger.mjs                       # 配置の記録の解釈・作成と、書き換えの判定（純粋）
 ├── blocks.mjs                       # 目印の行で囲んだ区画の作成・置き換え・削除（純粋。.gitignore と CLAUDE.md で使う）
@@ -114,12 +115,15 @@ lib/
     ├── install-gate.mjs             # 初期の配置物（同上）
     └── installed.json               # このリポジトリの配置の記録（自己適用で作られる。カタログには載せない）
 test/
+├── node-version.test.mjs            # Node の版の判定の単体テスト
 ├── config.test.mjs                  # config・config-schema の単体テスト
 ├── ledger.test.mjs                  # ledger の単体テスト
 ├── blocks.test.mjs                  # blocks の単体テスト
 ├── settings-hooks.test.mjs          # settings-hooks の単体テスト
 ├── plan.test.mjs                    # plan の単体テスト（メモリ上の対象の状態から計画を作る）
-├── catalog.test.mjs                 # カタログのファイルが実在し、配置物が lib/ を import しないことの確認
+├── target.test.mjs                  # target の単体テスト（一時ディレクトリでの書き込み・権限・削除・途中失敗）
+├── cli.test.mjs                     # cli の引数の解析と対話の単体テスト（擬似の入出力）
+├── catalog.test.mjs                 # 共有の定数の値、カタログのファイルが実在すること、配置物が lib/ を import しないことの確認
 ├── cli.e2e.test.mjs                 # 一時ディレクトリの git のリポジトリで bin を実行する端から端までのテスト
 └── package.test.mjs                 # npm pack --dry-run で同梱の範囲（.agent-hooks を含み、test/・poc/ を含まない）を確かめる
 poc/
@@ -326,7 +330,11 @@ installer-core が定義する項目:
 **Contracts**: State [x]
 
 ```typescript
+// 共有の定数（他の lib はここから import する）
 const DEPLOY_DIR = ".agent-hooks/cc-sdd-bootstrap";
+const OWNED_MARKER = "/.agent-hooks/cc-sdd-bootstrap/";     // 一式のフックの見分け
+const CONFIG_PATH = ".cc-sdd-bootstrap.json";
+const LEDGER_PATH = ".agent-hooks/cc-sdd-bootstrap/installed.json";
 
 interface CatalogFile {
   path: string;                 // リポジトリのルートからの道筋。DEPLOY_DIR の下に限る
@@ -407,7 +415,7 @@ function serializeConfig(config: ConfigObject): string; // 2 文字の字下げ�
 interface LedgerEntry { kind: "common" | "project"; sha256: string }
 interface Ledger { format: 1; bootstrapVersion: string; files: Record<string, LedgerEntry> }
 
-const LEDGER_PATH = ".agent-hooks/cc-sdd-bootstrap/installed.json";
+// LEDGER_PATH は catalog から import する
 
 function parseLedger(text: string | null): Ledger | null;  // 無い・壊れているときは null
 function buildLedger(version: string, placed: Array<{ path: string; kind: "common" | "project"; content: Buffer }>): Ledger;
@@ -454,7 +462,7 @@ function removeBlock(input: { text: string; markers: Markers; file: string }): {
 **Contracts**: Service [x]
 
 ```typescript
-const OWNED_MARKER = "/.agent-hooks/cc-sdd-bootstrap/";
+// OWNED_MARKER は catalog から import する
 type SettingsError = { code: "SETTINGS_UNREADABLE"; detail: string };
 
 function mergeHooks(input: { text: string | null; hooks: CatalogHook[] }):
@@ -579,7 +587,7 @@ function runCli(argv: string[], io: CliIo): Promise<number>; // 終了コード�
 - 対話: `init` で `interactive` のときだけ、引数で渡されていない項目を尋ねる（`[既定値]` を示し、空の入力は既定値。不正なら理由を示して尋ね直す）。`update` では尋ねない。
 - 終了コード: 0＝成功・変更なし・導入済みの init（2.6）・使い方の表示、1＝操作の失敗（Node の版、git の最上位でない、設定・目印・settings の不正、書き換えによる中止、未導入の update・uninstall、書き込みの失敗）、2＝使い方の誤り。
 - 出力: 成功時は「作成」「更新」「削除」に分けた道筋の一覧、補った項目、警告（知らない項目）。init の成功時は、設定ファイルと配置物をコミットすること、cc-sdd 本体は次のセッション開始時に入ること、版の固定は `npx github:nekono-dev/cc-sdd-bootstrap#<タグ>` で行えることを示す（2.7）。uninstall の成功時は、Plan の `notices`（除外が外れて残る cc-sdd の導入物など）も示す。中止時は理由ごとに次の手（`--force` で再実行、目印を直す、`init` を使う、など）を示す（1.7）。
-- Bin は Node の版（`process.versions.node` の先頭の数）を確かめ、22 未満なら必要な版を出して 1 で終わる（1.4）。その後で `lib/cli.mjs` を動的に読み込む（古い Node で読み込みの段階の誤りにしないため）。
+- Bin は `lib/node-version.mjs` の `decideNodeSupported(process.versions.node)` で Node の版（先頭の数）を確かめ、22 未満なら必要な版を出して 1 で終わる（1.4）。その後で `lib/cli.mjs` を動的に読み込む（古い Node で読み込みの段階の誤りにしないため）。
 
 ## Data Models
 
@@ -649,7 +657,7 @@ function runCli(argv: string[], io: CliIo): Promise<number>; // 終了コード�
 - 書き込みの失敗（書けないディレクトリを用意する）で、変えたもの・失敗したもの・残りが表示される（4.8）。
 
 ### Package Tests（`test/package.test.mjs`）
-- `npm pack --dry-run --json` の一覧に `bin/`・`lib/`・`.agent-hooks/cc-sdd-bootstrap/install-*.{sh,mjs}` が含まれ、`test/`・`poc/`・`.kiro/` が含まれない。
+- `npm pack --dry-run --json` の一覧に `bin/`・`lib/`・カタログの全てのファイルが含まれ、`installed.json`・`test/`・`poc/`・`.kiro/` が含まれない（下流の spec がカタログにファイルを足したとき、`package.json` の `files` への追記漏れをここで見つける）。
 
 ### Self-application Check（自己適用のタスクで確かめる）
 - このリポジトリで `node bin/cc-sdd-bootstrap.mjs init` の後に `update` が「変更はありません」（10.3）。
