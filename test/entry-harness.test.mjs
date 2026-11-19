@@ -62,6 +62,25 @@ test('偽 npx は manifest に無い雛形を作らず、fail と hang を制御
   assert.ok(hang.signal === 'SIGTERM' || hang.error?.code === 'ETIMEDOUT');
 });
 
+test('偽 npx の lock mode は成果物を書いて kiro-fake を読めなくする', (t) => {
+  if (process.getuid?.() === 0) return t.skip('root では chmod による読み取り拒否を再現できない');
+  const repo = makeRepo();
+  t.after(() => {
+    try { fs.chmodSync(path.join(repo.root, '.claude/skills/kiro-fake'), 0o755); } catch {}
+    repo.cleanup();
+  });
+  const manifest = path.join(repo.root, 'manifest.json');
+  fs.writeFileSync(manifest, manifestText);
+  const result = spawnSync(path.join(repo.fakeBin, 'npx'), ['--manifest', manifest], {
+    cwd: repo.root, encoding: 'utf8', env: { ...process.env, FAKE_NPX_MODE: 'lock' },
+  });
+  assert.equal(result.status, 0);
+  const skillDir = path.join(repo.root, '.claude/skills/kiro-fake');
+  assert.equal(fs.statSync(skillDir).mode & 0o777, 0);
+  fs.chmodSync(skillDir, 0o755);
+  assert.equal(repo.read('.claude/skills/kiro-fake/SKILL.md'), 'skill unknown unknown');
+});
+
 test('runEntry は入口未配置でも結果を返し、npx を呼ばない', (t) => {
   const repo = makeRepo();
   t.after(repo.cleanup);

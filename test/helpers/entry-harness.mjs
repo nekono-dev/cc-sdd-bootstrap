@@ -22,7 +22,7 @@ process.stderr.write('fake npx progress\\n');
 const mode = process.env.FAKE_NPX_MODE || 'ok';
 if (mode === 'fail') { process.stderr.write('fake npx failure\\n'); process.exit(7); }
 if (mode === 'hang') { await new Promise((resolve) => setTimeout(resolve, 60000)); process.exit(2); }
-if (mode !== 'ok') process.exit(2);
+if (mode !== 'ok' && mode !== 'lock') process.exit(2);
 const manifestIndex = args.indexOf('--manifest');
 const manifestPath = manifestIndex >= 0 ? args[manifestIndex + 1] : null;
 let manifest;
@@ -42,6 +42,9 @@ for (const artifact of manifest.artifacts || []) {
   const destination = path.join(process.cwd(), target[0]);
   fs.mkdirSync(path.dirname(destination), { recursive: true });
   fs.writeFileSync(destination, target[1] + ' ' + version + ' ' + lang);
+}
+if (mode === 'lock') {
+  fs.chmodSync(path.join(process.cwd(), '.claude/skills/kiro-fake'), 0o000);
 }
 `;
 
