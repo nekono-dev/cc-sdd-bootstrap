@@ -1,11 +1,14 @@
 node_modules/
 
-# cc-sdd の導入物（cc-sdd は MIT で本リポジトリとライセンスが異なるため含めない）。導入は CLAUDE.md の手順で行う
-.claude/skills/kiro-*/
-.kiro/settings/
 # 導入の失敗の記録など、手元だけの状態
 /.cache/
 # 個人の承認
 .claude/settings.local.json
 # brw create が作る作業ブランチの worktree
 .claude/worktrees/
+
+# >>> cc-sdd-bootstrap（この区画は cc-sdd-bootstrap が管理する）
+.claude/skills/kiro-*/
+.kiro/settings/
+/.cache/cc-sdd-install.failed
+# <<< cc-sdd-bootstrap

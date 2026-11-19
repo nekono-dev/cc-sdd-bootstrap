@@ -3,6 +3,6 @@
   "protectedBranches": ["main"],
   "baseBranch": "develop",
   "namePattern": "^dev/[a-z0-9]+(-[a-z0-9]+)*$",
-  "autoApprovePush": true,
+  "autoApprove": { "push": true, "pullRequest": true },
   "preview": { "provider": "none" }
 }

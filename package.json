@@ -1,0 +1,21 @@
+{
+  "name": "cc-sdd-bootstrap",
+  "version": "0.1.0",
+  "description": "cc-sdd（Kiro 方式の仕様駆動開発）の運用一式を各プロジェクトへ導入・更新する",
+  "type": "module",
+  "bin": {
+    "cc-sdd-bootstrap": "bin/cc-sdd-bootstrap.mjs"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "files": [
+    "bin/",
+    "lib/",
+    ".agent-hooks/cc-sdd-bootstrap/install-cc-sdd.sh",
+    ".agent-hooks/cc-sdd-bootstrap/install-gate.mjs"
+  ],
+  "scripts": {
+    "test": "node --test \"test/**/*.test.mjs\""
+  }
+}
