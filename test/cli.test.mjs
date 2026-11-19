@@ -102,3 +102,99 @@ test("runCli の終了コード: 使い方は 0、誤りは 2", async () => {
   assert.match(err2.text(), /使い方/);
   assert.equal(out2.text(), "");
 });
+
+// ---- promptValues（対話） ----
+import { PassThrough } from "node:stream";
+import { promptValues } from "../lib/cli.mjs";
+
+/** 入力の行を流し込む擬似の入出力 */
+function fakeIo(lines) {
+  const stdin = new PassThrough();
+  stdin.end(lines.map((l) => l + "\n").join(""));
+  const stdout = sink();
+  return { stdin, stdout, stderr: sink(), interactive: true };
+}
+
+const strField = {
+  path: "a.b", flag: "x", kind: "string", defaultValue: "dflt", question: "質問A",
+  validate: (v) => (v === "bad" ? "不正な値です" : null),
+};
+const boolField = {
+  path: "flag", flag: "f", kind: "boolean", defaultValue: false, question: "質問B",
+  validate: (v) => (typeof v === "boolean" ? null : "真偽で指定してください"),
+};
+const mapField = (mapKeys) => ({
+  path: "models", flag: "m", kind: "map", defaultValue: { impl: "opus" }, question: "質問M", mapKeys,
+  validate: (v) => (Object.values(v).some((s) => s.trim() === "") ? "空にできません" : null),
+});
+
+test("空の入力は既定値を採用し、既定値を示す", async () => {
+  const io = fakeIo([""]);
+  const r = await promptValues(io, [strField], {}, {});
+  assert.deepEqual(r, { "a.b": "dflt" });
+  assert.match(io.stdout.text(), /質問A \[dflt\]: /);
+});
+
+test("設定ファイルの既存の値を既定として示す", async () => {
+  const io = fakeIo([""]);
+  const r = await promptValues(io, [strField], { a: { b: "old" } }, {});
+  assert.deepEqual(r, { "a.b": "old" });
+  assert.match(io.stdout.text(), /\[old\]/);
+});
+
+test("不正な値は理由を示して尋ね直す", async () => {
+  const io = fakeIo(["bad", "good"]);
+  const r = await promptValues(io, [strField], {}, {});
+  assert.deepEqual(r, { "a.b": "good" });
+  assert.match(io.stdout.text(), /不正な値です/);
+});
+
+test("引数で渡した項目は尋ねない", async () => {
+  const io = fakeIo([""]);
+  const r = await promptValues(io, [strField, boolField], {}, { "a.b": "given" });
+  assert.deepEqual(r, { flag: false });
+  assert.doesNotMatch(io.stdout.text(), /質問A/);
+});
+
+test("真偽は yes/no/true/false/y/n を受け付け、既定を yes/no で示す", async () => {
+  for (const [input, exp] of [["YES", true], ["n", false], ["True", true], ["no", false], ["y", true]]) {
+    const io = fakeIo([input]);
+    assert.deepEqual(await promptValues(io, [boolField], {}, {}), { flag: exp });
+    assert.match(io.stdout.text(), /質問B \[no\]: /);
+  }
+  const io = fakeIo(["maybe", "yes"]);
+  assert.deepEqual(await promptValues(io, [boolField], {}, {}), { flag: true });
+  assert.match(io.stdout.text(), /yes・no/);
+});
+
+test("対応の項目は mapKeys のキーごとに尋ねる", async () => {
+  const io = fakeIo(["", "sonnet"]);
+  const r = await promptValues(io, [mapField(["impl", "review"])], {}, {});
+  assert.deepEqual(r, { models: { impl: "opus", review: "sonnet" } });
+  assert.match(io.stdout.text(), /impl/);
+  assert.match(io.stdout.text(), /\[opus\]/);
+});
+
+test("mapKeys が空なら何も尋ねない", async () => {
+  const io = fakeIo([]);
+  const r = await promptValues(io, [mapField([])], {}, {});
+  assert.deepEqual(r, {});
+  assert.equal(io.stdout.text(), "");
+});
+
+test("入力が尽きたとき、既定値が正しければ既定値を返す", async () => {
+  const io = fakeIo([]);
+  const r = await promptValues(io, [strField, boolField], {}, {});
+  assert.deepEqual(r, { "a.b": "dflt", flag: false });
+});
+
+test("入力が尽きたとき、既存の値が不正なら止まって失敗する", async () => {
+  const io = fakeIo([]);
+  const verField = { ...strField, validate: (v) => (v === "bad" ? "不正な値です" : null) };
+  await assert.rejects(promptValues(io, [verField], { a: { b: "bad" } }, {}), /入力が終わりました/);
+});
+
+test("入力が尽きたとき、既定のない map のキーは止まって失敗する", async () => {
+  const io = fakeIo([]);
+  await assert.rejects(promptValues(io, [mapField(["review"])], {}, {}), /入力が終わりました/);
+});
