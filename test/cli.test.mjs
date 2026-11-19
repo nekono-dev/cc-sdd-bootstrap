@@ -287,7 +287,7 @@ test("導入済みの init は配置物の道筋がディレクトリでも案�
   const invoke = () => runCli(["init"], { cwd: root, packageRoot: path.resolve("."), interactive: false, stdout, stderr });
   assert.equal(await invoke(), 0);
 
-  const replacedPath = ".agent-hooks/cc-sdd-bootstrap/install-cc-sdd.sh";
+  const replacedPath = ".agent-hooks/cc-sdd-bootstrap/install-cc-sdd.mjs";
   fs.rmSync(path.join(root, replacedPath));
   fs.mkdirSync(path.join(root, replacedPath));
   fs.writeFileSync(path.join(root, replacedPath, "keep.txt"), "そのまま残す\n");

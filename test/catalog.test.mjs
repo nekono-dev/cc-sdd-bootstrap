@@ -90,11 +90,13 @@ test("files の道筋は DEPLOY_DIR の下にあり、.. を含まず、パッ�
   }
 });
 
-test("files は設計の 2 本で、実行権限は install-cc-sdd.sh だけ（4.1, 4.7）", () => {
+test("files はセッション導入の 4 本で、全て実行権限なし", () => {
   assert.deepEqual(
     catalog.files.map((f) => [f.path, f.kind, f.executable]),
     [
-      [`${DEPLOY_DIR}/install-cc-sdd.sh`, "common", true],
+      [`${DEPLOY_DIR}/install-cc-sdd.mjs`, "common", false],
+      [`${DEPLOY_DIR}/install-rules.mjs`, "common", false],
+      [`${DEPLOY_DIR}/config-schema.mjs`, "common", false],
       [`${DEPLOY_DIR}/install-gate.mjs`, "common", false],
     ],
   );
@@ -107,7 +109,7 @@ test("hooks の command は全て一式の見分けの文字列を含み、設�
   assert.deepEqual(catalog.hooks, [
     {
       event: "SessionStart",
-      command: `"$CLAUDE_PROJECT_DIR${OWNED_MARKER}install-cc-sdd.sh" --claude`,
+      command: `node "$CLAUDE_PROJECT_DIR${OWNED_MARKER}install-cc-sdd.mjs" session-start`,
       timeout: 600,
     },
     {
@@ -118,11 +120,13 @@ test("hooks の command は全て一式の見分けの文字列を含み、設�
   ]);
 });
 
-test("gitignore は設計の 3 行である（7.1）", () => {
+test("gitignore は設計の 5 要素である", () => {
   assert.deepEqual(catalog.gitignore, [
     ".claude/skills/kiro-*/",
-    ".kiro/settings/",
-    "/.cache/cc-sdd-install.failed",
+    { line: ".kiro/settings/", when: { path: "ccSdd.keepTemplates", equals: false } },
+    { line: ".kiro/settings/*", when: { path: "ccSdd.keepTemplates", equals: true } },
+    { line: "!.kiro/settings/templates/", when: { path: "ccSdd.keepTemplates", equals: true } },
+    "/.cache/",
   ]);
 });
 
@@ -134,8 +138,10 @@ test("gitignore は設定・配置物・配置の記録・.claude/settings.json 
     ".claude/settings.json",
   ];
   for (const line of catalog.gitignore) {
+    const pattern = typeof line === "string" ? line : line.line;
+    if (pattern.startsWith("!")) continue;
     for (const p of protectedPaths) {
-      assert.ok(!gitignoreMatches(line, p), `${line} が ${p} に当たる`);
+      assert.ok(!gitignoreMatches(pattern, p), `${pattern} が ${p} に当たる`);
     }
   }
 });
@@ -145,7 +151,16 @@ const GUIDE_IMPORT = "@.kiro/settings/cc-sdd-guide.md";
 test("claudeSections の id は重複しない", () => {
   const ids = catalog.claudeSections.map((s) => s.id);
   assert.equal(new Set(ids).size, ids.length);
+  assert.deepEqual(ids, ["cc-sdd-session-install", "cc-sdd-guide"]);
   assert.ok(ids.includes("cc-sdd-guide"));
+});
+
+test("セッション導入の管理区画に運用案内がある", () => {
+  const section = catalog.claudeSections.find((s) => s.id === "cc-sdd-session-install");
+  assert.ok(section);
+  for (const phrase of ["セッション", "install-cc-sdd.mjs", "SKILL.md", "止まる"]) {
+    assert.ok(section.body.includes(phrase), phrase);
+  }
 });
 
 test("cc-sdd-guide の区画は見出し・説明・取り込みの行だけで、標準の決まりの中身を書かない（8.2, 8.3）", () => {

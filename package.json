@@ -12,7 +12,8 @@
   "files": [
     "bin/",
     "lib/",
-    ".agent-hooks/cc-sdd-bootstrap/install-cc-sdd.sh",
+    ".agent-hooks/cc-sdd-bootstrap/install-cc-sdd.mjs",
+    ".agent-hooks/cc-sdd-bootstrap/install-rules.mjs",
     ".agent-hooks/cc-sdd-bootstrap/config-schema.mjs",
     ".agent-hooks/cc-sdd-bootstrap/install-gate.mjs"
   ],

@@ -5,6 +5,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { after, test } from "node:test";
+import { resolveGitignoreLines } from "../lib/plan.mjs";
 import { catalog, CONFIG_PATH, DEPLOY_DIR, LEDGER_PATH } from "../lib/catalog.mjs";
 
 const packageRoot = path.resolve(path.dirname(new URL(import.meta.url).pathname), "..");
@@ -86,7 +87,7 @@ test("引数なしの非対話 init は既定値と一式を作り、直後の u
   assert.ok(fs.existsSync(path.join(root, CONFIG_PATH)));
   assert.ok(fs.existsSync(path.join(root, LEDGER_PATH)));
   for (const file of catalog.files) assert.ok(fs.existsSync(path.join(root, file.path)), file.path);
-  assert.equal(fs.statSync(path.join(root, catalog.files.find((file) => file.executable).path)).mode & 0o777, 0o755);
+  for (const file of catalog.files) assert.equal((fs.statSync(path.join(root, file.path)).mode & 0o111) !== 0, file.executable, file.path);
   for (const item of [".claude/settings.json", ".gitignore", "CLAUDE.md"]) assert.ok(fs.existsSync(path.join(root, item)), item);
   const settings = JSON.parse(read(root, ".claude/settings.json"));
   for (const hook of catalog.hooks) {
@@ -95,7 +96,10 @@ test("引数なしの非対話 init は既定値と一式を作り、直後の u
   const gitignore = read(root, ".gitignore").toString();
   assert.match(gitignore, /# >>> cc-sdd-bootstrap/);
   assert.match(gitignore, /# <<< cc-sdd-bootstrap/);
-  for (const line of catalog.gitignore) assert.ok(gitignore.includes(line), line);
+  const defaultLines = resolveGitignoreLines(catalog.gitignore, { format: 1, ccSdd: { keepTemplates: false } });
+  for (const line of defaultLines) assert.ok(gitignore.split("\n").includes(line), line);
+  assert.ok(!gitignore.split("\n").includes(".kiro/settings/*"));
+  assert.ok(!gitignore.split("\n").includes("!.kiro/settings/templates/"));
   const claude = read(root, "CLAUDE.md").toString();
   assert.match(claude, /<!-- cc-sdd-bootstrap:begin/);
   assert.match(claude, /<!-- cc-sdd-bootstrap:end/);
@@ -109,20 +113,6 @@ test("引数なしの非対話 init は既定値と一式を作り、直後の u
   assert.equal(updated.status, 0, updated.stderr);
   assert.match(updated.outputText, /変更はありません/);
   assertSnapshot(root, before);
-});
-
-test("update は導入スクリプトの実行権限を戻す", () => {
-  const root = makeRepo();
-  assert.equal(run(root, ["init"]).status, 0);
-  const script = path.join(root, catalog.files.find((file) => file.executable).path);
-  fs.chmodSync(script, 0o644);
-  const update = run(root, ["update"]);
-  assert.equal(update.status, 0, update.outputText);
-  assert.equal(fs.statSync(script).mode & 0o777, 0o755);
-  assert.match(update.outputText, /更新[\s\S]*実行権限を戻した/);
-  const again = run(root, ["update"]);
-  assert.equal(again.status, 0, again.outputText);
-  assert.match(again.outputText, /変更はありません/);
 });
 
 test("既存の settings・gitignore・CLAUDE.md は init 後の uninstall で元に戻る", () => {
