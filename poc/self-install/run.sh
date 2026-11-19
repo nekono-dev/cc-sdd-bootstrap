@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# PoC: 暫定の cc-sdd 導入の仕組み（scripts/agent/install-cc-sdd.sh・install-gate.mjs）が、実際の Claude Code で動くことを確かめる。
+# PoC: cc-sdd の導入スクリプトと停止フックが、実際の Claude Code で動くことを確かめる。
 #
 # 確かめること
 #   1. 導入物が無い状態（新しい clone と同じ）から、セッション開始で cc-sdd の導入物が入り、プロンプトが通る
@@ -18,6 +18,8 @@ copy_repo() {
   local dest="$1"
   mkdir -p "$dest"
   (cd "$repo" && git ls-files -co --exclude-standard -z | xargs -0 -I{} cp --parents {} "$dest/")
+  test -f "$dest/.agent-hooks/cc-sdd-bootstrap/install-cc-sdd.sh"
+  test -f "$dest/.agent-hooks/cc-sdd-bootstrap/install-gate.mjs"
   (cd "$dest" && git init -q && git add -A && git -c user.name=poc -c user.email=poc@example.invalid commit -qm poc)
 }
 

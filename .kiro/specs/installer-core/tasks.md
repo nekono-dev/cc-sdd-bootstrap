@@ -143,7 +143,7 @@
   - _Requirements: 1.9, 4.1_
 
 - [ ] 7. 自己適用
-- [ ] 7.1 このリポジトリに導入コマンドで一式を導入する
+- [x] 7.1 このリポジトリに導入コマンドで一式を導入する
   - 暫定の `scripts/agent/` を消し、`.claude/settings.json` の暫定のフックの登録、CLAUDE.md の「cc-sdd の標準の決まり」と「cc-sdd の導入（暫定）」の節、`.gitignore` の区画と重なる行を手で取り除く。CLAUDE.md の失敗時の再試行の案内は新しい道筋で書き直す
   - `node bin/cc-sdd-bootstrap.mjs init` を実行し、`poc/self-install/` の道筋を新しい場所に直す。ここまでを 1 つのコミットにする
   - 手での取り除きと `init` の実行は、途中の状態で cc-sdd が入らないセッションを作らないよう、必ず同じコミットにする
