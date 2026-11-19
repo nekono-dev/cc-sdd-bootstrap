@@ -3,6 +3,10 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { parseCliArgs, buildUsage, runCli } from "../lib/cli.mjs";
 import { configFields } from "../lib/config-schema.mjs";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { catalog, LEDGER_PATH } from "../lib/catalog.mjs";
 
 const parse = (argv) => parseCliArgs(argv, configFields);
 
@@ -101,6 +105,107 @@ test("runCli の終了コード: 使い方は 0、誤りは 2", async () => {
   assert.match(err2.text(), /bogus/);
   assert.match(err2.text(), /使い方/);
   assert.equal(out2.text(), "");
+});
+
+test("init・update・uninstall を対象リポジトリに適用する", async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "cc-sdd-cli-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  fs.mkdirSync(path.join(root, ".git"));
+  const invoke = (args) => runCli(args, { cwd: root, packageRoot: path.resolve("."), interactive: false, stdout: sink(), stderr: sink() });
+  assert.equal(await invoke(["init"]), 0);
+  assert.ok(fs.existsSync(path.join(root, ".cc-sdd-bootstrap.json")));
+  assert.ok(fs.existsSync(path.join(root, LEDGER_PATH)));
+  for (const f of catalog.files) assert.ok(fs.existsSync(path.join(root, f.path)));
+  for (const f of [".claude/settings.json", ".gitignore", "CLAUDE.md"]) assert.ok(fs.existsSync(path.join(root, f)));
+  const before = Object.fromEntries([".cc-sdd-bootstrap.json", LEDGER_PATH, ...catalog.files.map((f) => f.path), ".claude/settings.json", ".gitignore", "CLAUDE.md"].map((f) => [f, fs.readFileSync(path.join(root, f))]));
+  assert.equal(await invoke(["update"]), 0);
+  for (const [f, contents] of Object.entries(before)) assert.deepEqual(fs.readFileSync(path.join(root, f)), contents);
+  assert.equal(await invoke(["update", "--lang", "en"]), 0);
+  assert.equal(JSON.parse(fs.readFileSync(path.join(root, ".cc-sdd-bootstrap.json"))).ccSdd.lang, "en");
+  assert.equal(await invoke(["uninstall"]), 0);
+  assert.ok(!fs.existsSync(path.join(root, ".cc-sdd-bootstrap.json")));
+  assert.ok(!fs.existsSync(path.join(root, LEDGER_PATH)));
+  for (const f of catalog.files) assert.ok(!fs.existsSync(path.join(root, f.path)));
+});
+
+test("状態の不一致と不正設定は操作を止める", async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "cc-sdd-cli-state-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  fs.mkdirSync(path.join(root, ".git"));
+  const invoke = (args) => runCli(args, { cwd: root, packageRoot: path.resolve("."), interactive: false, stdout: sink(), stderr: sink() });
+  assert.equal(await invoke(["update"]), 1);
+  assert.equal(await invoke(["uninstall"]), 1);
+  assert.equal(await invoke(["init"]), 0);
+  const snapshot = fs.readFileSync(path.join(root, ".cc-sdd-bootstrap.json"));
+  assert.equal(await invoke(["init"]), 0);
+  assert.deepEqual(fs.readFileSync(path.join(root, ".cc-sdd-bootstrap.json")), snapshot);
+  fs.writeFileSync(path.join(root, ".cc-sdd-bootstrap.json"), '{"format":1,"ccSdd":"x"}\n');
+  const invalid = fs.readFileSync(path.join(root, ".cc-sdd-bootstrap.json"));
+  assert.equal(await invoke(["update"]), 1);
+  assert.deepEqual(fs.readFileSync(path.join(root, ".cc-sdd-bootstrap.json")), invalid);
+  const outside = fs.mkdtempSync(path.join(os.tmpdir(), "cc-sdd-cli-outside-"));
+  t.after(() => fs.rmSync(outside, { recursive: true, force: true }));
+  assert.equal(await runCli(["init"], { cwd: outside, packageRoot: path.resolve("."), interactive: false, stdout: sink(), stderr: sink() }), 1);
+});
+
+test("導入済みの init は配置物の道筋がディレクトリでも案内して変更しない", async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "cc-sdd-cli-init-directory-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  fs.mkdirSync(path.join(root, ".git"));
+  const stdout = sink();
+  const stderr = sink();
+  const invoke = () => runCli(["init"], { cwd: root, packageRoot: path.resolve("."), interactive: false, stdout, stderr });
+  assert.equal(await invoke(), 0);
+
+  const replacedPath = ".agent-hooks/cc-sdd-bootstrap/install-cc-sdd.sh";
+  fs.rmSync(path.join(root, replacedPath));
+  fs.mkdirSync(path.join(root, replacedPath));
+  fs.writeFileSync(path.join(root, replacedPath, "keep.txt"), "そのまま残す\n");
+  const before = fs.readFileSync(path.join(root, ".cc-sdd-bootstrap.json"));
+
+  assert.equal(await invoke(), 0);
+  assert.match(stdout.text(), /update/);
+  assert.equal(stderr.text(), "");
+  assert.deepEqual(fs.readFileSync(path.join(root, ".cc-sdd-bootstrap.json")), before);
+  assert.equal(fs.readFileSync(path.join(root, replacedPath, "keep.txt"), "utf8"), "そのまま残す\n");
+});
+
+test("導入済みの init は設定以外の管理対象がディレクトリでも案内して変更しない", async (t) => {
+  for (const replacedPath of [LEDGER_PATH, ".claude/settings.json", ".gitignore", "CLAUDE.md"]) {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "cc-sdd-cli-init-managed-directory-"));
+    t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+    fs.mkdirSync(path.join(root, ".git"));
+    const stdout = sink();
+    const stderr = sink();
+    const invoke = (args) => runCli(args, { cwd: root, packageRoot: path.resolve("."), interactive: false, stdout, stderr });
+    assert.equal(await invoke(["init"]), 0);
+
+    const targetPath = path.join(root, replacedPath);
+    fs.rmSync(targetPath, { recursive: true, force: true });
+    fs.mkdirSync(targetPath, { recursive: true });
+    fs.writeFileSync(path.join(targetPath, "keep.txt"), "そのまま残す\n");
+    const before = fs.readdirSync(root, { recursive: true, withFileTypes: false }).sort();
+
+    assert.equal(await invoke(["init"]), 0, replacedPath);
+    assert.match(stdout.text(), /update/);
+    assert.equal(stderr.text(), "");
+    assert.deepEqual(fs.readdirSync(root, { recursive: true, withFileTypes: false }).sort(), before);
+    assert.equal(fs.readFileSync(path.join(targetPath, "keep.txt"), "utf8"), "そのまま残す\n");
+  }
+});
+
+test("設定ファイルの道筋がディレクトリなら update と uninstall は理由を示して失敗する", async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "cc-sdd-cli-config-directory-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  fs.mkdirSync(path.join(root, ".git"));
+  const stderr = sink();
+  const invoke = (args) => runCli(args, { cwd: root, packageRoot: path.resolve("."), interactive: false, stdout: sink(), stderr });
+  fs.mkdirSync(path.join(root, ".cc-sdd-bootstrap.json"));
+
+  assert.equal(await invoke(["update"]), 1);
+  assert.match(stderr.text(), /設定ファイル.*読めません/);
+  assert.equal(await invoke(["uninstall"]), 1);
+  assert.match(stderr.text(), /設定ファイル.*読めません/);
 });
 
 // ---- promptValues（対話） ----
