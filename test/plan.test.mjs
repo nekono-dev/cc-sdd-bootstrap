@@ -328,3 +328,113 @@ test("settings が空になる場合は削除する", () => {
   const plan = makePlan(i);
   assert.deepEqual(plan.changes.find((c) => c.path === ".claude/settings.json"), { action: "delete", path: ".claude/settings.json" });
 });
+
+// ---- 3.3 取り除きの計画 ----
+/** 取り除きの入力。init の結果を状態にしたものを土台にする */
+function installed(o = {}) {
+  const i = fullInput();
+  i.snapshot.settings = '{\n  "model": "x"\n}\n';
+  i.snapshot.gitignore = "node_modules\n";
+  i.snapshot.claudeMd = "# 私の\n";
+  const applied = applyPlan(i, makePlan(i));
+  return { ...applied, operation: "uninstall", config: null, force: false, ...o };
+}
+const uninstallPlan = (i) => makePlan(i);
+
+test("取り除き: init の結果から元の settings・.gitignore・CLAUDE.md に戻り、設定・記録・配置物を削除する", () => {
+  const i = installed();
+  const plan = uninstallPlan(i);
+  assert.deepEqual(plan.blocks, []);
+  const next = applyPlan(i, plan).snapshot;
+  assert.equal(next.settings, '{\n  "model": "x"\n}\n');
+  assert.equal(next.gitignore, "node_modules\n");
+  assert.equal(next.claudeMd, "# 私の\n");
+  assert.equal(next.config, null);
+  assert.equal(next.ledger, null);
+  assert.equal(next.files[C], null);
+  assert.equal(next.files[P], null);
+  assert.deepEqual(plan.pruneDirs, [D, ".agent-hooks"]);
+  assert.deepEqual(plan.notices, []);
+});
+
+test("取り除き: 書き換えられた共通部分は中止の理由、force なら削除", () => {
+  const i = installed();
+  i.snapshot.files[C] = B("edited");
+  const plan = uninstallPlan(i);
+  assert.deepEqual(plan.blocks.map((b) => [b.kind, b.path]), [["modified", C]]);
+  assert.ok(!plan.changes.some((c) => c.path === C));
+  const forced = uninstallPlan({ ...i, force: true });
+  assert.deepEqual(forced.blocks, []);
+  assert.ok(forced.changes.some((c) => c.action === "delete" && c.path === C));
+});
+
+test("取り除き: 書き換えられた固有の部分は残して知らせる（force でも）", () => {
+  for (const force of [false, true]) {
+    const i = installed({ force });
+    i.snapshot.files[P] = B("mine");
+    const plan = uninstallPlan(i);
+    assert.deepEqual(plan.blocks, []);
+    assert.ok(!plan.changes.some((c) => c.path === P));
+    assert.ok(plan.notices.some((n) => n.includes(P) && n.includes("残した")));
+  }
+});
+
+test("取り除き: 記録だけにある共通部分も、書き換えが無ければ削除する", () => {
+  const X = `${D}/old.txt`;
+  const i = installed();
+  i.snapshot.ledger = ledgerText([{ path: C, kind: "common", content: B("new-c") }, { path: P, kind: "project", content: B("new-p") }, { path: X, kind: "common", content: B("old") }]);
+  i.snapshot.files[X] = B("old");
+  assert.ok(uninstallPlan(i).changes.some((c) => c.action === "delete" && c.path === X));
+  i.snapshot.files[X] = B("edited");
+  assert.deepEqual(uninstallPlan(i).blocks.map((b) => b.path), [X]);
+});
+
+test("取り除き: 管理区画の外の記録の道筋は無視して知らせる（.kiro や kiro のスキルにも触れない）", () => {
+  const bad = [".kiro/steering/product.md", ".claude/skills/kiro-impl/SKILL.md", "../x", "/etc/passwd"];
+  const i = installed();
+  i.snapshot.ledger = ledgerText([{ path: C, kind: "common", content: B("new-c") }, ...bad.map((p) => ({ path: p, kind: "common", content: B("a") }))]);
+  for (const p of bad) i.snapshot.files[p] = B("a");
+  i.snapshot.files[".kiro/settings/x"] = B("a");
+  const plan = uninstallPlan(i);
+  for (const p of bad) assert.ok(!plan.changes.some((c) => c.path === p));
+  assert.ok(!plan.changes.some((c) => c.path.startsWith(".kiro/") || c.path.includes("kiro-")));
+  assert.ok(plan.notices.some((n) => n.includes("管理区画") && n.includes(".kiro/steering/product.md")));
+  assert.deepEqual(plan.blocks, []);
+});
+
+test("取り除き: 除外が外れて現れる道筋を知らせる", () => {
+  const i = installed();
+  i.snapshot.ignoredPresent = [".claude/skills/kiro-impl", ".kiro/settings"];
+  const plan = uninstallPlan(i);
+  const n = plan.notices.find((x) => x.includes(".gitignore"));
+  assert.ok(n.includes("未追跡") && n.includes("コミットせず"));
+  assert.ok(n.includes(".claude/skills/kiro-impl") && n.includes(".kiro/settings"));
+  assert.ok(!plan.changes.some((c) => c.path.includes("kiro")));
+});
+
+test("取り除き: 目印の破損と settings の読めなさを集める", () => {
+  const i = installed();
+  i.snapshot.settings = "{";
+  i.snapshot.gitignore = "# >>> cc-sdd-bootstrap\n";
+  i.snapshot.claudeMd = "<!-- cc-sdd-bootstrap:end -->\n";
+  const plan = uninstallPlan(i);
+  assert.deepEqual(plan.blocks.map((b) => [b.kind, b.path]), [["settings", ".claude/settings.json"], ["markers", ".gitignore"], ["markers", "CLAUDE.md"]]);
+  assert.ok(!plan.changes.some((c) => [".gitignore", "CLAUDE.md", ".claude/settings.json"].includes(c.path)));
+});
+
+test("取り除き: 一式の区画しか無いファイルは削除する", () => {
+  const i = fullInput();
+  const applied = applyPlan(i, makePlan(i));
+  const u = { ...applied, operation: "uninstall", config: null, force: false };
+  const plan = uninstallPlan(u);
+  for (const p of [".claude/settings.json", ".gitignore", "CLAUDE.md"]) {
+    assert.deepEqual(plan.changes.find((c) => c.path === p), { action: "delete", path: p });
+  }
+});
+
+test("取り除き: 何も入っていない対象では変更なし", () => {
+  const i = input({ operation: "uninstall" });
+  const plan = uninstallPlan(i);
+  assert.deepEqual(plan.changes, []);
+  assert.deepEqual(plan.blocks, []);
+});
