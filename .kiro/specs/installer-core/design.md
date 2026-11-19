@@ -523,7 +523,7 @@ interface Plan {
 
 function makePlan(input: PlanInput): Plan;
 ```
-- 計画が触れてよい道筋は、カタログの files、記録の files、`.cc-sdd-bootstrap.json`、`LEDGER_PATH`、`.claude/settings.json`、`.gitignore`、`CLAUDE.md` だけ（4.4・9.7）。`pruneDirs` は `.agent-hooks/cc-sdd-bootstrap` と `.agent-hooks` だけ。
+- 計画が触れてよい道筋は、カタログの files、記録の files、`.cc-sdd-bootstrap.json`、`LEDGER_PATH`、`.claude/settings.json`、`.gitignore`、`CLAUDE.md` だけ（4.4・9.7）。`pruneDirs` は `.agent-hooks/cc-sdd-bootstrap`・`.agent-hooks`・`.claude`（init が `.claude/settings.json` のために作りうる）だけで、空のときだけ消える。
 - 内容が今と同じファイルは `changes` に入れない（10.3・5.7）。
 - init・update: ファイルの扱いは「System Flows」の図に従う。続けて設定ファイル、記録、`.claude/settings.json`、`.gitignore`、CLAUDE.md の順に書く内容を計算する。
 - uninstall: 共通部分の書き換えは中止の理由（`--force` で削除）、固有の部分の書き換えは残す。設定ファイルと記録を消す。統合の 3 ファイルは一式の部分を取り除き、結果が空（空白だけ、または `{}`）ならファイルを消す。`snapshot.ignoredPresent` が空でなければ、「`.gitignore` の除外が外れたため、次の道筋が git の未追跡のファイルとして現れる。cc-sdd の導入物はライセンスが異なるのでコミットせず、不要なら削除する」という知らせを、道筋の一覧つきで `notices` に入れる（9.7 で消さないものを、誤ってコミットさせないため）。

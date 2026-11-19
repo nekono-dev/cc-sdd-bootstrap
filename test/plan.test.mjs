@@ -353,7 +353,7 @@ test("取り除き: init の結果から元の settings・.gitignore・CLAUDE.md
   assert.equal(next.ledger, null);
   assert.equal(next.files[C], null);
   assert.equal(next.files[P], null);
-  assert.deepEqual(plan.pruneDirs, [D, ".agent-hooks"]);
+  assert.deepEqual(plan.pruneDirs, [D, ".agent-hooks", ".claude"]);
   assert.deepEqual(plan.notices, []);
 });
 
