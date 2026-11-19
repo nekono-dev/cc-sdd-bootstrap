@@ -79,8 +79,8 @@ test("引数なしの非対話 init は既定値と一式を作り、直後の u
   assert.equal(initialized.status, 0, initialized.stderr);
   assert.match(initialized.outputText, /既定値を使った項目/);
   const config = JSON.parse(read(root, CONFIG_PATH));
-  assert.deepEqual(config, { format: 1, ccSdd: { version: "3.1.0", lang: "ja" }, codex: { enabled: false }, models: {} });
-  for (const [key, value] of Object.entries({ "ccSdd.version": "3.1.0", "ccSdd.lang": "ja", "codex.enabled": false, models: {} })) {
+  assert.deepEqual(config, { format: 1, ccSdd: { version: "3.1.0", lang: "ja", keepTemplates: false }, codex: { enabled: false }, models: {} });
+  for (const [key, value] of Object.entries({ "ccSdd.version": "3.1.0", "ccSdd.lang": "ja", "ccSdd.keepTemplates": false, "codex.enabled": false, models: {} })) {
     assert.match(initialized.outputText, new RegExp(`${key.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}.*${JSON.stringify(value)}`));
   }
   assert.ok(fs.existsSync(path.join(root, CONFIG_PATH)));

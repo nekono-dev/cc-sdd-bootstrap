@@ -15,6 +15,7 @@
  * @property {ConfigValue} defaultValue 既定値
  * @property {string} question 対話で示す日本語の質問文
  * @property {(value: unknown) => string | null} validate 不正なら日本語の理由、正しければ null
+ * @property {string} [notice] 値が true のとき init・update の完了時に示す文（boolean の項目だけが使う）
  * @property {string[]} [mapKeys] kind が map のとき、対話で尋ねるキーの一覧
  */
 
@@ -51,6 +52,17 @@ export const configFields = [
         ? null
         : "「xx」または「xx-YY」の形で指定してください（例 ja・pt-BR）";
     },
+  },
+  {
+    path: "ccSdd.keepTemplates",
+    flag: "keep-templates",
+    kind: "boolean",
+    defaultValue: false,
+    question: "cc-sdd の雛形（.kiro/settings/templates/）を上書きせずに保持し、コミットできるようにしますか",
+    validate(value) {
+      return typeof value === "boolean" ? null : "true か false で指定してください";
+    },
+    notice: "雛形（`.kiro/settings/templates/`）は cc-sdd の成果物（MIT ライセンス）。コミットする場合はそのライセンスに従う。保持すると cc-sdd の版を上げても雛形は入れ替わらない（入れ替えるには `.kiro/settings/templates/` を消して新しいセッションを開く）",
   },
   {
     path: "codex.enabled",
