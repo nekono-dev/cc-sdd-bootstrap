@@ -3,6 +3,10 @@ import { configFields, formatProblem } from "./config-schema.mjs";
 export const CONFIG_FILE = ".cc-sdd-bootstrap.json";
 export const UPDATE_COMMAND = "npx github:nekono-dev/cc-sdd-bootstrap update";
 export const INIT_COMMAND = "npx github:nekono-dev/cc-sdd-bootstrap init";
+export const FAILURE_RECORD = ".cache/cc-sdd-install.failed";
+export const STATE_PATH = ".cache/cc-sdd-install.state.json";
+export const RETRY_COMMAND = "node .agent-hooks/cc-sdd-bootstrap/install-cc-sdd.mjs";
+export const NPX_TIMEOUT_MS = 540000;
 
 const own = (o, k) => Object.hasOwn(o, k) ? o[k] : undefined;
 
@@ -113,4 +117,53 @@ export function isFingerprintTarget(path, keepTemplates) {
   if (path === ".kiro/settings/cc-sdd-guide.md") return true;
   if (path.startsWith(".kiro/settings/templates/")) return !keepTemplates;
   return false;
+}
+
+/** 状態と現在の導入物から、入れ直す理由または省略を返す。 */
+export function decideInstall({ config, state, failureRecordExists, currentHashes, templatesMissing }) {
+  if (failureRecordExists) return { action: "install", reason: "failure-record" };
+  if (state === null) return { action: "install", reason: "no-state" };
+  if (config.version !== state.version || config.lang !== state.lang || config.keepTemplates !== state.keepTemplates) {
+    return { action: "install", reason: "config-changed" };
+  }
+  if (Object.entries(state.files).some(([path, hash]) => currentHashes[path] !== hash)) {
+    return { action: "install", reason: "files-changed" };
+  }
+  if (config.keepTemplates && templatesMissing) return { action: "install", reason: "templates-missing" };
+  return { action: "skip" };
+}
+
+/** 削除する導入物の道筋を順に返す。 */
+export function removalTargets({ skillEntries, keepTemplates }) {
+  return [
+    ...skillEntries.filter((name) => name.startsWith("kiro-")).map((name) => `.claude/skills/${name}`),
+    ".kiro/settings/cc-sdd-guide.md",
+    ...(!keepTemplates ? [".kiro/settings/templates"] : [])
+  ];
+}
+
+/** cc-sdd が解釈する manifest を設定に応じて組み立てる。 */
+export function buildManifest({ keepTemplates, templatesMissing }) {
+  const artifacts = [
+    {
+      id: "skills",
+      source: { type: "templateDir", fromDir: "templates/agents/{{AGENT}}/skills", toDir: "{{AGENT_COMMANDS_DIR}}" }
+    },
+    {
+      id: "doc_main",
+      source: { type: "templateFile", from: "templates/agents/{{AGENT}}/docs/CLAUDE.md", toDir: "{{KIRO_DIR}}/settings", rename: "cc-sdd-guide.md" }
+    }
+  ];
+  if (!keepTemplates || templatesMissing) {
+    artifacts.push({
+      id: "settings_templates",
+      source: { type: "templateDir", fromDir: "templates/shared/settings/templates", toDir: "{{KIRO_DIR}}/settings/templates" }
+    });
+  }
+  return { version: 1, artifacts };
+}
+
+/** npx に渡す引数をシェル展開なしで配列として返す。 */
+export function npxArgs(config, manifestPath) {
+  return ["--yes", `cc-sdd@${config.version}`, "--yes", "--overwrite", "force", "--manifest", manifestPath, "--claude-skills", "--lang", config.lang];
 }

@@ -1,4 +1,4 @@
-import { readInstallConfig, parseState, buildState, isFingerprintTarget } from "../.agent-hooks/cc-sdd-bootstrap/install-rules.mjs";
+import { readInstallConfig, parseState, buildState, isFingerprintTarget, FAILURE_RECORD, STATE_PATH, RETRY_COMMAND, NPX_TIMEOUT_MS, decideInstall, removalTargets, buildManifest, npxArgs } from "../.agent-hooks/cc-sdd-bootstrap/install-rules.mjs";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
@@ -134,4 +134,45 @@ test("isFingerprintTarget の判定", () => {
   assert.equal(isFingerprintTarget(".claude/skills/other/x.md", true), false);
   assert.equal(isFingerprintTarget(".kiro/specs/a/spec.json", true), false);
   assert.equal(isFingerprintTarget("CLAUDE.md", true), false);
+});
+
+const config = { version: "3.1.0", lang: "ja", keepTemplates: false };
+const state = buildState({ config, files: { "a": "a".repeat(64) } });
+const decision = (overrides = {}) => decideInstall({ config, state, failureRecordExists: false, currentHashes: { a: "a".repeat(64) }, templatesMissing: false, ...overrides });
+
+test("導入記録の定数と判定理由・優先順位", () => {
+  assert.equal(FAILURE_RECORD, ".cache/cc-sdd-install.failed");
+  assert.equal(STATE_PATH, ".cache/cc-sdd-install.state.json");
+  assert.equal(RETRY_COMMAND, "node .agent-hooks/cc-sdd-bootstrap/install-cc-sdd.mjs");
+  assert.equal(NPX_TIMEOUT_MS, 540000);
+  assert.deepEqual(decision({ failureRecordExists: true, state: null }), { action: "install", reason: "failure-record" });
+  assert.deepEqual(decision({ state: null }), { action: "install", reason: "no-state" });
+  assert.deepEqual(decision({ config: { ...config, lang: "en" } }), { action: "install", reason: "config-changed" });
+  assert.deepEqual(decision({ config: { ...config, keepTemplates: true } }), { action: "install", reason: "config-changed" });
+  assert.deepEqual(decision({ config: { ...config, version: "3.2.0" } }), { action: "install", reason: "config-changed" });
+  assert.deepEqual(decision({ currentHashes: { a: null } }), { action: "install", reason: "files-changed" });
+  assert.deepEqual(decision({ currentHashes: {} }), { action: "install", reason: "files-changed" });
+  const keepState = buildState({ config: { ...config, keepTemplates: true }, files: {} });
+  assert.deepEqual(decideInstall({ config: { ...config, keepTemplates: true }, state: keepState, failureRecordExists: false, currentHashes: {}, templatesMissing: true }), { action: "install", reason: "templates-missing" });
+  assert.deepEqual(decision(), { action: "skip" });
+  assert.deepEqual(decision({ templatesMissing: true }), { action: "skip" });
+});
+
+test("removalTargets は kiro- のみを順に消し、保持時の雛形を残す", () => {
+  assert.deepEqual(removalTargets({ skillEntries: ["kiro-a", "custom", "kiro-file", "kiro-link"], keepTemplates: false }), [".claude/skills/kiro-a", ".claude/skills/kiro-file", ".claude/skills/kiro-link", ".kiro/settings/cc-sdd-guide.md", ".kiro/settings/templates"]);
+  assert.deepEqual(removalTargets({ skillEntries: ["custom", "kiro-a"], keepTemplates: true }), [".claude/skills/kiro-a", ".kiro/settings/cc-sdd-guide.md"]);
+});
+
+test("buildManifest は保持と雛形欠落に応じた3通りの一覧を作る", () => {
+  const skills = { type: "templateDir", fromDir: "templates/agents/{{AGENT}}/skills", toDir: "{{AGENT_COMMANDS_DIR}}" };
+  const doc = { type: "templateFile", from: "templates/agents/{{AGENT}}/docs/CLAUDE.md", toDir: "{{KIRO_DIR}}/settings", rename: "cc-sdd-guide.md" };
+  const templates = { type: "templateDir", fromDir: "templates/shared/settings/templates", toDir: "{{KIRO_DIR}}/settings/templates" };
+  const expected = (withTemplates) => ({ version: 1, artifacts: [{ id: "skills", source: skills }, { id: "doc_main", source: doc }, ...(withTemplates ? [{ id: "settings_templates", source: templates }] : [])] });
+  assert.deepEqual(buildManifest({ keepTemplates: false, templatesMissing: false }), expected(true));
+  assert.deepEqual(buildManifest({ keepTemplates: true, templatesMissing: false }), expected(false));
+  assert.deepEqual(buildManifest({ keepTemplates: true, templatesMissing: true }), expected(true));
+});
+
+test("npxArgs はシェルを介さない引数配列を返す", () => {
+  assert.deepEqual(npxArgs(config, ".cache/manifest.json"), ["--yes", "cc-sdd@3.1.0", "--yes", "--overwrite", "force", "--manifest", ".cache/manifest.json", "--claude-skills", "--lang", "ja"]);
 });
