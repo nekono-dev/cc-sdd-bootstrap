@@ -48,6 +48,45 @@ test("設定エラーは設定ファイル名・項目・理由・次の手を�
   const unreadable = await invoke("{");
   assert.match(unreadable, /\.cc-sdd-bootstrap\.json[\s\S]*JSON として読めません/);
 });
+
+test("不正な設定でも uninstall は警告して設定値を使わず取り除き、update は無変更で失敗する", async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "cc-sdd-cli-uninstall-config-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  fs.mkdirSync(path.join(root, ".git"));
+  const originals = {
+    ".claude/settings.json": '{"permissions":{"allow":["Read"]}}\n',
+    ".gitignore": "# 利用者の設定\nnode_modules/\n",
+    "CLAUDE.md": "# 利用者の指示\n\n元の文章です。\n",
+  };
+  for (const [file, contents] of Object.entries(originals)) {
+    fs.mkdirSync(path.dirname(path.join(root, file)), { recursive: true });
+    fs.writeFileSync(path.join(root, file), contents);
+  }
+  const invoke = (args) => {
+    const stdout = sink(), stderr = sink();
+    return runCli(args, { cwd: root, packageRoot: path.resolve("."), interactive: false, stdout, stderr })
+      .then((code) => ({ code, stdout: stdout.text(), stderr: stderr.text() }));
+  };
+  for (const [contents, reason] of [["{", "JSON として読めません"], ['{"format":1,"ccSdd":{"lang":123}}', "ccSdd.lang"]]) {
+    assert.equal((await invoke(["init"])).code, 0);
+    fs.writeFileSync(path.join(root, ".cc-sdd-bootstrap.json"), contents);
+    const beforeUpdate = new Map([".cc-sdd-bootstrap.json", LEDGER_PATH, ...catalog.files.map((f) => f.path), ".claude/settings.json", ".gitignore", "CLAUDE.md"]
+      .map((file) => [file, fs.readFileSync(path.join(root, file))]));
+    const update = await invoke(["update"]);
+    assert.equal(update.code, 1);
+    for (const [file, bytes] of beforeUpdate) assert.deepEqual(fs.readFileSync(path.join(root, file)), bytes, file);
+
+    const removed = await invoke(["uninstall"]);
+    assert.equal(removed.code, 0, removed.stderr);
+    assert.match(removed.stderr, /\.cc-sdd-bootstrap\.json/);
+    assert.ok(removed.stderr.includes(reason), removed.stderr);
+    for (const file of [".cc-sdd-bootstrap.json", LEDGER_PATH, ...catalog.files.map((f) => f.path)]) {
+      assert.equal(fs.existsSync(path.join(root, file)), false, file);
+    }
+    assert.deepEqual(JSON.parse(fs.readFileSync(path.join(root, ".claude/settings.json"), "utf8")), JSON.parse(originals[".claude/settings.json"]));
+    for (const file of [".gitignore", "CLAUDE.md"]) assert.equal(fs.readFileSync(path.join(root, file), "utf8"), originals[file]);
+  }
+});
 test("途中失敗は復旧手順と再実行する操作を示す", () => {
   const text = formatApplyFailure({ done: [{ path: ".cc-sdd-bootstrap.json" }], failed: { change: { path: ".claude/settings.json" }, message: "理由" }, pending: [{ path: "later" }] }, "init", false);
   for (const s of ["済んだ", ".cc-sdd-bootstrap.json", "失敗", ".claude/settings.json", "理由", "未処理", "later", "権限", "update"]) assert.ok(text.includes(s), s);

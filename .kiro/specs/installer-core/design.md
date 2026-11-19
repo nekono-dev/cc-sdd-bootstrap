@@ -155,7 +155,9 @@ flowchart TD
     GitRoot -- no --> FailExit
     GitRoot -- yes --> Load[read target state]
     Load --> Resolve[resolve config values]
-    Resolve -- invalid --> FailExit
+    Resolve -- invalid on init or update --> FailExit
+    Resolve -- invalid on uninstall --> WarnContinue[print warning and continue]
+    WarnContinue --> MakePlan
     Resolve -- already installed on init --> InfoExit[print guidance and exit 0]
     Resolve -- ok --> MakePlan[make plan]
     MakePlan -- blocked --> FailExit
@@ -220,7 +222,7 @@ flowchart TD
 | 3.1 | `.cc-sdd-bootstrap.json` | Config, Target | `serializeConfig` | — |
 | 3.2 | 記録する項目 | ConfigSchema | `ConfigField` | — |
 | 3.3 | 型と値の検証 | Config | `validateConfig` | — |
-| 3.4 | 読めない・不正で中止 | Config | `parseConfig` | 操作の流れ |
+| 3.4 | update で読めない・不正なら中止 | Config, Cli | `parseConfig` | 操作の流れ |
 | 3.5 | 増えた項目を補う | Config | `fillDefaults` | — |
 | 3.6 | 知らない項目を残して警告 | Config | `findUnknownKeys` | — |
 | 3.7 | 既存の値を書き換えない | Config | `resolveValues` | — |
@@ -261,6 +263,7 @@ flowchart TD
 | 9.5 | 空のディレクトリの削除 | Target | `applyPlan` | — |
 | 9.6 | 未導入なら中止 | Cli | `CliOutcome` | 操作の流れ |
 | 9.7 | cc-sdd の導入物と成果物を消さない | Plan | `FileChange` | — |
+| 9.8 | uninstall は不正な設定でも進めて知らせる | Cli | `runCli` | 操作の流れ |
 | 10.1 | 同じ配置を持つ | 自己適用 | `init` の実行 | — |
 | 10.2 | 暫定の仕組みを持たない | 自己適用 | Modified Files | — |
 | 10.3 | 直後の update で変更なし | Plan, Ledger | `makePlan` | 操作の流れ |
@@ -528,6 +531,7 @@ function makePlan(input: PlanInput): Plan;
 - 内容が今と同じファイルは `changes` に入れない（10.3・5.7）。
 - `executable: true` のカタログ項目は、内容が同じでも実行権限が無ければ `permission-restored` 注記つきで書き直し、権限を戻す。
 - init・update: ファイルの扱いは「System Flows」の図に従う。続けて設定ファイル、記録、`.claude/settings.json`、`.gitignore`、CLAUDE.md の順に書く内容を計算する。
+- uninstall は設定の値を使わない（`config: null`）。設定ファイルが読めない・検証を通らないときも中止せず、Cli が警告（ファイル名と理由）を出して取り除きを進める（9.8）。設定ファイル自体は通常どおり消す。
 - uninstall: 共通部分の書き換えは中止の理由（`--force` で削除）、固有の部分の書き換えは残す。設定ファイルと記録を消す。統合の 3 ファイルは一式の部分を取り除き、結果が空文字（または `{}`）ならファイルを消す。`snapshot.ignoredPresent` が空でなければ、「`.gitignore` の除外が外れたため、次の道筋が git の未追跡のファイルとして現れる。cc-sdd の導入物はライセンスが異なるのでコミットせず、不要なら削除する」という知らせを、道筋の一覧つきで `notices` に入れる（9.7 で消さないものを、誤ってコミットさせないため）。
 - CLAUDE.md の区画の本文は、`claudeSections` の `body` をカタログの順に空行でつないだもの。目印の行には「この区画は cc-sdd-bootstrap が管理する。手で書き換えると update で戻る」を添える。
 
@@ -595,7 +599,7 @@ function runCli(argv: string[], io: CliIo): Promise<number>; // 終了コード�
 ```
 - 引数: 1 つめが操作（`init`・`update`・`uninstall`）。指定は `--help`/`-h`、`--force`、設定の定義から作る `--<flag>`。設定の項目の指定は `init` と `update` で受け付ける（5.6）。`uninstall` に渡したら使い方の誤り。`--force` は 3 つの操作すべてで受け付ける。`init` では、記録も設定ファイルも無いのに配置先に内容の違う同名のファイルがある（手で置いた、別の方法で写した、など）ときに、それを置き換える。
 - 対話: `init` で `interactive` のときだけ、引数で渡されていない項目を尋ねる（`[既定値]` を示し、空の入力は既定値。不正なら理由を示して尋ね直す）。`update` では尋ねない。
-- 終了コード: 0＝成功・変更なし・導入済みの init（2.6）・使い方の表示、1＝操作の失敗（Node の版、git の最上位でない、設定・目印・settings の不正、書き換えによる中止、未導入の update・uninstall、書き込みの失敗）、2＝使い方の誤り。
+- 終了コード: 0＝成功・変更なし・導入済みの init（2.6）・使い方の表示、1＝操作の失敗（Node の版、git の最上位でない、設定の不正（update のとき。uninstall は警告して続ける。9.8）・設定ファイルの道筋がファイルでない・目印・settings の不正、書き換えによる中止、未導入の update・uninstall、書き込みの失敗）、2＝使い方の誤り。
 - 出力: 成功時は「作成」「更新」「削除」に分けた道筋の一覧、補った項目、警告（知らない項目）。init の成功時は、設定ファイルと配置物をコミットすること、cc-sdd 本体は次のセッション開始時に入ること、版の固定は `npx github:nekono-dev/cc-sdd-bootstrap#<タグ>` で行えることを示す（2.7）。uninstall の成功時は、Plan の `notices`（除外が外れて残る cc-sdd の導入物など）も示す。中止時は理由ごとに次の手（`--force` で再実行、目印を直す、`init` を使う、など）を示す（1.7）。
 - Bin は `lib/node-version.mjs` の `decideNodeSupported(process.versions.node)` で Node の版（先頭の数）を確かめ、22 未満なら必要な版を出して 1 で終わる（1.4）。その後で `lib/cli.mjs` を動的に読み込む（古い Node で読み込みの段階の誤りにしないため）。
 
@@ -643,7 +647,8 @@ function runCli(argv: string[], io: CliIo): Promise<number>; // 終了コード�
 | 使い方の誤り | 未知の操作・指定、値の形の誤り | 2 | 使い方 |
 | 前提の不足 | Node 22 未満、git の最上位でない | 1 | 必要な版 / リポジトリの最上位で実行する |
 | 状態の不一致 | 未導入の update・uninstall、導入済みの init | 1（導入済みの init は 0） | `init` / `update` を使う |
-| 内容の不正 | 設定の不正・知らない新しい形式、壊れた目印、読めない `.claude/settings.json` | 1 | ファイルと項目と理由。直してから再実行 |
+| 内容の不正 | 設定の不正・知らない新しい形式（update のとき）、壊れた目印、読めない `.claude/settings.json` | 1 | ファイルと項目と理由。直してから再実行 |
+| 設定の不正（uninstall） | 設定ファイルが読めない・検証を通らない | 0（取り除きが成功すれば） | 警告（ファイル名と理由）を出し、設定の値を使わずに取り除きを続ける（9.8）。設定ファイルの道筋がディレクトリなどファイルでないときは 1 |
 | 利用者の書き換え | 書き換えられた共通部分 | 1 | 一覧と `--force` での再実行 |
 | 書き込みの失敗 | 権限・容量 | 1 | 変えたもの・失敗したもの・残り |
 

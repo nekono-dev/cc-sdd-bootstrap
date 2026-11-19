@@ -148,6 +148,19 @@ test("既存の settings・gitignore・CLAUDE.md は init 後の uninstall で�
   assert.equal(fs.existsSync(path.join(root, ".agent-hooks")), false);
 });
 
+test("壊れた JSON があっても uninstall は警告して取り除きを続ける", () => {
+  const root = makeRepo();
+  assert.equal(run(root, ["init"]).status, 0);
+  fs.writeFileSync(path.join(root, CONFIG_PATH), "{");
+  const removed = run(root, ["uninstall"]);
+  assert.equal(removed.status, 0, removed.outputText);
+  assert.match(removed.stderr, /\.cc-sdd-bootstrap\.json/);
+  assert.match(removed.stderr, /JSON として読めません/);
+  for (const file of [CONFIG_PATH, LEDGER_PATH, ...catalog.files.map((item) => item.path)]) {
+    assert.equal(fs.existsSync(path.join(root, file)), false, file);
+  }
+});
+
 test("書き換えた共通部分は update と uninstall を中止し、--force で上書き・削除する", () => {
   const root = makeRepo();
   assert.equal(run(root, ["init"]).status, 0);
