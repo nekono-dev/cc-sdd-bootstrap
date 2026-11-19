@@ -13,7 +13,7 @@
 
 **範囲外**: 手順書を読ませる強制（kiro-gate）、BRW の導入確保、cc-sdd のスキルの内容の改変、導入物をコミットする運用。
 
-**要件の段階で決めたこと**（2026-11-19、利用者の回答）: 版・言語が前回と同じで、導入物が揃い中身も導入時から変わっていなければ入れ直しを省く。設定ファイルが無い・読めない・値が不正なら導入の失敗として止める。入れ直すときは前回の導入物を消してから入れる（新しい版に無いスキルを残さない）。Codex 向けの導入物は扱わない。導入の実行方法（シェルスクリプトのままか Node に寄せるか）と、同時に始まったセッションの排他の方法は設計で決める。
+**要件の段階で決めたこと**（2026-11-19、利用者の回答）: 版・言語が前回と同じで、導入物が揃い中身も導入時から変わっていなければ入れ直しを省く。設定ファイルが無い・読めない・値が不正なら導入の失敗として止める。入れ直すときは前回の導入物を消してから入れる（新しい版に無いスキルを残さない）。Codex 向けの導入物は扱わない。設定の雛形（`.kiro/settings/templates/`）は、既定では `.gitignore` の対象として毎回入れ替え、設定の選択で上書きせずに保持できるようにする（2026-11-19、利用者の指示）。導入の実行方法（シェルスクリプトのままか Node に寄せるか）と、同時に始まったセッションの排他の方法は設計で決める。
 
 詳細は同じディレクトリの `brief.md` を参照。
 
@@ -21,10 +21,11 @@
 cc-sdd-bootstrap を導入したリポジトリでは、cc-sdd の導入物（スキル・設定の雛形・標準の決まりの文書）をコミットしない。この spec は、セッションの開始のたびに設定ファイルの版と言語で導入物を揃え、揃えられなかったときは次の入力を理由と再試行の方法つきで止める仕組み（以下「セッション導入」）を定める。installer-core が初期の配置物として置いた 2 本のスクリプトの動きを引き継ぎ、版と言語を設定ファイルから読むように一般化する。
 
 ## Boundary Context
-- **In scope**: セッション開始時の導入物の確認と入れ直し、入れ直しの省略、失敗・中断の記録、次の入力の停止と再試行の案内、導入直後にスキル一覧に載らないスキルの案内、CLAUDE.md の管理区画への運用の説明。
+- **In scope**: セッション開始時の導入物の確認と入れ直し、入れ直しの省略、設定の雛形の保持（選択制）、失敗・中断の記録、次の入力の停止と再試行の案内、導入直後にスキル一覧に載らないスキルの案内、CLAUDE.md の管理区画への運用の説明。
 - **Out of scope**: 手順書を先に読ませる強制（kiro-gate）、BRW（branch-release-workflow）の導入確保、cc-sdd のスキルの内容の改変、導入物をコミットする運用、cc-sdd の Codex 向けの導入物（codex-delegation 以降で扱う）、設定ファイルの作成・検証の規則そのもの（installer-core）。
 - **Adjacent expectations**:
   - installer-core が設定ファイル `.cc-sdd-bootstrap.json`（`ccSdd.version`・`ccSdd.lang`）の形式と検証の規則を定め、セッション導入のファイルを `.agent-hooks/cc-sdd-bootstrap/` に配置し、セッション開始時と入力時のフックを `.claude/settings.json` に登録し、CLAUDE.md の管理区画から `.kiro/settings/cc-sdd-guide.md` を取り込む。セッション導入はこれらを前提にし、同じ検証の規則で設定を判定する。
+  - 設定の雛形の保持の選択（Requirement 7）は、installer-core の設定ファイルに項目を 1 つ足し、installer-core の導入・更新がその値に応じて `.gitignore` の管理区画を書く。項目の追加と `.gitignore` の書き分けはこの spec が installer-core の仕組みに載せて行う。
   - kiro-gate は、セッション導入が導入したスキルの場所（`.claude/skills/kiro-*/SKILL.md`）を前提にする。
   - cc-sdd の配布元（パッケージの取得元）に通信できることを前提にする。通信できない場合は、入れ直しを省ける場合を除き導入の失敗として扱う。
 
@@ -34,8 +35,8 @@ cc-sdd-bootstrap を導入したリポジトリでは、cc-sdd の導入物（�
 **Objective:** As a 導入先のリポジトリの開発者, I want セッションの開始のたびに設定ファイルの版と言語で cc-sdd の導入物が揃ってほしい, so that clone 直後やクラウドセッションでも、決めた版の `/kiro-*` をすぐに使える
 
 #### Acceptance Criteria
-1. When セッションが開始し、入れ直しを省く条件（Requirement 2）を満たさない, the セッション導入 shall 設定ファイルの `ccSdd.version` の版と `ccSdd.lang` の言語で、cc-sdd のスキル（`.claude/skills/kiro-*/`）・設定の雛形（`.kiro/settings/templates/`）・標準の決まりの文書（`.kiro/settings/cc-sdd-guide.md`）を導入する。
-2. When 入れ直しを行う, the セッション導入 shall 前回の導入物の場所（`.claude/skills/` の下の `kiro-` で始まるディレクトリ、`.kiro/settings/templates/`、`.kiro/settings/cc-sdd-guide.md`）を消してから導入し、導入後に新しい版に無いスキルを残さない。
+1. When セッションが開始し、入れ直しを省く条件（Requirement 2）を満たさない, the セッション導入 shall 雛形の保持を選んだ場合（Requirement 7）を除き、 設定ファイルの `ccSdd.version` の版と `ccSdd.lang` の言語で、cc-sdd のスキル（`.claude/skills/kiro-*/`）・設定の雛形（`.kiro/settings/templates/`）・標準の決まりの文書（`.kiro/settings/cc-sdd-guide.md`）を導入する。
+2. When 入れ直しを行う, the セッション導入 shall 雛形の保持を選んだ場合の `.kiro/settings/templates/` を除き、前回の導入物の場所（`.claude/skills/` の下の `kiro-` で始まるディレクトリ、`.kiro/settings/templates/`、`.kiro/settings/cc-sdd-guide.md`）を消してから導入し、導入後に新しい版に無いスキルを残さない。
 3. The セッション導入 shall CLAUDE.md を作成・変更しない。
 4. The セッション導入 shall 1.1・1.2 に挙げた導入物の場所、失敗の記録、導入状態の記録の他のファイルを作成・変更・削除しない（`.claude/skills/` の下の `kiro-` で始まらないスキルや、`.kiro/steering/`・`.kiro/specs/` には触れない）。
 5. When 導入が成功する, the セッション導入 shall 導入した版と言語、および導入物の場所を、セッションの文脈に入る形で 1〜3 行で知らせる。
@@ -93,3 +94,17 @@ cc-sdd-bootstrap を導入したリポジトリでは、cc-sdd の導入物（�
 3. When `update` で配置物が置き換わった後の最初のセッションが開始する, the セッション導入 shall 導入状態の記録が無いものとして入れ直しを行う。
 4. The セッション導入 shall 導入先のリポジトリの中だけで動き、cc-sdd-bootstrap のパッケージやプラグインが無くても動く。
 5. When 利用者が `uninstall` を実行する, the cc-sdd-bootstrap shall セッション導入のファイルとフックの登録を取り除き、`.gitignore` の除外が外れて git の未追跡として現れる失敗の記録・導入状態の記録を、installer-core の uninstall が示す一覧（不要なら削除する道筋）に含める。
+
+### Requirement 7: 設定の雛形の保持（選択制）
+**Objective:** As a cc-sdd の雛形（要件・設計・タスクの書式）を自分のプロジェクト向けに書き換えたい開発者, I want 雛形を毎回の入れ直しで上書きせずに保持する設定を選べるようにしたい, so that 書き換えた雛形をコミットして使い続けられる
+
+#### Acceptance Criteria
+1. The cc-sdd-bootstrap shall 設定ファイルに雛形の保持を選ぶ項目を持ち、既定値を「保持しない」にする。導入（`init`）の対話と引数でも選べるようにする。
+2. While 雛形の保持を選んでいない, the セッション導入 shall `.kiro/settings/templates/` を他の導入物と同じく `.gitignore` の対象にし、入れ直しのたびに消してから入れ替える。
+3. While 雛形の保持を選んでいる, when 入れ直しを行う, the セッション導入 shall `.kiro/settings/templates/` の既存のファイルを消さず上書きもしない。
+4. While 雛形の保持を選んでいる, if `.kiro/settings/templates/` が無い, the セッション導入 shall 設定の版と言語の雛形を置く。
+5. While 雛形の保持を選んでいる, the セッション導入 shall `.kiro/settings/templates/` の中身の変更を入れ直しの理由（Requirement 2.2）にしない。
+6. While 雛形の保持を選んでいる, the cc-sdd-bootstrap shall `.kiro/settings/templates/` を `.gitignore` の除外の対象から外し、コミットできる状態にする（他の導入物は引き続き除外する）。
+7. While 雛形の保持を選んでいる, when 設定の版が雛形を置いたときの版と異なる状態で導入が成功する, the セッション導入 shall 雛形は保持したため新しい版の雛形とは異なりうることと、入れ替えたい場合の手順を、セッションの文脈に入る形で 1 行で知らせる。
+8. When 利用者が雛形の保持の選択を変えて `update` を実行する, the cc-sdd-bootstrap shall `.gitignore` の管理区画を選択に合わせて書き直す。
+9. When 利用者が雛形の保持を選ぶ, the cc-sdd-bootstrap shall 雛形は cc-sdd の成果物（MIT ライセンス）であり、コミットする場合はそのライセンスに従う必要があることを知らせる。
