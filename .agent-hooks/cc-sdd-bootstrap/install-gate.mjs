@@ -1,10 +1,10 @@
 #!/usr/bin/env node
 /**
- * 初期の配置物: cc-sdd-bootstrap（installer-core）が各プロジェクトに置く、導入の失敗の記録を見てプロンプトを止める
- * フック（UserPromptSubmit）。この動きは session-install の spec が引き継ぎ、一般化する。
+ * cc-sdd-bootstrap が各プロジェクトに置く、導入の失敗の記録を見てプロンプトを止めるフック（UserPromptSubmit）。
+ * session-install の spec が、記録の中身と再試行の方法を示す形に一般化した。
  *
  * 理由: SessionStart は終了コードで止められない（Claude Code の仕様）。止められるのは UserPromptSubmit。
- * 記録は導入スクリプト（install-cc-sdd.sh）が書き、成功したら消す。
+ * 記録は導入スクリプト（install-cc-sdd.mjs）が書き、成功したら消す。
  *
  * 使い方: node .agent-hooks/cc-sdd-bootstrap/install-gate.mjs user-prompt-submit
  * 判定は標準出力の JSON（decision: "block"）で返す。
@@ -18,24 +18,41 @@ import { fileURLToPath } from "node:url"
 const scriptDir = path.dirname(fileURLToPath(import.meta.url))
 export const repoRoot = path.resolve(scriptDir, "../..")
 
-/** 導入の失敗の記録と、再試行の方法。 */
+/** 導入の失敗の記録と、再試行の方法。対象を足すときは 1 件足す。 */
 export const installFailures = [
   {
     name: "cc-sdd",
     record: ".cache/cc-sdd-install.failed",
-    retry: ".agent-hooks/cc-sdd-bootstrap/install-cc-sdd.sh --claude",
+    retry: "node .agent-hooks/cc-sdd-bootstrap/install-cc-sdd.mjs",
   },
 ]
 
-/** 記録のあるものだけを返す。 */
+/** 記録のある対象だけを、記録の中身（先頭 2000 文字。読めなければその旨）つきで返す。 */
 export const pendingInstallFailures = root =>
-  installFailures.filter(failure => fs.existsSync(path.join(root, failure.record)))
+  installFailures
+    .filter(failure => fs.existsSync(path.join(root, failure.record)))
+    .map(failure => {
+      let detail
+      try {
+        detail = fs.readFileSync(path.join(root, failure.record), "utf-8").slice(0, 2000).trimEnd()
+      } catch {
+        detail = "（記録を読めませんでした）"
+      }
+      return { ...failure, detail }
+    })
 
-/** 利用者に示す理由（再試行の方法を含む）。 */
+/** 利用者に示す理由。対象ごとに名前・記録の中身・再試行の方法を並べる。 */
 export const installBlockReason = failures =>
   [
     "導入が完了していないため（失敗・中断を含む）、プロンプトを止めています。新しいセッションを開くと、導入が再試行されます。すぐに直す場合は、Claude の外（通常のターミナル）で次のコマンドを実行してください。成功してから、もう一度入力してください。",
-    ...failures.map(failure => `- ${failure.name}: ${failure.retry}（記録: ${failure.record}）`),
+    ...failures.flatMap(failure => [
+      `- ${failure.name}`,
+      failure.detail
+        .split("\n")
+        .map(line => `  ${line}`)
+        .join("\n"),
+      `  再試行: ${failure.retry}`,
+    ]),
   ].join("\n")
 
 /** UserPromptSubmit の判定。記録が無ければ null（何もしない）。 */
