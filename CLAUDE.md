@@ -16,6 +16,10 @@ cc-sdd（Kiro 方式の仕様駆動開発）の運用一式を、各プロジェ
 - `/kiro-*` を頼まれたら、`.claude/skills/<名前>/SKILL.md` を Read し、その手順を最後まで実行する（スキル一覧に載らないスキルがあるため）。手順が「提示して止まる」なら、そこで利用者に返す。
 - Claude Code の動作に依存する前提は、設計の承認前に PoC（一時ディレクトリで実際の `claude -p` を動かす検証）で確かめ、再実行できるスクリプトと結果を残す。推測で設計しない。
 - サブエージェント（Agent ツール）を使うときは、必ず `model` を指定し、指揮役（このセッション）と同じモデルにしない。強制のフック（spec: subagent-model-policy）ができるまでは、この決まりを手順で守る。
+- 子のエージェントには Codex を使う（2026-11-19、利用者の指示）。cc-sdd のスキル（`kiro-impl`・`kiro-review`・`kiro-debug` など）が「Agent ツールで新しいサブエージェントに任せる」と書く箇所も、同じ雛形（テンプレート）と手順で Codex の CLI に送る。Codex が使えないときだけ Agent ツールに戻す。
+  - 呼び方: `codex -a never exec --sandbox <read-only|workspace-write> --model <モデル> --config 'model_reasoning_effort="medium"' --cd <リポジトリのルート> - < <指示のファイル>`。指示のファイルは `~/.cache/cc-sdd-bootstrap-scratch/` に置く（`/tmp` とリポジトリの中には置かない）。
+  - 実装・修正は `workspace-write` で Luna（`gpt-6-luna`）、レビュー・調査・デバッグは `read-only` で Sol（`gpt-6.1-sol`）。書き込みの呼び出しは 1 つずつ行い、読み取りと重ねない。
+  - Codex は CLAUDE.md を読まない。指示には、必要な決まり（日本語のコメント、git の操作をしない、`tasks.md`・`spec.json` を変えない、範囲）と、返す形式（`## Status Report` など）を書く。結果は未確認として扱い、`git diff` とテストで確かめてから完了とする。
 
 ## cc-sdd の導入（自己適用ができるまでの暫定の仕組み）
 
