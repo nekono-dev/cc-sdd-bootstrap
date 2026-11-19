@@ -1,4 +1,4 @@
-import { readInstallConfig, parseState, buildState, isFingerprintTarget, FAILURE_RECORD, STATE_PATH, RETRY_COMMAND, NPX_TIMEOUT_MS, decideInstall, removalTargets, buildManifest, npxArgs } from "../.agent-hooks/cc-sdd-bootstrap/install-rules.mjs";
+import { readInstallConfig, parseState, buildState, isFingerprintTarget, FAILURE_RECORD, STATE_PATH, RETRY_COMMAND, NPX_TIMEOUT_MS, decideInstall, removalTargets, buildManifest, npxArgs, RECORD_IN_PROGRESS, messageInstalled, messageSkipped, messageGuide, failureRecordText, messageFailed } from "../.agent-hooks/cc-sdd-bootstrap/install-rules.mjs";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
@@ -175,4 +175,36 @@ test("buildManifest は保持と雛形欠落に応じた3通りの一覧を作�
 
 test("npxArgs はシェルを介さない引数配列を返す", () => {
   assert.deepEqual(npxArgs(config, ".cache/manifest.json"), ["--yes", "cc-sdd@3.1.0", "--yes", "--overwrite", "force", "--manifest", ".cache/manifest.json", "--claude-skills", "--lang", "ja"]);
+});
+
+test("利用者向けの成功・省略・案内の文に必要な情報がある", () => {
+  const installed = messageInstalled(config);
+  assert.ok(installed.split("\n").length >= 1 && installed.split("\n").length <= 3);
+  for (const part of [config.version, config.lang, ".claude/skills/kiro-*", ".kiro/settings/", "CLAUDE.md は変更していません"]) assert.ok(installed.includes(part));
+  const skipped = messageSkipped(config);
+  assert.equal(skipped.split("\n").length, 1);
+  for (const part of [config.version, config.lang]) assert.ok(skipped.includes(part));
+  assert.match(skipped, /省/);
+  const guide = messageGuide();
+  assert.match(guide, /スキル一覧に載らないスキル/);
+  assert.match(guide, /\.claude\/skills\/<名前>\/SKILL\.md/);
+  assert.match(guide, /Read/);
+});
+
+test("失敗の記録と通知に理由および Claude の外での再試行方法がある", () => {
+  const reason = "取得に失敗しました";
+  assert.ok(RECORD_IN_PROGRESS.startsWith("cc-sdd の導入が完了していません（導入中、または中断）。"));
+  assert.ok(RECORD_IN_PROGRESS.includes(RETRY_COMMAND));
+  assert.match(RECORD_IN_PROGRESS, /Claude の外/);
+  const record = failureRecordText(reason);
+  assert.match(record, /^cc-sdd の導入に失敗しました。/);
+  assert.ok(record.includes(`理由: ${reason}`));
+  assert.ok(record.includes(`再試行: ${RETRY_COMMAND}`));
+  assert.match(record, /Claude の外で実行する/);
+  const failed = messageFailed(reason);
+  assert.ok(failed.includes(reason));
+  assert.ok(failed.includes(RETRY_COMMAND));
+  assert.match(failed, /Claude の外/);
+  assert.match(failed, /次の入力.*止/);
+  assert.match(failed, /新しいセッション.*再試行/);
 });

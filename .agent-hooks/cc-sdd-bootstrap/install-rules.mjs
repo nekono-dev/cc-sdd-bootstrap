@@ -167,3 +167,31 @@ export function buildManifest({ keepTemplates, templatesMissing }) {
 export function npxArgs(config, manifestPath) {
   return ["--yes", `cc-sdd@${config.version}`, "--yes", "--overwrite", "force", "--manifest", manifestPath, "--claude-skills", "--lang", config.lang];
 }
+
+/** 導入開始時に失敗の記録へ書く案内文 */
+export const RECORD_IN_PROGRESS = `cc-sdd の導入が完了していません（導入中、または中断）。再試行: ${RETRY_COMMAND}（Claude の外で実行する）`;
+
+/** 導入成功を利用者へ知らせる */
+export function messageInstalled(config) {
+  return `cc-sdd ${config.version}（言語: ${config.lang}）の導入物を更新しました（.claude/skills/kiro-*・.kiro/settings/）。\nCLAUDE.md は変更していません。`;
+}
+
+/** 入れ直しを省いたことを利用者へ知らせる */
+export function messageSkipped(config) {
+  return `cc-sdd ${config.version}（言語: ${config.lang}）は揃っているため、入れ直しを省きました。`;
+}
+
+/** 一覧に載らないスキルの使い方を案内する */
+export function messageGuide() {
+  return "スキル一覧に載らないスキル（kiro-discovery・kiro-impl など）は、依頼に対応する .claude/skills/<名前>/SKILL.md を Read して、その手順を最後まで実行してください。";
+}
+
+/** 失敗の理由と再試行方法を記録する文 */
+export function failureRecordText(reason) {
+  return `cc-sdd の導入に失敗しました。\n理由: ${reason}\n再試行: ${RETRY_COMMAND}（Claude の外で実行する）`;
+}
+
+/** セッション開始時に導入失敗を利用者へ知らせる */
+export function messageFailed(reason) {
+  return `cc-sdd の導入に失敗しました。理由: ${reason}\n次の入力は止まります。再試行: ${RETRY_COMMAND}（Claude の外で実行する）。新しいセッションを開くと再試行されます。`;
+}
