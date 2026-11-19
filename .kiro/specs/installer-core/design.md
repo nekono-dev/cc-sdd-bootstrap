@@ -423,6 +423,7 @@ function decideModified(input: {
   ledger: Ledger | null; path: string; current: Buffer; incoming: Buffer | null;
 }): boolean;
 function sha256(content: Buffer): string;
+function serializeLedger(ledger: Ledger): string; // 2 文字の字下げ・末尾に改行。同じ配置なら同じ文字列（10.3）
 ```
 - `decideModified`: 記録にあれば「今の SHA-256 ≠ 記録の SHA-256」。記録に無ければ「incoming があり、今の内容 ≠ incoming」（incoming が無い＝削除の対象なら、記録の無いファイルは消さずに中止の側へ倒す）。
 - 記録はキーを道筋の順に並べて書く（同じ配置なら同じ内容になり、10.3 で差分が出ない）。
