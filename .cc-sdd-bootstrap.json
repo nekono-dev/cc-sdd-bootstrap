@@ -2,7 +2,8 @@
   "format": 1,
   "ccSdd": {
     "version": "3.1.0",
-    "lang": "ja"
+    "lang": "ja",
+    "keepTemplates": false
   },
   "codex": {
     "enabled": false
