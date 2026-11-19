@@ -169,3 +169,75 @@ test('再試行のコマンドの一致', (t) => {
   assert.ok(r.stdout.includes(RETRY_COMMAND));
   assert.ok(JSON.parse(gate(repo).stdout).reason.includes(RETRY_COMMAND));
 });
+
+const cfg = (keep, version = '3.1.0') => JSON.stringify({ format: 1, ccSdd: { version, lang: 'ja', keepTemplates: keep } });
+const T = '.kiro/settings/templates/specs/tasks.md';
+
+test('保持を選ぶと、書き換えた雛形は入れ直しの理由にならず残る', (t) => {
+  const repo = makeRepo({ config: cfg(true) });
+  t.after(() => repo.cleanup());
+  const r1 = runEntry(repo, ['session-start']);
+  assert.equal(r1.npxCalls.length, 1);
+  assert.equal(repo.read(T), 'templates 3.1.0 ja');
+  assert.ok(!parseState(repo.read(STATE_PATH)).files[T]);
+
+  repo.write(T, '手元の書き換え');
+  const r2 = runEntry(repo, ['session-start']);
+  assert.equal(r2.npxCalls.length, 0);
+  assert.equal(repo.read(T), '手元の書き換え');
+});
+
+test('保持を選んで版を上げても、書き換えた雛形は上書きされない', (t) => {
+  const repo = makeRepo({ config: cfg(true) });
+  t.after(() => repo.cleanup());
+  runEntry(repo, ['session-start']);
+  repo.write(T, '手元の書き換え');
+
+  repo.write('.cc-sdd-bootstrap.json', cfg(true, '3.2.0'));
+  const r = runEntry(repo, ['session-start']);
+  assert.equal(r.npxCalls.length, 1);
+  assert.equal(repo.read(T), '手元の書き換え');
+  assert.equal(repo.read('.kiro/settings/cc-sdd-guide.md'), 'guide 3.2.0 ja');
+});
+
+test('保持を選んでいて雛形を消すと、次の開始で置かれる', (t) => {
+  const repo = makeRepo({ config: cfg(true) });
+  t.after(() => repo.cleanup());
+  runEntry(repo, ['session-start']);
+
+  fs.rmSync(path.join(repo.root, '.kiro/settings/templates'), { recursive: true, force: true });
+  const r = runEntry(repo, ['session-start']);
+  assert.equal(r.npxCalls.length, 1);
+  assert.equal(repo.read(T), 'templates 3.1.0 ja');
+});
+
+test('保持の選択を変えると入れ直し、保持しない側では雛形が戻り、保持する側では残る', (t) => {
+  const repo = makeRepo({ config: cfg(true) });
+  t.after(() => repo.cleanup());
+  runEntry(repo, ['session-start']);
+  repo.write(T, '手元の書き換え');
+
+  repo.write('.cc-sdd-bootstrap.json', cfg(false));
+  const r1 = runEntry(repo, ['session-start']);
+  assert.equal(r1.npxCalls.length, 1);
+  assert.equal(repo.read(T), 'templates 3.1.0 ja');
+  assert.ok(parseState(repo.read(STATE_PATH)).files[T]);
+
+  repo.write(T, '再び書き換え');
+  repo.write('.cc-sdd-bootstrap.json', cfg(true));
+  const r2 = runEntry(repo, ['session-start']);
+  assert.equal(r2.npxCalls.length, 1);
+  assert.equal(repo.read(T), '再び書き換え');
+  assert.ok(!parseState(repo.read(STATE_PATH)).files[T]);
+});
+
+test('保持しない場合は、書き換えた雛形が入れ直しの理由になり戻される', (t) => {
+  const repo = makeRepo({ config: cfg(false) });
+  t.after(() => repo.cleanup());
+  runEntry(repo, ['session-start']);
+  repo.write(T, '手元の書き換え');
+
+  const r = runEntry(repo, ['session-start']);
+  assert.equal(r.npxCalls.length, 1);
+  assert.equal(repo.read(T), 'templates 3.1.0 ja');
+});
