@@ -3,38 +3,40 @@
 ## Overview
 **Purpose**: cc-sdd-bootstrap を導入したリポジトリで、セッションの開始のたびに設定ファイルの版・言語で cc-sdd の導入物（スキル・設定の雛形・標準の決まりの文書）を揃え、揃えられなかったときは次の入力を理由と再試行の方法つきで止める（以下「セッション導入」）。
 
-**Users**: 導入先のリポジトリの開発者。clone 直後・クラウドセッション・同じリポジトリで複数のセッションを開く場合を含む。
+**Users**: 導入先のリポジトリの開発者。clone 直後・クラウドセッションを含む。
 
-**Impact**: installer-core が初期の配置物として置いた `install-cc-sdd.sh`（版 3.1.0・言語 ja を固定）を、設定を読む Node のスクリプトに置き換える。導入物が揃っていれば入れ直しを省き、同時に始まったセッションは排他で順に処理する。設定に「雛形の保持」の項目を足し、選んだときは `.kiro/settings/templates/` を上書きせずコミットできるようにする。
+**Impact**: installer-core が初期の配置物として置いた `install-cc-sdd.sh`（版 3.1.0・言語 ja を固定）を、設定を読む Node のスクリプトに置き換える。導入物が揃っていれば入れ直しを省く。設定に「雛形の保持」の項目を足し、選んだときは `.kiro/settings/templates/` を上書きせずコミットできるようにする。
 
 ### Goals
 - 設定ファイルの `ccSdd.version`・`ccSdd.lang` で導入し、版を変えたら古いスキルを残さない（要件 1）
 - 揃っていて中身も変わっていなければ、通信せずに入れ直しを省く（要件 2）
 - 失敗・中断・設定の不備では次の入力を止め、理由と再試行の方法を示す（要件 3）
-- 同時に始まったセッションで導入物が混ざらない（要件 4）
-- 既存の導入先は `update` 1 回で置き換わる（要件 6）
+- 既存の導入先は `update` 1 回で置き換わる（要件 5）
 
 ### Non-Goals
 - 手順書を先に読ませる強制（kiro-gate）、BRW の導入確保
 - cc-sdd の Codex 向けの導入物
 - cc-sdd のスキルの内容の改変、cc-sdd の対応言語の一覧の保持（不正な言語は cc-sdd の失敗として扱う）
+- 同時に始まったセッションの排他（作業の並列性の担保は BRW などの責務。利用者の判断、2026-11-19）
+- 設定ファイルの移行（設定が検証の規則に合わないときは、止めて設定の更新を促すだけ）
 - Windows のネイティブ環境（初期の配置物と同じく、POSIX のシェルと `npx` がある環境を対象にする）
 
 ## Boundary Commitments
 
 ### This Spec Owns
 - 配置物 `.agent-hooks/cc-sdd-bootstrap/install-cc-sdd.mjs`（入口）・`install-rules.mjs`（判定）・`install-gate.mjs`（入力の停止）の中身と、それぞれの出力の文章
-- 導入状態の記録 `.cache/cc-sdd-install.state.json`・失敗の記録 `.cache/cc-sdd-install.failed`・ロック `.cache/cc-sdd-install.lock/` の形式と扱い
+- 導入状態の記録 `.cache/cc-sdd-install.state.json`・失敗の記録 `.cache/cc-sdd-install.failed` の形式と扱い、導入の途中でだけ作る一時ファイル（`.cache/cc-sdd-install.*` の名前）、`.cache/` の `.gitignore` への除外
 - 導入物の場所（`.claude/skills/kiro-*`・`.kiro/settings/templates/`・`.kiro/settings/cc-sdd-guide.md`）の削除と導入
 - 設定の項目 `ccSdd.keepTemplates` の定義
 - カタログの中のセッション導入の項目（ファイル・フック・`.gitignore` の行・CLAUDE.md の文章）
 - installer-core のデータの形への 2 つの足し算: `.gitignore` の行の条件（`when`）、設定の項目のお知らせ（`notice`）。それを読む `lib/plan.mjs`・`lib/cli.mjs`・`lib/target.mjs` の該当の処理
 
 ### Out of Boundary
-- 設定ファイルの読み書き・補い・対話の仕組み（installer-core の `lib/config.mjs`・`lib/cli.mjs`）。この spec は項目を足すだけ
+- 設定ファイルの読み書き・補い・対話の仕組み（installer-core の `lib/config.mjs`・`lib/cli.mjs`）。この spec は項目を足すだけ。例外は `format` の検査の規則で、配置物と共有するため `config-schema.mjs` へ移し、`lib/config.mjs` はそれを使う形に直す（規則は変えない）
 - 配置・記録・フックの統合・管理区画の操作の仕組み（installer-core）
 - cc-sdd の導入処理そのもの（`npx cc-sdd`）。この spec は呼び出し方だけを持つ
 - スキルを読ませる強制（kiro-gate）、Codex 向けの導入物（codex-delegation）
+- 同時に始まったセッションの排他。重なった導入で導入物が壊れても、次のセッションの開始時に指紋の判定（要件 2.2）で検出して入れ直す
 
 ### Allowed Dependencies
 - 配置物 → 同じディレクトリの配置物（`install-cc-sdd.mjs` → `install-rules.mjs` → `config-schema.mjs`）と Node の標準モジュールだけ。`lib/` を読み込まない
@@ -54,7 +56,8 @@
 ### Existing Architecture Analysis
 - installer-core は、パッケージの中の `.agent-hooks/cc-sdd-bootstrap/` を同じ道筋で利用先へ写す。カタログから外れた記録のファイルは `update` で消す。一式のフックは見分けの文字列（`/.agent-hooks/cc-sdd-bootstrap/`）で全部入れ替える。
 - 初期の配置物は bash（導入）と Node（停止）。停止の判定はすでに失敗の記録の一覧（`installFailures`）の形を持つ。
-- `poc/session-hooks`: 標準出力は文脈に入り、標準エラーは入らない。新しく置いたスキルは同じセッションの一覧に載らない。時間切れではフックと子が止められる。同時に始めたセッションのフックは重なる。
+- `poc/session-hooks`: 標準出力は文脈に入り、標準エラーは入らない。新しく置いたスキルは同じセッションの一覧に載らない。時間切れではフックと子が止められる。同時に始めたセッションのフックは重なる（この spec は排他しない）。
+- `lib/target.mjs` の未追跡の調べ（`expandIgnored`）は、最後の区間の `*` に対応する。`/.cache/` や `.kiro/settings/*` は調べられる。
 
 ### Architecture Pattern & Boundary Map
 
@@ -65,7 +68,7 @@ graph LR
     Entry --> Rules[install-rules.mjs 判定]
     Rules --> Schema[config-schema.mjs 設定の項目]
     Entry --> Npx[npx cc-sdd]
-    Entry --> Files[(導入物・状態の記録・失敗の記録・ロック)]
+    Entry --> Files[(導入物・状態の記録・失敗の記録)]
     UPS[UserPromptSubmit フック] --> Gate[install-gate.mjs 停止]
     Gate --> Files
   end
@@ -76,13 +79,13 @@ graph LR
   end
 ```
 
-矢印は「左が右を使う」。配置物の中では、入口だけがファイル・プロセス・ロックを扱い、判定はファイルを読まない純粋な処理にする（structure.md の「データ → 純粋な処理 → 入出力」）。
+矢印は「左が右を使う」。配置物の中では、入口だけがファイル・プロセスを扱い、判定はファイルを読まない純粋な処理にする（structure.md の「データ → 純粋な処理 → 入出力」）。
 
 ### Technology Stack
 
 | Layer | Choice / Version | Role in Feature | Notes |
 |-------|------------------|-----------------|-------|
-| 実行環境 | Node.js 22 以上（標準モジュールだけ） | 配置物の入口・判定・停止 | `fs`・`path`・`crypto`・`child_process`・`os` |
+| 実行環境 | Node.js 22 以上（標準モジュールだけ） | 配置物の入口・判定・停止 | `fs`・`path`・`crypto`・`child_process` |
 | 導入の実体 | `npx --yes cc-sdd@<版>` | cc-sdd の導入物を書く | `--yes --overwrite force --manifest <file> --claude-skills --lang <言語>` |
 | フック | Claude Code の SessionStart・UserPromptSubmit | 導入の起動・入力の停止 | SessionStart は matcher なし・時間制限 600 秒 |
 | テスト | `node --test` | 判定の単体、偽の `npx` を使う通し | 実物の通しは `poc/self-install` |
@@ -92,13 +95,14 @@ graph LR
 ### Directory Structure
 ```
 .agent-hooks/cc-sdd-bootstrap/
-├── install-cc-sdd.mjs   # 新規。入口: ロック・設定の読み取り・削除・npx の実行・記録の読み書き・出力・終了コード
+├── install-cc-sdd.mjs   # 新規。入口: 設定の読み取り・削除・npx の実行・記録の読み書き・出力・終了コード
 ├── install-rules.mjs    # 新規。判定（純粋）: 入れ直すかの判定・manifest・状態の記録の組み立てと解釈・削除の対象・利用者向けの文章
-├── config-schema.mjs    # lib/config-schema.mjs から移す。設定の項目の定義（データ）。ccSdd.keepTemplates を足す
+├── config-schema.mjs    # lib/config-schema.mjs から移す。設定の項目の定義（データ）。ccSdd.keepTemplates と format の検査の規則（formatProblem）を足す
 ├── install-gate.mjs     # 変更。記録の中身（理由）を示す。記録の一覧の形は保つ
 └── install-cc-sdd.sh    # 削除（カタログから外す。update で利用先からも消える）
 lib/
 ├── config-schema.mjs    # 変更。配置物の config-schema.mjs を公開し直すだけにする
+├── config.mjs           # 変更。format の検査を formatProblem の呼び出しに置き換える（規則・文言は変えない）
 ├── catalog.mjs          # 変更。ファイル・フック・.gitignore の行（条件つき）・CLAUDE.md の文章を差し替える。型に when を足す
 ├── plan.mjs             # 変更。設定に合う .gitignore の行だけを管理区画に書く（resolveGitignoreLines）
 ├── target.mjs           # 変更。未追跡の調べに、条件に関わらずすべての除外の行を使う（打ち消しの行を除く）
@@ -114,7 +118,7 @@ package.json                       # 変更。files の配置物を差し替え�
 
 ### Modified Files（自己適用）
 - `.claude/settings.json` — `node bin/cc-sdd-bootstrap.mjs update` で SessionStart の登録が新しい入口に置き換わる
-- `.gitignore` — 同じく管理区画の行が変わる
+- `.gitignore` — 同じく管理区画の行が変わる。管理区画の外の手書きの `/.cache/` の行は削除する
 - `.agent-hooks/cc-sdd-bootstrap/installed.json` — 同じく記録が更新される
 - `.cc-sdd-bootstrap.json` — 同じく `ccSdd.keepTemplates: false` が補われる
 - `CLAUDE.md` — 管理区画は update で更新。手書きの「cc-sdd の導入」の節を、固定版の記述を外して短くする
@@ -130,20 +134,17 @@ flowchart TD
   B -->|不備| F1[失敗の記録に理由を書く] --> OUTF[失敗を知らせる]
   B -->|正しい| C{省略できるか}
   C -->|できる| S[省略を知らせる・案内]
-  C -->|できない| L[ロックを取る 最大 300 秒]
-  L -->|取れない| F2[失敗の記録に理由を書く] --> OUTF
-  L -->|取れた| C2{省略できるか やり直し}
-  C2 -->|できる| U1[ロックを外す] --> S
-  C2 -->|できない| R[失敗の記録を書く 導入中]
+  C -->|できない| R[失敗の記録を書く 導入中]
   R --> D[導入物の場所を消す]
   D --> N[npx cc-sdd を実行]
-  N -->|失敗| F3[失敗の記録に理由を書く・ロックを外す] --> OUTF
-  N -->|成功| W[状態の記録を書く・失敗の記録を消す・ロックを外す]
+  N -->|失敗| F3[失敗の記録に理由を書く] --> OUTF
+  N -->|成功| W[状態の記録を書く・失敗の記録を消す]
   W --> OK[入れ直しを知らせる・案内]
 ```
 
-- 省略の判定（`decideInstall`）: 失敗の記録が無い、状態の記録が読める、版・言語・雛形の保持の選択が設定と同じ、記録したファイルがすべてあり指紋が一致する、のすべてを満たすときだけ省く。
-- 時間切れでフックが止められると、失敗の記録とロックが残る（PoC c）。次のセッションは古いロックを片付けて入れ直す。
+- 省略の判定（`decideInstall`）: 失敗の記録が無い、状態の記録が読める、版・言語・雛形の保持の選択が設定と同じ、記録したファイルがすべてあり指紋が一致する、雛形の保持を選んでいるときは `.kiro/settings/templates/` にファイルがある、のすべてを満たすときだけ省く。
+- 時間切れでフックが止められると、失敗の記録が残る（PoC c）。次のセッションは入れ直す。
+- 同時に始まったセッションは排他しない。重なった結果、導入物が欠けた・混ざった状態が残っても、次のセッションの開始時に指紋の判定で検出されて入れ直される。
 - フックから呼ばれたとき（引数 `session-start`）は、失敗でも終了コード 0 で標準出力に知らせる（文脈に入れる）。手で再試行したとき（引数なし）は、失敗で終了コード 1 にする。
 
 ### 次の入力の停止
@@ -156,7 +157,7 @@ UserPromptSubmit のたびに `install-gate.mjs` が記録の一覧を調べ、�
 | 1.1 | 設定の版・言語で導入 | InstallEntry, InstallRules | `buildManifest`, `npxArgs` | 導入 |
 | 1.2 | 消してから導入 | InstallEntry, InstallRules | `removalTargets` | 導入 |
 | 1.3 | CLAUDE.md に触れない | InstallRules | `buildManifest`（doc_main の出力先） | 導入 |
-| 1.4 | 他のファイルに触れない | InstallEntry, InstallRules | `removalTargets`, `assertNoSymlinkParents` | 導入 |
+| 1.4 | 他のファイルに触れない | InstallEntry, InstallRules | `removalTargets`, 親のシンボリックリンクの確認 | 導入 |
 | 1.5 | 成功の知らせ | InstallRules | `messageInstalled` | 導入 |
 | 1.6 | 途中経過を文脈に入れない | InstallEntry | npx の標準出力を標準エラーへ | 導入 |
 | 1.7 | 設定の不備は失敗 | InstallRules, ConfigSchema | `readInstallConfig` | 導入 |
@@ -178,37 +179,34 @@ UserPromptSubmit のたびに `install-gate.mjs` が記録の一覧を調べ、�
 | 3.8 | 判定の誤りは通す | InstallGate | `main` の例外処理 | 停止 |
 | 3.9 | 対象ごとに並べる | InstallGate | `installFailures`, `installBlockReason` | 停止 |
 | 3.10 | 失敗の記録をコミットしない | Catalog | `.gitignore` の行 | — |
-| 4.1 | 同時のセッションで混ざらない | InstallEntry, InstallRules | `acquireLock`, `decideStaleLock`, 判定のやり直し | 導入 |
-| 4.2 | 待ちは時間制限の内 | InstallEntry, Catalog | `LOCK_WAIT_MS`, フックの timeout | 導入 |
-| 5.1 | 一覧に載らないスキルの案内 | InstallRules | `messageGuide` | 導入 |
-| 5.2 | CLAUDE.md の管理区画の説明 | Catalog | `claudeSections` | — |
-| 6.1 | init・update で配置・登録 | Catalog | `files`, `hooks` | — |
-| 6.2 | 初期の配置物の置き換え | Catalog, Plan（既存） | カタログから外れた記録のファイルの削除 | — |
-| 6.3 | 置き換え後は入れ直し | InstallRules | 新しい状態の記録の道筋 | 導入 |
-| 6.4 | 利用先だけで動く | 配置物すべて | 依存の向き | — |
-| 6.5 | uninstall の一覧に記録を含める | Catalog, Target | `.gitignore` の行、`allIgnoreLines` | — |
-| 7.1 | 雛形の保持の項目 | ConfigSchema | `ccSdd.keepTemplates` | — |
-| 7.2 | 既定は入れ替え・除外 | InstallRules, Catalog | `removalTargets`, `.gitignore` の行の条件 | 導入 |
-| 7.3 | 保持では消さず上書きしない | InstallRules | `removalTargets`, `buildManifest` | 導入 |
-| 7.4 | 保持で雛形が無ければ置く | InstallRules | `buildManifest`（`templatesMissing`） | 導入 |
-| 7.5 | 保持では雛形の変更を理由にしない | InstallRules | `fingerprintTargets` | 導入 |
-| 7.6 | 保持では雛形を除外から外す | Catalog, Plan | `when`, `resolveGitignoreLines` | — |
-| 7.7 | 保持で版が違えば知らせる | InstallRules | `messageTemplatesKept` | 導入 |
-| 7.8 | 選択を変えて update で書き直す | Plan | `resolveGitignoreLines` | — |
-| 7.9 | ライセンスの知らせ | ConfigSchema, Cli | `ConfigField.notice`, `formatSuccess` | — |
+| 4.1 | 一覧に載らないスキルの案内 | InstallRules | `messageGuide` | 導入 |
+| 4.2 | CLAUDE.md の管理区画の説明 | Catalog | `claudeSections` | — |
+| 5.1 | init・update で配置・登録 | Catalog | `files`, `hooks` | — |
+| 5.2 | 初期の配置物の置き換え | Catalog, Plan（既存） | カタログから外れた記録のファイルの削除 | — |
+| 5.3 | 置き換え後は入れ直し | InstallRules | 新しい状態の記録の道筋 | 導入 |
+| 5.4 | 利用先だけで動く | 配置物すべて | 依存の向き | — |
+| 5.5 | uninstall の一覧に記録を含める | Catalog, Target | `.gitignore` の行、`allIgnoreLines` | — |
+| 6.1 | 雛形の保持の項目 | ConfigSchema | `ccSdd.keepTemplates` | — |
+| 6.2 | 既定は入れ替え・除外 | InstallRules, Catalog | `removalTargets`, `.gitignore` の行の条件 | 導入 |
+| 6.3 | 保持では消さず上書きしない | InstallRules | `removalTargets`, `buildManifest` | 導入 |
+| 6.4 | 保持で雛形が無ければ置く | InstallRules | `decideInstall`（`templatesMissing`）, `buildManifest` | 導入 |
+| 6.5 | 保持では雛形の変更を理由にしない | InstallRules | `isFingerprintTarget` | 導入 |
+| 6.6 | 保持では雛形を除外から外す | Catalog, Plan | `when`, `resolveGitignoreLines` | — |
+| 6.7 | 選択を変えて update で書き直す | Plan | `resolveGitignoreLines` | — |
+| 6.8 | ライセンスの知らせ | ConfigSchema, Cli | `ConfigField.notice`, `formatSuccess` | — |
 
 ## Components and Interfaces
 
 | Component | Domain/Layer | Intent | Req Coverage | Key Dependencies | Contracts |
 |-----------|--------------|--------|--------------|------------------|-----------|
-| ConfigSchema | データ（配置物） | 設定の項目の定義。`ccSdd.keepTemplates` を足す | 1.7, 7.1, 7.9 | — | State |
-| InstallRules | 純粋な処理（配置物） | 入れ直すかの判定・manifest・状態・文章 | 1.1–1.5, 1.7, 2.1–2.7, 3.3, 4.1, 5.1, 6.3, 7.2–7.5, 7.7 | ConfigSchema (P0) | Service |
-| InstallEntry | 入出力（配置物） | ロック・削除・npx・記録・出力 | 1.1, 1.2, 1.4, 1.6, 2.7, 3.1–3.4, 3.7, 4.1, 4.2 | InstallRules (P0), npx (P0) | Batch |
+| ConfigSchema | データ（配置物） | 設定の項目の定義。`ccSdd.keepTemplates` を足す | 1.7, 6.1, 6.8 | — | State |
+| InstallRules | 純粋な処理（配置物） | 入れ直すかの判定・manifest・状態・文章 | 1.1–1.5, 1.7, 2.1–2.7, 3.3, 4.1, 5.3, 6.2–6.5 | ConfigSchema (P0) | Service |
+| InstallEntry | 入出力（配置物） | 削除・npx・記録・出力 | 1.1, 1.2, 1.4, 1.6, 2.7, 3.1–3.4, 3.7 | InstallRules (P0), npx (P0) | Batch |
 | InstallGate | 入出力（配置物） | 記録を見て入力を止める | 3.5–3.9 | Node の fs (P0) | Event |
-| Catalog | データ（lib） | セッション導入の項目と `.gitignore` の条件 | 2.8, 3.10, 4.2, 5.2, 6.1, 6.2, 6.5, 7.2, 7.6 | — | State |
-| Plan | 純粋な処理（lib） | 設定に合う `.gitignore` の行を書く | 7.6, 7.8 | Catalog (P0) | Service |
-| Target | 入出力（lib） | 未追跡の調べにすべての除外の行を使う | 6.5 | Catalog (P0) | Service |
-| Cli | 入出力（lib） | 項目のお知らせを示す | 7.9 | ConfigSchema (P0) | Service |
+| Catalog | データ（lib） | セッション導入の項目と `.gitignore` の条件 | 2.8, 3.10, 4.2, 5.1, 5.2, 5.5, 6.2, 6.6 | — | State |
+| Plan | 純粋な処理（lib） | 設定に合う `.gitignore` の行を書く | 6.6, 6.7 | Catalog (P0) | Service |
+| Target | 入出力（lib） | 未追跡の調べにすべての除外の行を使う | 5.5 | Catalog (P0) | Service |
+| Cli | 入出力（lib） | 項目のお知らせを示す | 6.8 | ConfigSchema (P0) | Service |
 
 型は JSDoc（`@typedef`）で書く。以下は読みやすさのために TypeScript の記法で示す。
 
@@ -219,7 +217,7 @@ UserPromptSubmit のたびに `install-gate.mjs` が記録の一覧を調べ、�
 | Field | Detail |
 |-------|--------|
 | Intent | 設定の項目の定義を、配置物と導入コマンドで共有する |
-| Requirements | 1.7, 7.1, 7.9 |
+| Requirements | 1.7, 6.1, 6.8 |
 
 **Contracts**: State [x]
 
@@ -237,6 +235,8 @@ interface ConfigField {
 | `ccSdd.keepTemplates` | `keep-templates` | boolean | `false` | 真偽 | 雛形（`.kiro/settings/templates/`）は cc-sdd の成果物（MIT ライセンス）。コミットする場合はそのライセンスに従う。保持すると cc-sdd の版を上げても雛形は入れ替わらない（入れ替えるには `.kiro/settings/templates/` を消して新しいセッションを開く） |
 
 - 質問文: 「cc-sdd の雛形（.kiro/settings/templates/）を上書きせずに保持し、コミットできるようにしますか」
+- `CONFIG_FORMAT`（設定ファイルの書式の版）は、今と同じくこのファイルに置く。
+- `format` の検査は `formatProblem(format: unknown): string | null`（問題があれば「format: 理由」の文、無ければ null）としてこのファイルに移す。今の `lib/config.mjs` の `checkFormat` と同じ規則・文言（無い／1 以上の整数でない／`CONFIG_FORMAT` より新しい）で、`lib/config.mjs` と配置物の `readInstallConfig` の両方が使う。規則が 1 か所なので食い違わない。
 - `lib/config-schema.mjs` は `export * from "../.agent-hooks/cc-sdd-bootstrap/config-schema.mjs";` だけにする。既存の `import { configFields } from "./config-schema.mjs"` は変えない。
 - 導入済みのリポジトリは、次の `update` で `ccSdd.keepTemplates: false` が補われる（installer-core の `fillDefaults`）。セッション導入は、項目が無い設定を既定値 `false` として扱う（補われる前のセッションでも止めない）。
 
@@ -260,7 +260,7 @@ interface Catalog { files: CatalogFile[]; hooks: CatalogHook[]; gitignore: Catal
   2. `{ line: ".kiro/settings/", when: { path: "ccSdd.keepTemplates", equals: false } }`
   3. `{ line: ".kiro/settings/*", when: { path: "ccSdd.keepTemplates", equals: true } }`
   4. `{ line: "!.kiro/settings/templates/", when: { path: "ccSdd.keepTemplates", equals: true } }`
-  5. `/.cache/cc-sdd-install.*`
+  5. `/.cache/`（導入の記録・一時ファイルをすべて除外する）
 - `claudeSections`: 既存の `cc-sdd-guide` の前に `cc-sdd-session-install` を足す。本文は次の内容を短く書く: 導入物はセッション開始時に設定の版・言語で入る（揃っていれば省く）／入れ直すと `.claude/skills/kiro-*` は消してから入れる（`kiro-` で始まる独自のスキルを置かない）／導入が完了していないと入力が止まる／再試行は Claude の外で `node .agent-hooks/cc-sdd-bootstrap/install-cc-sdd.mjs`／SKILL.md が見つからないときは導入の未完了を利用者に伝え、再試行を勧める／スキル一覧に載らないスキルは対応する SKILL.md を読んで手順を実行する。
 
 ### 純粋な処理
@@ -270,68 +270,63 @@ interface Catalog { files: CatalogFile[]; hooks: CatalogHook[]; gitignore: Catal
 | Field | Detail |
 |-------|--------|
 | Intent | ファイルを読まずに、入れ直すか・何を消すか・何を導入するか・何を記録し何を知らせるかを決める |
-| Requirements | 1.1–1.5, 1.7, 2.1–2.7, 3.3, 4.1, 5.1, 6.3, 7.2–7.5, 7.7 |
+| Requirements | 1.1–1.5, 1.7, 2.1–2.7, 3.3, 4.1, 5.3, 6.2–6.5 |
 
 **Contracts**: Service [x]
 
 ```typescript
 const FAILURE_RECORD = ".cache/cc-sdd-install.failed";
 const STATE_PATH = ".cache/cc-sdd-install.state.json";
-const LOCK_DIR = ".cache/cc-sdd-install.lock";
 const RETRY_COMMAND = "node .agent-hooks/cc-sdd-bootstrap/install-cc-sdd.mjs";
-const LOCK_WAIT_MS = 300_000;      // 他のセッションを待つ上限（フックの 600 秒の内）
-const LOCK_STALE_MS = 660_000;     // これを過ぎたロックは古い（フックの時間制限より長い）
+const NPX_TIMEOUT_MS = 540_000;    // npx の待ちの上限（フックの 600 秒の内。超えたら理由つきで失敗にする）
 const RECORD_IN_PROGRESS: string;  // 「導入が完了していません（導入中、または中断）」と再試行の方法
 
 interface InstallConfig { version: string; lang: string; keepTemplates: boolean }
 type ConfigResult = { ok: true; config: InstallConfig } | { ok: false; reason: string };
 
-// 設定ファイルの文字列（無ければ null）を解釈し、configFields の validate で ccSdd.version・ccSdd.lang・ccSdd.keepTemplates を確かめる。
-// keepTemplates が無ければ false。理由にはファイル名・項目・直し方を含める（1.7）
+// 設定ファイルの文字列（無ければ null）を解釈し、`format`（config-schema.mjs の formatProblem）と、
+// configFields の validate で ccSdd.version・ccSdd.lang・ccSdd.keepTemplates を確かめる。keepTemplates が無ければ false。
+// 理由にはファイル名・項目・直し方（設定を直す、または導入コマンドの update で新しくする）を含める。値の移行はしない（1.7）
 function readInstallConfig(text: string | null): ConfigResult;
 
 interface InstallState {
   format: 1;
   version: string; lang: string; keepTemplates: boolean;
-  templatesVersion: string | null;   // 雛形を最後に置いたときの版
   files: Record<string, string>;     // 道筋 → SHA-256（16 進）。保持を選んだときは雛形を含めない
 }
 function parseState(text: string | null): InstallState | null; // 読めない・形が違えば null（2.4）
-function buildState(input: { config: InstallConfig; templatesInstalled: boolean; prev: InstallState | null; files: Record<string, string> }): InstallState;
+function buildState(input: { config: InstallConfig; files: Record<string, string> }): InstallState;
 
-// 指紋を取る対象かどうか（道筋の判定）。保持を選んだときは .kiro/settings/templates/ の下を外す（7.5）
+// 指紋を取る対象かどうか（道筋の判定）。保持を選んだときは .kiro/settings/templates/ の下を外す（6.5）
 function isFingerprintTarget(path: string, keepTemplates: boolean): boolean;
 
 type InstallDecision =
   | { action: "skip" }
-  | { action: "install"; reason: "no-state" | "config-changed" | "files-changed" | "failure-record" };
+  | { action: "install"; reason: "no-state" | "config-changed" | "files-changed" | "templates-missing" | "failure-record" };
 function decideInstall(input: {
   config: InstallConfig;
   state: InstallState | null;
   failureRecordExists: boolean;
   currentHashes: Record<string, string | null>; // state.files の各道筋の今の指紋（無ければ null）
+  templatesMissing: boolean;                    // .kiro/settings/templates/ が無い、または中にファイルが 1 つも無い
 }): InstallDecision;
 
 // 消す対象（リポジトリの根からの道筋）。skillEntries は .claude/skills の直下の名前の一覧
 function removalTargets(input: { skillEntries: string[]; keepTemplates: boolean }): string[];
 
-// cc-sdd の manifest（version 1）。templates を含めるのは keepTemplates が false、または雛形が無いとき（7.3・7.4）
+// cc-sdd の manifest（version 1）。templates を含めるのは keepTemplates が false、または雛形が無いとき（6.3・6.4）
 function buildManifest(input: { keepTemplates: boolean; templatesMissing: boolean }): object;
 function npxArgs(config: InstallConfig, manifestPath: string): string[];
-
-// 持ち主の情報からロックが古いか（同じホストで pid が終わっている、または開始から LOCK_STALE_MS を過ぎた）
-function decideStaleLock(input: { owner: { pid: number; host: string; startedAt: number } | null; lockMtimeMs: number; now: number; host: string; pidAlive: boolean | null }): boolean;
 
 // 利用者向けの文章（すべて日本語）
 function messageInstalled(config: InstallConfig): string;   // 版・言語・場所。CLAUDE.md は変えていない（1.5）
 function messageSkipped(config: InstallConfig): string;     // 1 行（2.6）
-function messageGuide(): string;                            // 一覧に載らないスキルは SKILL.md を読む（5.1）
-function messageTemplatesKept(config: InstallConfig, state: InstallState): string | null; // 保持で版が違えば 1 行（7.7）
+function messageGuide(): string;                            // 一覧に載らないスキルは SKILL.md を読む（4.1）
 function failureRecordText(reason: string): string;         // 理由と再試行の方法（3.3）
 function messageFailed(reason: string): string;
 ```
 
-- `decideInstall` は、失敗の記録があれば `failure-record`、状態が無ければ `no-state`、版・言語・保持の選択が違えば `config-changed`、記録のファイルのどれかが無いか指紋が違えば `files-changed`、どれでもなければ `skip`。
+- `decideInstall` は、失敗の記録があれば `failure-record`、状態が無ければ `no-state`、版・言語・保持の選択が違えば `config-changed`、記録のファイルのどれかが無いか指紋が違えば `files-changed`、保持を選んでいて雛形が無ければ `templates-missing`、どれでもなければ `skip`（要件 6.4 により、雛形が無ければ省かない）。
 - `removalTargets` は `kiro-` で始まる直下の項目すべて（ディレクトリ・ファイル・リンク）と `.kiro/settings/cc-sdd-guide.md`、保持を選んでいなければ `.kiro/settings/templates`。
 - `buildManifest` の `doc_main` は、今と同じく `templates/agents/{{AGENT}}/docs/CLAUDE.md` を `{{KIRO_DIR}}/settings` へ `cc-sdd-guide.md` の名前で出す（CLAUDE.md に書かせない。1.3）。
 - `npxArgs`: `["--yes", "cc-sdd@<版>", "--yes", "--overwrite", "force", "--manifest", <道筋>, "--claude-skills", "--lang", <言語>]`。
@@ -343,25 +338,23 @@ function messageFailed(reason: string): string;
 | Field | Detail |
 |-------|--------|
 | Intent | セッション開始時（と手の再試行）に、判定に従って導入物を揃える |
-| Requirements | 1.1, 1.2, 1.4, 1.6, 2.7, 3.1–3.4, 3.7, 4.1, 4.2 |
+| Requirements | 1.1, 1.2, 1.4, 1.6, 2.7, 3.1–3.4, 3.7 |
 
 **Contracts**: Batch [x]
 
 ##### Batch / Job Contract
 - **Trigger**: SessionStart のフック（`node .../install-cc-sdd.mjs session-start`）、または利用者の手の実行（引数なし）。それ以外の引数は使い方を標準エラーに出して終了コード 2。
-- **Input / validation**: リポジトリの根は自分の位置（`../..`）から求める。設定は `readInstallConfig` で確かめる。標準入力は読まない。待ちの上限は `LOCK_WAIT_MS` を使う。試験のためだけに環境変数 `CC_SDD_BOOTSTRAP_LOCK_WAIT_MS`（正の整数のミリ秒）で短くできる（不正な値は無視する）。
-- **Output**: 標準出力に `messageInstalled`／`messageSkipped`・`messageGuide`・`messageTemplatesKept`、または `messageFailed`。npx の標準出力・標準エラーは標準エラーへ回す（1.6）。終了コードは成功 0、失敗はフックからなら 0（文脈に入れるため）、手の実行なら 1。
-- **Idempotency & recovery**: 手順は次の順。
-  1. 設定を読む。不備なら失敗の記録に理由を書いて終わる（ロックは取らない）。
-  2. 状態の記録・失敗の記録・記録のファイルの指紋を読み、`decideInstall`。`skip` なら知らせて終わる。
-  3. ロックを取る（`mkdir` で作れたら取得。持ち主の情報 `owner.json` を書く）。作れなければ持ち主を読み、`decideStaleLock` が真なら別名に移してから消し、やり直す。偽なら 0.5 秒待って試す。`LOCK_WAIT_MS` を過ぎたら、他のセッションの導入が終わらない旨を失敗の記録に書いて終わる（4.2）。
-  4. ロックの中で 2 をやり直す（他のセッションが揃えた場合は省く）。
-  5. 失敗の記録に `RECORD_IN_PROGRESS` を書く（3.1）。
-  6. `.claude`・`.claude/skills`・`.kiro`・`.kiro/settings` がシンボリックリンクなら失敗とする。`removalTargets` を `lstat` で確かめながら消す（リンクはリンクだけを消す）（1.2・1.4）。
-  7. manifest を `.cache/cc-sdd-install.lock/manifest.json` に書き、`npx` を実行する。失敗なら終了コードを含む理由を失敗の記録に書く（3.3）。
-  8. 成功なら、`isFingerprintTarget` に合う導入物のファイルの指紋を取り、`buildState` を一時ファイル経由で `STATE_PATH` に書く。失敗の記録を消す（3.2）。
-  9. ロックを外す（`finally`。失敗・例外でも外す）。
-- 時間切れでプロセスごと止められた場合は 9 が動かず、記録とロックが残る。次のセッションが 3 の古いロックの判定で片付ける（3.4・4.1）。
+- **Input / validation**: リポジトリの根は自分の位置（`../..`）から求める。設定は `readInstallConfig` で確かめる。標準入力は読まない。`npx` の待ちの上限は `NPX_TIMEOUT_MS`。試験のためだけに環境変数 `CC_SDD_BOOTSTRAP_NPX_TIMEOUT_MS`（正の整数のミリ秒）で短くできる（不正な値は無視する）。
+- **Output**: 標準出力に `messageInstalled`／`messageSkipped` と `messageGuide`、または `messageFailed`。npx の標準出力・標準エラーは標準エラーへ回す（1.6）。終了コードは成功 0、失敗はフックからなら 0（文脈に入れるため）、手の実行なら 1。
+- **Idempotency & recovery**: 手順は次の順。排他はしない。
+  1. 設定を読む。不備なら失敗の記録に理由を書いて終わる。
+  2. 状態の記録・失敗の記録・記録のファイルの指紋・雛形の有無を読み、`decideInstall`。`skip` なら知らせて終わる。
+  3. 失敗の記録に `RECORD_IN_PROGRESS` を書く（3.1）。
+  4. `.claude`・`.claude/skills`・`.kiro`・`.kiro/settings` がシンボリックリンクなら失敗とする。`removalTargets` を `lstat` で確かめながら消す（リンクはリンクだけを消す）（1.2・1.4）。
+  5. manifest を一時ファイル `.cache/cc-sdd-install.manifest.<pid>.json` に書き、`npx` を実行する。`NPX_TIMEOUT_MS` を過ぎたら `npx` を止め、「時間内に取得・導入が終わらなかった（通信を確かめる）」を理由にする。manifest は `finally` で消す。失敗なら終了コードを含む理由を失敗の記録に書く（3.3）。
+  6. 成功なら、`isFingerprintTarget` に合う導入物のファイルの指紋を取り、`buildState` を一時ファイル `.cache/cc-sdd-install.state.json.<pid>.tmp` 経由で `STATE_PATH` に書く。失敗の記録を消す（3.2）。
+- 一時ファイルは `.cache/cc-sdd-install.` で始まる名前にし、`.cache/` ごと `.gitignore` の対象なのでコミットされない。プロセスの番号を付けるのは、重なって動いたセッションが互いの一時ファイルを消さないため。
+- 時間切れでプロセスごと止められた場合は 6 が動かず、失敗の記録が残る。次のセッションが入れ直す（3.4）。
 
 #### InstallGate（`.agent-hooks/cc-sdd-bootstrap/install-gate.mjs`）
 
@@ -383,9 +376,9 @@ function decideUserPromptSubmit(root: string): object | null; // 今と同じ形
 - 他の配置物を読み込まない。判定の例外は標準エラーに出して終了コード 0（3.8）。
 
 #### Plan・Target・Cli（`lib/`、installer-core の該当の処理）
-- `lib/plan.mjs`: `resolveGitignoreLines(lines: CatalogGitignoreLine[], config: object | null): string[]` を足す。文字列はそのまま、`when` つきは `config` の `path` の値が `equals` と一致するときだけ残す（`config` が null なら既定値で判定）。`makePlan` の `.gitignore` の本文に使う（7.6・7.8）。
-- `lib/target.mjs`: `allIgnoreLines(lines)` で条件を外した行の一覧（`!` で始まる行を除く）を作り、`readSnapshot` の未追跡の調べに使う（6.5）。`cli.mjs` の呼び出しもこれに揃える。
-- `lib/cli.mjs`: `formatSuccess` で、`init`・`update` の後の設定で値が `true` の項目の `notice` を「お知らせ」に足す（7.9）。
+- `lib/plan.mjs`: `resolveGitignoreLines(lines: CatalogGitignoreLine[], config: object | null): string[]` を足す。文字列はそのまま、`when` つきは `config` の `path` の値が `equals` と一致するときだけ残す（`config` が null なら既定値で判定）。`makePlan` の `.gitignore` の本文に使う（6.6・6.7）。
+- `lib/target.mjs`: `allIgnoreLines(lines)` で条件を外した行の一覧（`!` で始まる行を除く）を作り、`readSnapshot` の未追跡の調べに使う（5.5）。`cli.mjs` の呼び出しもこれに揃える。
+- `lib/cli.mjs`: `formatSuccess` で、`init`・`update` の後の設定で値が `true` の項目の `notice` を「お知らせ」に足す（6.8）。
 
 ## Data Models
 
@@ -396,31 +389,27 @@ function decideUserPromptSubmit(root: string): object | null; // 今と同じ形
   "version": "3.1.0",
   "lang": "ja",
   "keepTemplates": false,
-  "templatesVersion": "3.1.0",
   "files": { ".claude/skills/kiro-impl/SKILL.md": "<sha256>", ".kiro/settings/cc-sdd-guide.md": "<sha256>" }
 }
 ```
-- 成功した導入の後にだけ書く。`.gitignore` の対象（`/.cache/cc-sdd-install.*`）。
+- 成功した導入の後にだけ書く。`.cache/` ごと `.gitignore` の対象（`/.cache/`）。
 - 道筋はリポジトリの根からの相対で、`..` や絶対の道筋を含む項目があれば記録全体を読めないもの（null）として扱う。
 
 ### 失敗の記録 `.cache/cc-sdd-install.failed`
 1 行目に要約、続けて理由、最後に再試行の方法を書く平文。中身は停止のフックがそのまま示す。
 
-### ロック `.cache/cc-sdd-install.lock/`
-`owner.json`（`{ "pid": number, "host": string, "startedAt": number }`）と、実行中の manifest を置く。
-
 ## Error Handling
 
 ### Error Strategy
-導入の失敗は「止める側」（tech.md）。設定の不備・ロックの待ちの超過・削除の失敗・npx の失敗・予期しない例外は、すべて失敗の記録に理由を書いて次の入力を止める。停止のフック自身の誤りだけは「通す側」。
+導入の失敗は「止める側」（tech.md）。設定の不備・削除の失敗・npx の失敗・予期しない例外は、すべて失敗の記録に理由を書いて次の入力を止める。停止のフック自身の誤りだけは「通す側」。
 
 ### Error Categories and Responses
 
 | 状況 | 応答 | 要件 |
 |------|------|------|
-| 設定ファイルが無い・JSON として読めない・値が不正 | 失敗の記録に、ファイル名・項目・直し方（`.cc-sdd-bootstrap.json` を直すか `npx github:nekono-dev/cc-sdd-bootstrap update`）を書く | 1.7 |
+| 設定ファイルが無い・JSON として読めない・`format` や値が不正 | 失敗の記録に、ファイル名・項目・直し方（`.cc-sdd-bootstrap.json` を直すか `npx github:nekono-dev/cc-sdd-bootstrap update`）を書く。移行はしない | 1.7 |
 | npx が失敗（通信できない・存在しない版・対応しない言語） | 終了コードと、通信・版・言語を確かめるよう書く | 3.3 |
-| 他のセッションのロックが 300 秒外れない | その旨と再試行の方法を書く | 4.2 |
+| npx が `NPX_TIMEOUT_MS` を過ぎても終わらない | `npx` を止め、時間内に終わらなかったこと（通信を確かめる）と再試行の方法を書く | 3.3 |
 | 導入物の場所の親がシンボリックリンク | 導入せず、その道筋を書く | 1.4 |
 | 時間切れで止められた | 記録は「導入中、または中断」のまま残る | 3.4 |
 | 予期しない例外 | 例外の文を理由に書く。記録を書くこと自体が失敗したら標準エラーに出す | 3.3 |
@@ -432,32 +421,31 @@ function decideUserPromptSubmit(root: string): object | null; // 今と同じ形
 ## Testing Strategy
 
 ### Unit Tests（`test/install-rules.test.mjs`）
-- `readInstallConfig`: 無い・読めない・版の形が違う・言語の形が違うときに理由にファイル名と項目が入る。`keepTemplates` が無ければ false（1.7・7.1）
-- `decideInstall`: 4 つの入れ直しの理由と省略の条件をそれぞれ確かめる（2.1–2.5）
-- `isFingerprintTarget`: 保持のときに雛形の道筋が外れる（7.5）
-- `removalTargets`: `kiro-` で始まる項目だけ・保持のときは雛形を含めない（1.2・1.4・7.2・7.3）
-- `buildManifest`: 保持で雛形がある/無い、保持しない、の 3 通りの対象（7.3・7.4）。`doc_main` の出力先が `.kiro/settings/cc-sdd-guide.md`（1.3）
-- `decideStaleLock`: pid が終わっている・別のホストで期限内・期限切れ（4.1）
+- `readInstallConfig`: 無い・読めない・`format` が無い／不正／新しすぎる（`formatProblem` と `lib/config.mjs` が同じ結果を返す）・版の形が違う・言語の形が違うときに理由にファイル名と項目が入る。`keepTemplates` が無ければ false（1.7・6.1）
+- `decideInstall`: 5 つの入れ直しの理由と省略の条件をそれぞれ確かめる（2.1–2.5・6.4）
+- `isFingerprintTarget`: 保持のときに雛形の道筋が外れる（6.5）
+- `removalTargets`: `kiro-` で始まる項目だけ・保持のときは雛形を含めない（1.2・1.4・6.2・6.3）
+- `buildManifest`: 保持で雛形がある/無い、保持しない、の 3 通りの対象（6.3・6.4）。`doc_main` の出力先が `.kiro/settings/cc-sdd-guide.md`（1.3）
 - `buildState`・`parseState`: 往復、不正な道筋を含む記録は null（2.4・2.7）
-- `messageTemplatesKept`: 版が違うときだけ文を返す（7.7）
 
-### Integration Tests（`test/install-cc-sdd.test.mjs`。偽の `npx` を PATH の先頭に置き、manifest に従って印のファイルを書く・失敗する・待つを選べるようにする）
-- 初回は導入し、状態の記録ができ、失敗の記録が無く、標準出力に版・言語と案内が出て、偽の npx の出力は標準出力に出ない（1.1・1.5・1.6・2.7・5.1）
+### Integration Tests（`test/install-cc-sdd.test.mjs`。偽の `npx` を PATH の先頭に置き、manifest に従って印のファイルを書く・失敗する・終わらないを選べるようにする）
+- 初回は導入し、状態の記録ができ、失敗の記録が無く、標準出力に版・言語と案内が出て、偽の npx の出力は標準出力に出ない（1.1・1.5・1.6・2.7・4.1）
 - 2 回目は偽の npx を呼ばずに省く。記録したファイルを 1 つ消す・書き換える・設定の版を変えると入れ直す（2.1–2.3・2.6）
 - 古い版にだけあったスキルのディレクトリが入れ直しで消え、`kiro-` で始まらないスキルと `.kiro/specs/` は残る。CLAUDE.md は変わらない（1.2–1.4）
 - 偽の npx が失敗すると、記録に終了コードと再試行の方法が残り、フックからは終了コード 0・手からは 1（3.3・3.7）
-- 設定が無い・不正なら npx を呼ばずに失敗の記録が残る（1.7）
-- 2 つを同時に起動すると、偽の npx は 1 回だけ呼ばれ、どちらも成功で終わる（4.1）。死んだ pid のロックは片付けられる。持ち主が生きているロックで待ちの上限（試験では `CC_SDD_BOOTSTRAP_LOCK_WAIT_MS` で短くする）を超えると失敗の記録が残る（4.2）
-- 保持のとき、雛形の書き換えが残り、入れ直しの理由にならない。雛形が無ければ置かれる（7.3–7.5）
+- 設定が無い・不正（`format` を含む）なら npx を呼ばずに失敗の記録が残る（1.7）
+- 偽の npx が終わらないと、`CC_SDD_BOOTSTRAP_NPX_TIMEOUT_MS` を過ぎた時点で止められ、時間切れの理由が失敗の記録に残る（3.3）
+- 保持のとき、雛形の書き換えが残り、入れ直しの理由にならない。雛形を消すと次の開始で置かれる（6.3–6.5）
 
 ### Gate Tests（`test/install-gate.test.mjs`）
 - 記録が無ければ null、あれば block と理由（記録の中身・再試行のコマンド）。対象が 2 つなら両方が並ぶ（3.5・3.6・3.9）
 
 ### installer-core 側（`plan.test.mjs`・`catalog.test.mjs`・`cli.test.mjs`・`package.test.mjs`・`config.test.mjs`）
-- `keepTemplates` の真偽で `.gitignore` の管理区画が書き分けられ、選択を変えた `update` で書き直される（7.6・7.8）
-- 初期の配置物の記録がある状態の `update` で `install-cc-sdd.sh` が消え、SessionStart の登録が新しい入口に置き換わる（6.1・6.2）
-- uninstall で状態の記録・失敗の記録が未追跡の一覧に入る（6.5）
-- `keepTemplates` を true にした init で、お知らせにライセンスの文が出る（7.9）
+- `keepTemplates` の真偽で `.gitignore` の管理区画が書き分けられ、選択を変えた `update` で書き直される（6.6・6.7）
+- 初期の配置物の記録がある状態の `update` で `install-cc-sdd.sh` が消え、SessionStart の登録が新しい入口に置き換わる（5.1・5.2）
+- uninstall で `.cache/`（状態の記録・失敗の記録を含む）が未追跡の一覧に入る（5.5）
+- `config.test.mjs`: `format` の検査が `formatProblem` に置き換わっても、今の文言・結果が変わらない
+- `keepTemplates` を true にした init で、お知らせにライセンスの文が出る（6.8）
 - `package.json` の `files` とカタログのファイルが一致する
 
 ### 実物の通し（`poc/self-install/run.sh` を更新して再実行）
@@ -469,5 +457,5 @@ function decideUserPromptSubmit(root: string): object | null; // 今と同じ形
 - npx の引数は配列で渡し、シェルを通さない（設定の値で任意のコマンドを実行させない）。版・言語は検証の規則の形に合うものだけを使う。
 
 ## Migration Strategy
-- 既存の導入先: `update` で配置物と登録が置き換わり、`install-cc-sdd.sh` は消える（書き換えていた場合は installer-core の規則どおり中止し `--force` を案内）。設定に `ccSdd.keepTemplates: false` が補われる。次のセッションで状態の記録が無いため入れ直す（6.2・6.3）。
-- このリポジトリ（自己適用）: 実装の後に `node bin/cc-sdd-bootstrap.mjs update` を実行し、CLAUDE.md の手書きの節・tech.md・README の固定版の記述を改め、`poc/self-install/run.sh` を再実行する。
+- 既存の導入先: `update` で配置物と登録が置き換わり、`install-cc-sdd.sh` は消える（書き換えていた場合は installer-core の規則どおり中止し `--force` を案内）。設定に `ccSdd.keepTemplates: false` が補われる。次のセッションで状態の記録が無いため入れ直す（5.2・5.3）。
+- このリポジトリ（自己適用）: 実装の後の最後のタスクで、`node bin/cc-sdd-bootstrap.mjs update` を実行し、CLAUDE.md の手書きの節・tech.md・README の固定版の記述を改め、`.gitignore` の管理区画の外にある手書きの `/.cache/` の行を削除し（管理区画の `/.cache/` と重複するため）、`poc/self-install/run.sh` を再実行する。
