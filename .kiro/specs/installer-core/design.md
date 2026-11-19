@@ -38,7 +38,7 @@
 
 ### Allowed Dependencies
 - Node.js 22 以上の標準モジュールだけ（`node:fs`・`node:path`・`node:url`・`node:util`・`node:readline/promises`・`node:crypto`・`node:test`）。外部パッケージは使わない。
-- `lib/` の中の依存の向きは「データ（`catalog`・`config-schema`）→ 純粋な処理（`config`・`ledger`・`blocks`・`settings-hooks`・`plan`）→ 入出力（`target`）→ `cli` → `bin`」。左から右へだけ import してよい。
+- `lib/` の中の依存の向きは「データ（`catalog`・`config-schema`）→ 純粋な処理（`config`・`ledger`・`blocks`・`settings-hooks`・`plan`）→ 入出力（`target`）→ `cli` → `bin`」。右側の層は左側の層から import してよい。
 - 配置物（`.agent-hooks/cc-sdd-bootstrap/` の下）は `lib/` を import しない（利用先には配置物しか無い）。
 - git の実行ファイルには依存しない（git のリポジトリの最上位かどうかは `.git` の有無で見る）。
 
@@ -107,7 +107,7 @@ lib/
 ├── blocks.mjs                       # 目印の行で囲んだ区画の作成・置き換え・削除（純粋。.gitignore と CLAUDE.md で使う）
 ├── settings-hooks.mjs               # .claude/settings.json の一式のフックの組の取り除きと追加（純粋）
 ├── plan.mjs                         # 操作ごとの計画（書く内容・削除・権限・中止の理由）の作成（純粋）
-├── target.mjs                       # 入出力: 対象の読み取り、同梱のファイルの読み取り、計画の適用（書き込み・削除・権限・空のディレクトリの削除）
+├── target.mjs                       # 入出力: 対象・設定状態・同梱ファイルと版の読み取り、計画の適用（書き込み・削除・権限・空のディレクトリの削除）
 └── cli.mjs                          # 引数の解析、対話、操作の流れ、出力、終了コード
 .agent-hooks/
 └── cc-sdd-bootstrap/
@@ -495,6 +495,7 @@ interface TargetSnapshot {                       // Target が読んだ対象の
   gitignore: string | null;
   claudeMd: string | null;
   files: Record<string, Buffer | null>;          // カタログと記録に載る道筋の今の内容
+  modes: Record<string, boolean | null>;         // 各道筋が実行権限を持つか（無いファイルは null）
   ignoredPresent: string[];                      // catalog.gitignore の行のうち、対象に実在する道筋（uninstall の知らせに使う）
 }
 
@@ -509,7 +510,7 @@ interface PlanInput {
 }
 
 type FileChange =
-  | { action: "write"; path: string; content: Buffer; executable: boolean; note?: "restored" | "overwritten" }
+  | { action: "write"; path: string; content: Buffer; executable: boolean; note?: "restored" | "overwritten" | "permission-restored" }
   | { action: "delete"; path: string };
 
 interface PlanBlock { kind: "modified" | "markers" | "settings"; path: string; detail: string }
@@ -525,8 +526,9 @@ function makePlan(input: PlanInput): Plan;
 ```
 - 計画が触れてよい道筋は、カタログの files、記録の files、`.cc-sdd-bootstrap.json`、`LEDGER_PATH`、`.claude/settings.json`、`.gitignore`、`CLAUDE.md` だけ（4.4・9.7）。`pruneDirs` は `.agent-hooks/cc-sdd-bootstrap`・`.agent-hooks`・`.claude`（init が `.claude/settings.json` のために作りうる）だけで、空のときだけ消える。
 - 内容が今と同じファイルは `changes` に入れない（10.3・5.7）。
+- `executable: true` のカタログ項目は、内容が同じでも実行権限が無ければ `permission-restored` 注記つきで書き直し、権限を戻す。
 - init・update: ファイルの扱いは「System Flows」の図に従う。続けて設定ファイル、記録、`.claude/settings.json`、`.gitignore`、CLAUDE.md の順に書く内容を計算する。
-- uninstall: 共通部分の書き換えは中止の理由（`--force` で削除）、固有の部分の書き換えは残す。設定ファイルと記録を消す。統合の 3 ファイルは一式の部分を取り除き、結果が空（空白だけ、または `{}`）ならファイルを消す。`snapshot.ignoredPresent` が空でなければ、「`.gitignore` の除外が外れたため、次の道筋が git の未追跡のファイルとして現れる。cc-sdd の導入物はライセンスが異なるのでコミットせず、不要なら削除する」という知らせを、道筋の一覧つきで `notices` に入れる（9.7 で消さないものを、誤ってコミットさせないため）。
+- uninstall: 共通部分の書き換えは中止の理由（`--force` で削除）、固有の部分の書き換えは残す。設定ファイルと記録を消す。統合の 3 ファイルは一式の部分を取り除き、結果が空文字（または `{}`）ならファイルを消す。`snapshot.ignoredPresent` が空でなければ、「`.gitignore` の除外が外れたため、次の道筋が git の未追跡のファイルとして現れる。cc-sdd の導入物はライセンスが異なるのでコミットせず、不要なら削除する」という知らせを、道筋の一覧つきで `notices` に入れる（9.7 で消さないものを、誤ってコミットさせないため）。
 - CLAUDE.md の区画の本文は、`claudeSections` の `body` をカタログの順に空行でつないだもの。目印の行には「この区画は cc-sdd-bootstrap が管理する。手で書き換えると update で戻る」を添える。
 
 ### 入出力
@@ -552,8 +554,13 @@ interface ApplyResult {
 function isGitRoot(dir: string): boolean;        // dir 直下に .git（ディレクトリまたはファイル）があるか
 function readSnapshot(root: string, paths: string[], ignored: string[]): TargetSnapshot;
 function readPackageFiles(packageRoot: string, catalog: Catalog): Record<string, Buffer>;
+function readConfigState(root: string): { kind: "missing" | "file" | "other" };
+function readPackageVersion(packageRoot: string): string;
 function applyPlan(root: string, plan: Plan): ApplyResult;
 ```
+- 設定ファイルの状態と同梱 package.json の版は Target が読み、Cli はファイルシステムに直接アクセスしない。
+- `readSnapshot` は各ファイルの実行権限の有無を `modes` に記録する。実行権限を直す計画も `applyPlan` で適用し、0o755 にする。
+- `readSnapshot` は計画で扱う管理対象の道筋について、root から対象までの既存要素を `lstat` し、シンボリックリンクを通る場合は日本語の理由と道筋を示して失敗する。`applyPlan` も各変更の直前に同じ検査を行い、リンク経由の書き込み・削除を拒む（ignoredPresent の表示用一覧は除く）。
 - 書き込みは、同じディレクトリの一時ファイルに書いてから名前を変える（壊れたファイルを残さない）。既存のファイルの権限は保つ。`executable` のファイルは 0o755 にする（4.7）。
 - 写す元と先が同じファイル（自己適用）でも、内容が同じなら計画に入らないので書かない。
 - 1 つ失敗したらそこで止め、`done`・`failed`・`pending` を返す（4.8）。
@@ -669,6 +676,7 @@ function runCli(argv: string[], io: CliIo): Promise<number>; // 終了コード�
 
 ## Security Considerations
 - 導入コマンドは、カタログに載った道筋と決まった 5 つのファイル（設定・記録・settings・`.gitignore`・CLAUDE.md）以外に書かない。道筋はカタログの不変条件（`DEPLOY_DIR` の下）で縛り、`..` を含む道筋を拒む。
+- 管理対象の道筋は `readSnapshot` と各変更の適用直前に `lstat` で検査し、root から対象までの既存要素にシンボリックリンクがあれば読み取り・書き込み・削除を拒む。表示用の `ignoredPresent` の列挙はこの拒否の対象外とする。
 - 設定ファイルの値をコマンドの文字列に埋め込まない（フックのコマンドはカタログの固定の文字列）。
 
 ## Migration Strategy（このリポジトリの自己適用）

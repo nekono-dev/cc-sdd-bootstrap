@@ -1,7 +1,7 @@
 // cli.mjs の試験: 引数の解析と使い方の表示
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { parseCliArgs, buildUsage, runCli, formatSuccess, formatAbort, formatApplyFailure } from "../lib/cli.mjs";
+import { parseCliArgs, buildUsage, runCli, formatSuccess, formatAbort, formatApplyFailure, formatReadFailure } from "../lib/cli.mjs";
 import { configFields } from "../lib/config-schema.mjs";
 import fs from "node:fs";
 import os from "node:os";
@@ -48,9 +48,19 @@ test("設定エラーは設定ファイル名・項目・理由・次の手を�
   const unreadable = await invoke("{");
   assert.match(unreadable, /\.cc-sdd-bootstrap\.json[\s\S]*JSON として読めません/);
 });
-test("途中失敗は済んだもの・失敗・未処理を表示する", () => {
-  const text = formatApplyFailure({ done: [{ path: "done" }], failed: { change: { path: "bad" }, message: "理由" }, pending: [{ path: "later" }] });
-  for (const s of ["済んだ", "done", "失敗", "bad", "理由", "未処理", "later"]) assert.ok(text.includes(s), s);
+test("途中失敗は復旧手順と再実行する操作を示す", () => {
+  const text = formatApplyFailure({ done: [{ path: ".cc-sdd-bootstrap.json" }], failed: { change: { path: ".claude/settings.json" }, message: "理由" }, pending: [{ path: "later" }] }, "init", false);
+  for (const s of ["済んだ", ".cc-sdd-bootstrap.json", "失敗", ".claude/settings.json", "理由", "未処理", "later", "権限", "update"]) assert.ok(text.includes(s), s);
+  const init = formatApplyFailure({ done: [], failed: { change: { path: "bad" }, message: "理由" }, pending: [] }, "init", false);
+  assert.match(init, /init.*もう一度/);
+  const uninstall = formatApplyFailure({ done: [], failed: { change: { path: "bad" }, message: "理由" }, pending: [] }, "uninstall", true);
+  assert.match(uninstall, /uninstall.*もう一度/);
+});
+
+test("読み取り失敗は道筋と修正後の再実行を案内する", () => {
+  const text = formatReadFailure(Object.assign(new Error("EACCES"), { path: ".claude/settings.json" }));
+  assert.match(text, /\.claude\/settings\.json/);
+  assert.match(text, /確認して直してから、同じ操作をもう一度実行してください/);
 });
 
 /** 書き込みを集める擬似の出力 */
@@ -58,6 +68,44 @@ function sink() {
   const chunks = [];
   return { write: (s) => { chunks.push(String(s)); return true; }, text: () => chunks.join("") };
 }
+
+test("途中失敗後に uninstall を再実行できる", async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "cc-sdd-cli-uninstall-retry-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  fs.mkdirSync(path.join(root, ".git"));
+  const invoke = (args) => runCli(args, {
+    cwd: root,
+    packageRoot: path.resolve("."),
+    interactive: false,
+    stdout: sink(),
+    stderr: sink(),
+  });
+  assert.equal(await invoke(["init"]), 0);
+
+  const targetSettings = path.join(root, ".claude/settings.json");
+  const originalRmSync = fs.rmSync;
+  fs.rmSync = function (target, options) {
+    if (path.resolve(String(target)) === targetSettings) {
+      const error = new Error("意図した削除失敗");
+      error.code = "EACCES";
+      throw error;
+    }
+    return originalRmSync.call(this, target, options);
+  };
+  let failed;
+  try {
+    failed = await invoke(["uninstall"]);
+  } finally {
+    fs.rmSync = originalRmSync;
+  }
+  assert.equal(failed, 1);
+  assert.equal(fs.existsSync(path.join(root, ".cc-sdd-bootstrap.json")), true);
+  assert.equal(fs.existsSync(path.join(root, ".agent-hooks/cc-sdd-bootstrap/installed.json")), true);
+  assert.equal(await invoke(["uninstall"]), 0);
+  assert.equal(fs.existsSync(path.join(root, ".cc-sdd-bootstrap.json")), false);
+  assert.equal(fs.existsSync(path.join(root, ".agent-hooks/cc-sdd-bootstrap/installed.json")), false);
+  for (const file of catalog.files) assert.equal(fs.existsSync(path.join(root, file.path)), false, file.path);
+});
 
 test("init に全ての指定を正しい型で渡せる", () => {
   const r = parse(["init", "--cc-sdd-version", "3.2.0", "--lang", "en", "--codex", "YES", "--model", "impl=opus", "--force"]);

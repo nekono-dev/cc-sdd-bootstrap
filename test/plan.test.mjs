@@ -35,11 +35,11 @@ function filesOnly(i) {
 const ledgerText = (placed) => serializeLedger(buildLedger("0.1.0", placed));
 
 /** 入力を組み立てる */
-function input({ operation = "init", files = {}, ledger = null, packageFiles, catalog = fakeCatalog, force = false } = {}) {
+function input({ operation = "init", files = {}, modes = {}, ledger = null, packageFiles, catalog = fakeCatalog, force = false } = {}) {
   return {
     operation,
     config: null,
-    snapshot: { config: null, ledger, settings: null, gitignore: null, claudeMd: null, files, ignoredPresent: [] },
+    snapshot: { config: null, ledger, settings: null, gitignore: null, claudeMd: null, files, modes, ignoredPresent: [] },
     catalog,
     packageFiles: packageFiles ?? { [C]: B("new-c"), [P]: B("new-p") },
     bootstrapVersion: "0.1.0",
@@ -66,6 +66,44 @@ test("同じ内容なら変更なし。固有の部分は存在すれば残す",
   );
   assert.deepEqual(plan.changes, []);
   assert.deepEqual(plan.blocks, []);
+});
+
+test("同じ内容でも実行権限が無ければ戻し、既にあれば変更しない", () => {
+  const withoutExecute = filesOnly(input({
+    operation: "update",
+    files: { [C]: B("new-c"), [P]: B("new-p") },
+    ledger: ledgerText([{ path: C, kind: "common", content: B("new-c") }]),
+    modes: { [C]: false, [P]: false },
+  }));
+  assert.deepEqual(withoutExecute.changes, [{
+    action: "write", path: C, content: B("new-c"), executable: true, note: "permission-restored",
+  }]);
+  const executable = filesOnly(input({
+    operation: "update",
+    files: { [C]: B("new-c"), [P]: B("new-p") },
+    ledger: ledgerText([{ path: C, kind: "common", content: B("new-c") }]),
+    modes: { [C]: true, [P]: false },
+  }));
+  assert.deepEqual(executable.changes, []);
+});
+
+test("uninstall は管理区画の外に残った空白をそのまま書き戻す", () => {
+  const originals = { gitignore: " \t\n", claudeMd: "\t  \n" };
+  const installed = makePlan({ ...input({
+    operation: "init",
+    files: { [C]: null, [P]: null },
+    packageFiles: { [C]: B("new-c"), [P]: B("new-p") },
+  }), snapshot: { config: null, ledger: null, settings: null, gitignore: originals.gitignore, claudeMd: originals.claudeMd, files: { [C]: null, [P]: null }, modes: {}, ignoredPresent: [] } });
+  const gitignore = installed.changes.find((change) => change.path === ".gitignore").content.toString();
+  const claudeMd = installed.changes.find((change) => change.path === "CLAUDE.md").content.toString();
+  const final = makePlan({
+    ...input({ operation: "uninstall", files: { [C]: null, [P]: null } }),
+    snapshot: { config: null, ledger: null, settings: null, gitignore, claudeMd, files: { [C]: null, [P]: null }, modes: {}, ignoredPresent: [] },
+  });
+  assert.deepEqual(final.changes.filter((change) => [".gitignore", "CLAUDE.md"].includes(change.path)).map((change) => [change.path, change.action, change.content?.toString()]), [
+    [".gitignore", "write", originals.gitignore],
+    ["CLAUDE.md", "write", originals.claudeMd],
+  ]);
 });
 
 test("書き換えていない共通部分は新しい版で置き換える", () => {
@@ -355,6 +393,17 @@ test("取り除き: init の結果から元の settings・.gitignore・CLAUDE.md
   assert.equal(next.files[P], null);
   assert.deepEqual(plan.pruneDirs, [D, ".agent-hooks", ".claude"]);
   assert.deepEqual(plan.notices, []);
+});
+
+test("取り除き: 配置物・統合設定・区画の後に記録、最後に設定を削除する", () => {
+  const i = installed();
+  const plan = uninstallPlan(i);
+  const paths = plan.changes.map((change) => change.path);
+  const ledgerIndex = paths.indexOf(".agent-hooks/cc-sdd-bootstrap/installed.json");
+  const configIndex = paths.indexOf(".cc-sdd-bootstrap.json");
+  assert.ok(ledgerIndex >= 0);
+  assert.equal(configIndex, paths.length - 1);
+  assert.equal(ledgerIndex, paths.length - 2);
 });
 
 test("取り除き: 書き換えられた共通部分は中止の理由、force なら削除", () => {

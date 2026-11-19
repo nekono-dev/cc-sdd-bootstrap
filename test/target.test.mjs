@@ -9,6 +9,8 @@ import {
   readSnapshot,
   readPackageFiles,
   applyPlan,
+  readConfigState,
+  readPackageVersion,
 } from "../lib/target.mjs";
 import { CONFIG_PATH, LEDGER_PATH } from "../lib/catalog.mjs";
 
@@ -57,6 +59,10 @@ test("readSnapshot: 読めるものは文字列・Buffer、無いものは null"
     assert.ok(Buffer.isBuffer(s.files["f/one.txt"]));
     assert.equal(s.files["f/one.txt"].toString(), "1");
     assert.equal(s.files["f/none.txt"], null);
+    assert.equal(s.modes["f/one.txt"], false);
+    assert.equal(s.modes["f/none.txt"], null);
+    fs.chmodSync(path.join(d, "f/one.txt"), 0o755);
+    assert.equal(readSnapshot(d, ["f/one.txt"], []).modes["f/one.txt"], true);
     assert.deepEqual(s.ignoredPresent, []);
     put(d, LEDGER_PATH, "L");
     put(d, ".claude/settings.json", "S");
@@ -97,6 +103,44 @@ test("readPackageFiles: カタログのファイルを読み、無ければ日�
   });
 });
 
+test("readConfigState: 設定の欠落・通常ファイル・その他・リンクを判定", () => {
+  withTmp((d) => {
+    assert.deepEqual(readConfigState(d), { kind: "missing" });
+    fs.mkdirSync(path.join(d, CONFIG_PATH), { recursive: true });
+    assert.deepEqual(readConfigState(d), { kind: "other" });
+    fs.rmSync(path.join(d, CONFIG_PATH), { recursive: true });
+    put(d, CONFIG_PATH, "{}");
+    assert.deepEqual(readConfigState(d), { kind: "file" });
+    fs.rmSync(path.join(d, CONFIG_PATH));
+    fs.symlinkSync(path.join(d, "missing-target"), path.join(d, CONFIG_PATH));
+    assert.throws(() => readConfigState(d), /シンボリックリンク/);
+  });
+});
+
+test("readPackageVersion: 同梱 package.json の版を返す", () => {
+  withTmp((d) => {
+    put(d, "package.json", JSON.stringify({ version: "2.3.4" }));
+    assert.equal(readPackageVersion(d), "2.3.4");
+  });
+});
+
+test("applyPlan: 固定名の一時リンクのリンク先を変更せず置き換える", () => {
+  withTmp((d) => {
+    const destination = path.join(d, "CLAUDE.md");
+    const outside = path.join(d, "outside.txt");
+    put(d, "outside.txt", "外部の内容\n");
+    fs.chmodSync(outside, 0o640);
+    fs.symlinkSync(outside, path.join(d, ".CLAUDE.md.cc-sdd-bootstrap.tmp"));
+    const result = applyPlan(d, plan([w("CLAUDE.md", "計画内容\n")]));
+    assert.equal(result.ok, true);
+    assert.equal(fs.readFileSync(outside, "utf8"), "外部の内容\n");
+    assert.equal(fs.statSync(outside).mode & 0o777, 0o640);
+    assert.equal(fs.readFileSync(destination, "utf8"), "計画内容\n");
+    assert.equal(fs.lstatSync(destination).isFile(), true);
+    assert.equal(fs.lstatSync(path.join(d, ".CLAUDE.md.cc-sdd-bootstrap.tmp")).isSymbolicLink(), true);
+  });
+});
+
 test("applyPlan: 書き込み・削除・権限・上書き", () => {
   withTmp((d) => {
     put(d, "old.txt", "old");
@@ -120,6 +164,19 @@ test("applyPlan: 書き込み・削除・権限・上書き", () => {
     assert.equal(fs.existsSync(path.join(d, "old.txt")), false);
     // 一時ファイルが残らない
     assert.deepEqual(fs.readdirSync(d).filter((n) => n.includes("tmp")), []);
+  });
+});
+
+test("同じ内容の実行権限修復で 0o755 に戻す", () => {
+  withTmp((d) => {
+    put(d, "script.sh", "#!/bin/sh\n");
+    fs.chmodSync(path.join(d, "script.sh"), 0o644);
+    const result = applyPlan(d, plan([{
+      action: "write", path: "script.sh", content: Buffer.from("#!/bin/sh\n"), executable: true, note: "permission-restored",
+    }]));
+    assert.equal(result.ok, true);
+    assert.equal(fs.readFileSync(path.join(d, "script.sh"), "utf8"), "#!/bin/sh\n");
+    assert.equal(fs.statSync(path.join(d, "script.sh")).mode & 0o777, 0o755);
   });
 });
 
@@ -173,5 +230,46 @@ test("applyPlan: 絶対パス・`..` は失敗として扱う", () => {
     }
     const r = applyPlan(d, plan([{ action: "delete", path: "../x" }]));
     assert.equal(r.ok, false);
+  });
+});
+
+test("readSnapshot: 親ディレクトリのシンボリックリンクを通る管理対象を拒む", () => {
+  withTmp((d) => {
+    const outside = fs.mkdtempSync(path.join(os.tmpdir(), "ccsdd-outside-"));
+    try {
+      put(outside, "user.md", "利用者の文書");
+      fs.symlinkSync(outside, path.join(d, ".agent-hooks"));
+      assert.throws(
+        () => readSnapshot(d, [".agent-hooks/cc-sdd-bootstrap/user.md"], []),
+        (error) => error instanceof Error && error.message.includes(".agent-hooks/cc-sdd-bootstrap/user.md"),
+      );
+    } finally {
+      fs.rmSync(outside, { recursive: true, force: true });
+    }
+  });
+});
+
+test("applyPlan: シンボリックリンクを通る変更を失敗にし、リンク先を変えない", () => {
+  withTmp((d) => {
+    const outside = fs.mkdtempSync(path.join(os.tmpdir(), "ccsdd-outside-"));
+    try {
+      put(outside, "user.md", "利用者の文書");
+      fs.symlinkSync(outside, path.join(d, "linked"));
+      const change = w("linked/user.md", "上書きしてはいけない");
+      const later = w("later.txt", "後続");
+      const result = applyPlan(d, plan([change, later]));
+      assert.equal(result.ok, false);
+      assert.equal(result.failed.change, change);
+      assert.match(result.failed.message, /linked\/user\.md/);
+      assert.deepEqual(result.pending, [later]);
+      assert.equal(fs.readFileSync(path.join(outside, "user.md"), "utf8"), "利用者の文書");
+      const deletion = { action: "delete", path: "linked/user.md" };
+      const deleteResult = applyPlan(d, plan([deletion]));
+      assert.equal(deleteResult.ok, false);
+      assert.equal(deleteResult.failed.change, deletion);
+      assert.equal(fs.readFileSync(path.join(outside, "user.md"), "utf8"), "利用者の文書");
+    } finally {
+      fs.rmSync(outside, { recursive: true, force: true });
+    }
   });
 });

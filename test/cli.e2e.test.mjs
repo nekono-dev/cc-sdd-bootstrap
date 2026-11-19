@@ -111,6 +111,20 @@ test("引数なしの非対話 init は既定値と一式を作り、直後の u
   assertSnapshot(root, before);
 });
 
+test("update は導入スクリプトの実行権限を戻す", () => {
+  const root = makeRepo();
+  assert.equal(run(root, ["init"]).status, 0);
+  const script = path.join(root, catalog.files.find((file) => file.executable).path);
+  fs.chmodSync(script, 0o644);
+  const update = run(root, ["update"]);
+  assert.equal(update.status, 0, update.outputText);
+  assert.equal(fs.statSync(script).mode & 0o777, 0o755);
+  assert.match(update.outputText, /更新[\s\S]*実行権限を戻した/);
+  const again = run(root, ["update"]);
+  assert.equal(again.status, 0, again.outputText);
+  assert.match(again.outputText, /変更はありません/);
+});
+
 test("既存の settings・gitignore・CLAUDE.md は init 後の uninstall で元に戻る", () => {
   const root = makeRepo();
   const originals = {
@@ -161,6 +175,26 @@ test("書き換えた共通部分は update と uninstall を中止し、--force
   assert.equal(fs.existsSync(path.join(root, common)), false);
 });
 
+test("uninstall は管理領域へのシンボリックリンクを拒み、リンク先の利用者ファイルを残す", () => {
+  const root = makeRepo();
+  assert.equal(run(root, ["init"]).status, 0);
+  const deployedDir = path.join(root, DEPLOY_DIR);
+  fs.rmSync(deployedDir, { recursive: true, force: true });
+  const outside = fs.mkdtempSync(path.join(os.tmpdir(), "ccsdd-user-files-"));
+  put(outside, ".kiro/specs/user.md", "利用者の仕様書\n");
+  fs.symlinkSync(outside, deployedDir, "dir");
+
+  const removed = run(root, ["uninstall", "--force"]);
+  assert.equal(removed.status, 1, removed.outputText);
+  assert.equal(fs.readFileSync(path.join(outside, ".kiro/specs/user.md"), "utf8"), "利用者の仕様書\n");
+});
+
+function put(root, relativePath, content) {
+  const full = path.join(root, relativePath);
+  fs.mkdirSync(path.dirname(full), { recursive: true });
+  fs.writeFileSync(full, content);
+}
+
 test("導入状態・git 前提・未知の指定に対応する終了コードと無変更を保つ", () => {
   const root = makeRepo();
   for (const args of [["update"], ["uninstall"]]) {
@@ -202,6 +236,8 @@ test("途中の書き込み失敗は済んだもの・失敗したもの・未�
   assert.match(output, /未処理のもの/);
   assert.match(output, /済んだもの:[\s\S]*失敗したもの:[\s\S]*未処理のもの:/);
   assert.match(output, /EEXIST|ENOTDIR|ディレクトリ|directory/i);
+  assert.match(output, /権限|種類|ファイル.*ディレクトリ/);
+  assert.match(output, /update.*もう一度|もう一度.*update/);
   const completed = [CONFIG_PATH, LEDGER_PATH, ...catalog.files.map((file) => file.path)];
   for (const item of completed) {
     assert.ok(fs.existsSync(path.join(root, item)), item);
