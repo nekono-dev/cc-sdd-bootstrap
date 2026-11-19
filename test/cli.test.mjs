@@ -1,7 +1,7 @@
 // cli.mjs の試験: 引数の解析と使い方の表示
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { parseCliArgs, buildUsage, runCli } from "../lib/cli.mjs";
+import { parseCliArgs, buildUsage, runCli, formatSuccess, formatAbort, formatApplyFailure } from "../lib/cli.mjs";
 import { configFields } from "../lib/config-schema.mjs";
 import fs from "node:fs";
 import os from "node:os";
@@ -9,6 +9,49 @@ import path from "node:path";
 import { catalog, LEDGER_PATH } from "../lib/catalog.mjs";
 
 const parse = (argv) => parseCliArgs(argv, configFields);
+
+test("成功表示は作成・更新・削除と変更の注記を分ける", () => {
+  const text = formatSuccess({ operation: "update", plan: { changes: [
+    { action: "write", path: "new", note: "restored" },
+    { action: "write", path: "old", existed: true, note: "overwritten" }, { action: "delete", path: "gone" },
+  ], notices: [] }, defaulted: [], filled: [], unknown: [] });
+  assert.match(text, /作成[\s\S]*new.*作り直した/); assert.match(text, /更新[\s\S]*old.*上書きした/); assert.match(text, /削除[\s\S]*gone/);
+});
+test("既定値・初期導入案内・変更なし・警告と知らせを表示する", () => {
+  const text = formatSuccess({ operation: "init", plan: { changes: [], notices: ["残る導入物"] }, defaulted: ["ccSdd.lang"], config: { ccSdd: { lang: "ja" } }, filled: [], unknown: ["future"] });
+  for (const s of ["変更はありません", "ccSdd.lang", "ja", "コミット", "次の Claude Code セッション", "#<タグ>", "future", "残る導入物"]) assert.ok(text.includes(s), s);
+});
+test("中止理由ごとに次の手を表示する", () => {
+  const blocks = [{ kind: "modified", path: catalog.files[0].path, detail: "a" }, { kind: "markers", path: "CLAUDE.md", detail: "broken" }, { kind: "settings", path: ".claude/settings.json", detail: "bad" }];
+  const update = formatAbort(blocks, "update"), uninstall = formatAbort(blocks, "uninstall");
+  assert.match(update, /--force[\s\S]*上書き/); assert.match(uninstall, /--force[\s\S]*削除/);
+  for (const s of ["CLAUDE.md", "目印", ".claude/settings.json", "直して"]) assert.ok(uninstall.includes(s), s);
+});
+test("更新中止はカタログ外のファイルを削除、カタログ内を上書きと案内する", () => {
+  const text = formatAbort([{ kind: "modified", path: "outside", detail: "詳細" }, { kind: "modified", path: catalog.files[0].path, detail: "詳細" }], "update", catalog);
+  assert.match(text, /outside[\s\S]*削除/);
+  assert.match(text, new RegExp(`${catalog.files[0].path}[\\s\\S]*上書き`));
+});
+test("設定エラーは設定ファイル名・項目・理由・次の手を日本語で示す", async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "cc-sdd-cli-config-error-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  fs.mkdirSync(path.join(root, ".git"));
+  const invoke = async (contents) => {
+    fs.writeFileSync(path.join(root, ".cc-sdd-bootstrap.json"), contents);
+    const stderr = sink();
+    await runCli(["update"], { cwd: root, packageRoot: path.resolve("."), interactive: false, stdout: sink(), stderr });
+    return stderr.text();
+  };
+  await runCli(["init"], { cwd: root, packageRoot: path.resolve("."), interactive: false, stdout: sink(), stderr: sink() });
+  const invalid = await invoke('{"format":1,"ccSdd":{"lang":"xxx"}}');
+  for (const s of [".cc-sdd-bootstrap.json", "ccSdd.lang", "xx-YY", "直して", "再実行"]) assert.ok(invalid.includes(s), s);
+  const unreadable = await invoke("{");
+  assert.match(unreadable, /\.cc-sdd-bootstrap\.json[\s\S]*JSON として読めません/);
+});
+test("途中失敗は済んだもの・失敗・未処理を表示する", () => {
+  const text = formatApplyFailure({ done: [{ path: "done" }], failed: { change: { path: "bad" }, message: "理由" }, pending: [{ path: "later" }] });
+  for (const s of ["済んだ", "done", "失敗", "bad", "理由", "未処理", "later"]) assert.ok(text.includes(s), s);
+});
 
 /** 書き込みを集める擬似の出力 */
 function sink() {
