@@ -314,7 +314,7 @@ installer-core が定義する項目:
 | `models` | `model` | map | `{}`（`mapKeys` は空） | 値が空でない文字列の対応 |
 
 - 引数の書き方: 文字列は `--lang ja`、真偽は `--codex yes|no`（`true|false` も受ける）、対応は `--model <役割>=<モデル>` を繰り返す。
-- 下流の spec は `configFields` に項目を足すか、`models` の `mapKeys` と既定値に役割を足す。
+- 下流の spec は `configFields` に項目を足すか、`models` の `mapKeys` と既定値に役割を足す。どちらも、導入済みのリポジトリの次の `update` で既定値が補われる（`fillDefaults`）。
 
 #### Catalog（`lib/catalog.mjs`）
 
@@ -390,6 +390,7 @@ function resolveValues(input: {
 function serializeConfig(config: ConfigObject): string; // 2 文字の字下げ、末尾に改行
 ```
 - 値の優先順位: 引数 > 対話の答え > 既存の値（update）> 既定値。update では引数が無い項目の既存の値を変えない（3.7）。
+- `fillDefaults` は、無い項目を既定値で補う。`map` の項目は、項目そのものがあっても、既定値のキーのうち無いキーだけを補う（例: 既存 `{ "a": "x" }` と既定 `{ "b": "y" }` から `{ "a": "x", "b": "y" }`）。既存のキーの値は変えない（3.5・3.7）。補った道筋は `models.b` の形で `filled` に入れる。
 - `findUnknownKeys` は葉の道筋を返す。`map` の項目の下のキーは知らない項目に数えない。`format` は知っている項目。
 - `format` が `CONFIG_FORMAT` より大きいときは `CONFIG_INVALID`（新しい導入コマンドで書かれた設定）として、導入コマンドの版を上げる案内を出す。
 
@@ -483,6 +484,7 @@ interface TargetSnapshot {                       // Target が読んだ対象の
   gitignore: string | null;
   claudeMd: string | null;
   files: Record<string, Buffer | null>;          // カタログと記録に載る道筋の今の内容
+  ignoredPresent: string[];                      // catalog.gitignore の行のうち、対象に実在する道筋（uninstall の知らせに使う）
 }
 
 interface PlanInput {
@@ -513,7 +515,7 @@ function makePlan(input: PlanInput): Plan;
 - 計画が触れてよい道筋は、カタログの files、記録の files、`.cc-sdd-bootstrap.json`、`LEDGER_PATH`、`.claude/settings.json`、`.gitignore`、`CLAUDE.md` だけ（4.4・9.7）。`pruneDirs` は `.agent-hooks/cc-sdd-bootstrap` と `.agent-hooks` だけ。
 - 内容が今と同じファイルは `changes` に入れない（10.3・5.7）。
 - init・update: ファイルの扱いは「System Flows」の図に従う。続けて設定ファイル、記録、`.claude/settings.json`、`.gitignore`、CLAUDE.md の順に書く内容を計算する。
-- uninstall: 共通部分の書き換えは中止の理由（`--force` で削除）、固有の部分の書き換えは残す。設定ファイルと記録を消す。統合の 3 ファイルは一式の部分を取り除き、結果が空（空白だけ、または `{}`）ならファイルを消す。
+- uninstall: 共通部分の書き換えは中止の理由（`--force` で削除）、固有の部分の書き換えは残す。設定ファイルと記録を消す。統合の 3 ファイルは一式の部分を取り除き、結果が空（空白だけ、または `{}`）ならファイルを消す。`snapshot.ignoredPresent` が空でなければ、「`.gitignore` の除外が外れたため、次の道筋が git の未追跡のファイルとして現れる。cc-sdd の導入物はライセンスが異なるのでコミットせず、不要なら削除する」という知らせを、道筋の一覧つきで `notices` に入れる（9.7 で消さないものを、誤ってコミットさせないため）。
 - CLAUDE.md の区画の本文は、`claudeSections` の `body` をカタログの順に空行でつないだもの。目印の行には「この区画は cc-sdd-bootstrap が管理する。手で書き換えると update で戻る」を添える。
 
 ### 入出力
@@ -537,7 +539,7 @@ interface ApplyResult {
 }
 
 function isGitRoot(dir: string): boolean;        // dir 直下に .git（ディレクトリまたはファイル）があるか
-function readSnapshot(root: string, paths: string[]): TargetSnapshot;
+function readSnapshot(root: string, paths: string[], ignored: string[]): TargetSnapshot;
 function readPackageFiles(packageRoot: string, catalog: Catalog): Record<string, Buffer>;
 function applyPlan(root: string, plan: Plan): ApplyResult;
 ```
@@ -545,6 +547,7 @@ function applyPlan(root: string, plan: Plan): ApplyResult;
 - 写す元と先が同じファイル（自己適用）でも、内容が同じなら計画に入らないので書かない。
 - 1 つ失敗したらそこで止め、`done`・`failed`・`pending` を返す（4.8）。
 - `pruneDirs` は中身が空のときだけ消す（9.5）。
+- `readSnapshot` は `ignored`（`catalog.gitignore`）の各行を対象の道筋として調べ、実在するものを `ignoredPresent` に入れる。先頭の `/` は取り、最後の区切りの中の `*` だけを展開する（`.claude/skills/kiro-*/` など）。それより複雑な書き方は調べない。
 
 #### Cli（`lib/cli.mjs`）と Bin（`bin/cc-sdd-bootstrap.mjs`）
 
@@ -572,10 +575,10 @@ function parseCliArgs(argv: string[], fields: ConfigField[]): ParsedArgs;
 function promptValues(io: CliIo, fields: ConfigField[], base: ConfigObject | null, given: Record<string, ConfigValue>): Promise<Record<string, ConfigValue>>;
 function runCli(argv: string[], io: CliIo): Promise<number>; // 終了コードを返す
 ```
-- 引数: 1 つめが操作（`init`・`update`・`uninstall`）。指定は `--help`/`-h`、`--force`、設定の定義から作る `--<flag>`。設定の項目の指定は `init` と `update` で受け付ける（5.6）。`uninstall` に渡したら使い方の誤り。`--force` は `update` と `uninstall` で受け付ける。
+- 引数: 1 つめが操作（`init`・`update`・`uninstall`）。指定は `--help`/`-h`、`--force`、設定の定義から作る `--<flag>`。設定の項目の指定は `init` と `update` で受け付ける（5.6）。`uninstall` に渡したら使い方の誤り。`--force` は 3 つの操作すべてで受け付ける。`init` では、記録も設定ファイルも無いのに配置先に内容の違う同名のファイルがある（手で置いた、別の方法で写した、など）ときに、それを置き換える。
 - 対話: `init` で `interactive` のときだけ、引数で渡されていない項目を尋ねる（`[既定値]` を示し、空の入力は既定値。不正なら理由を示して尋ね直す）。`update` では尋ねない。
 - 終了コード: 0＝成功・変更なし・導入済みの init（2.6）・使い方の表示、1＝操作の失敗（Node の版、git の最上位でない、設定・目印・settings の不正、書き換えによる中止、未導入の update・uninstall、書き込みの失敗）、2＝使い方の誤り。
-- 出力: 成功時は「作成」「更新」「削除」に分けた道筋の一覧、補った項目、警告（知らない項目）。init の成功時は、設定ファイルと配置物をコミットすること、cc-sdd 本体は次のセッション開始時に入ること、版の固定は `npx github:nekono-dev/cc-sdd-bootstrap#<タグ>` で行えることを示す（2.7）。中止時は理由ごとに次の手（`--force` で再実行、目印を直す、`init` を使う、など）を示す（1.7）。
+- 出力: 成功時は「作成」「更新」「削除」に分けた道筋の一覧、補った項目、警告（知らない項目）。init の成功時は、設定ファイルと配置物をコミットすること、cc-sdd 本体は次のセッション開始時に入ること、版の固定は `npx github:nekono-dev/cc-sdd-bootstrap#<タグ>` で行えることを示す（2.7）。uninstall の成功時は、Plan の `notices`（除外が外れて残る cc-sdd の導入物など）も示す。中止時は理由ごとに次の手（`--force` で再実行、目印を直す、`init` を使う、など）を示す（1.7）。
 - Bin は Node の版（`process.versions.node` の先頭の数）を確かめ、22 未満なら必要な版を出して 1 で終わる（1.4）。その後で `lib/cli.mjs` を動的に読み込む（古い Node で読み込みの段階の誤りにしないため）。
 
 ## Data Models
@@ -632,11 +635,11 @@ function runCli(argv: string[], io: CliIo): Promise<number>; // 終了コード�
 ## Testing Strategy
 
 ### Unit Tests
-- Config: 既定値の補い（3.5）と、既存の値を変えないこと（3.7）。引数 > 対話 > 既存 > 既定値の優先順位（2.2・2.3・5.6）。項目ごとの検証の理由（3.3・3.4）。`map` の下のキーを知らない項目に数えないこと（3.6）。
+- Config: 既定値の補い（3.5）と、既存の値を変えないこと（3.7）。引数 > 対話 > 既存 > 既定値の優先順位（2.2・2.3・5.6）。項目ごとの検証の理由（3.3・3.4）。`map` の下のキーを知らない項目に数えないこと（3.6）。`map` の項目で、無いキーだけが既定値で補われ、既存のキーの値が変わらないこと（3.5・3.7）。
 - Ledger: 記録の SHA-256 と今の内容の比較（4.6）。記録が無いときの安全側の判定。同じ配置で同じ記録の文字列になること（10.3）。
 - Blocks: 区画の作成・置き換え・削除で区画の外が 1 文字も変わらないこと（7.2・8.4）。片方だけ・2 組・逆順の目印で `MARKERS_BROKEN`（8.5）。CRLF の保持。
 - SettingsHooks: 利用者のフック・許可・プラグインの設定を残すこと（6.2）。前の版の一式の組を置き換え重複させないこと（6.3）。2 回続けて同じ結果（6.4）。読めない JSON（6.5）。
-- Plan: 「ファイルの扱い」の図の各分岐（4.2・4.3・5.2・5.3・5.4・9.3・9.4）。触れてよい道筋の外に変更を出さないこと（4.4・9.7）。
+- Plan: 「ファイルの扱い」の図の各分岐（4.2・4.3・5.2・5.3・5.4・9.3・9.4）。記録の無い init で同名の違うファイルがあると中止し、`--force` で置き換わること。uninstall で `ignoredPresent` があると知らせが出ること。触れてよい道筋の外に変更を出さないこと（4.4・9.7）。
 
 ### Integration Tests（`test/cli.e2e.test.mjs`。一時ディレクトリに git のリポジトリを作り、`node bin/cc-sdd-bootstrap.mjs` を実行する）
 - 非対話の `init`（引数なし）で既定値が使われ、使った値が表示され、設定ファイル・配置物・記録・3 つの統合が揃う（2.3・2.4）。直後の `update` が「変更はありません」（5.7・10.3）。
