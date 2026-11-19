@@ -38,7 +38,7 @@ skyshare で手作りした cc-sdd の運用一式を汎用化し、`npx github:
 
 ## Specs (dependency order)
 
-- [ ] installer-core -- 導入・更新コマンド、設定ファイル、利用先への配置（設定の統合・管理区画・.gitignore）、自己適用. Dependencies: none
+- [x] installer-core -- 導入・更新コマンド、設定ファイル、利用先への配置（設定の統合・管理区画・.gitignore）、自己適用. Dependencies: none
 - [ ] session-install -- セッション開始時に設定の版で cc-sdd を入れ直し、失敗したら次の入力を止める. Dependencies: installer-core
 - [ ] kiro-gate -- `/kiro-*` で始めた作業で手順書を先に読ませ、roadmap の新しい spec に brief が欠けたまま終わらせない. Dependencies: session-install
 - [ ] subagent-model-policy -- 役割ごとのモデルの設定、エージェント定義の生成、指揮役と同じモデルや未指定（引き継ぎ）の起動を拒否するフック. Dependencies: installer-core
