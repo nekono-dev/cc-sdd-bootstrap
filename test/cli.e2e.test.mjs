@@ -11,6 +11,7 @@ import { serializeLedger, sha256 } from "../lib/ledger.mjs";
 
 const packageRoot = path.resolve(path.dirname(new URL(import.meta.url).pathname), "..");
 const tempRoots = new Set();
+let fixturePackageRoot;
 after(() => {
   for (const root of tempRoots) fs.rmSync(root, { recursive: true, force: true });
 });
@@ -23,8 +24,22 @@ function makeRepo() {
   return root;
 }
 
-function run(root, args) {
-  const result = spawnSync(process.execPath, [path.join(packageRoot, "bin/cc-sdd-bootstrap.mjs"), ...args], {
+function makeFixturePackage() {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "cc-sdd-fixture-package-"));
+  tempRoots.add(root);
+  for (const entry of ["package.json", "bin", "lib", ".agent-hooks/cc-sdd-bootstrap"]) {
+    fs.cpSync(path.join(packageRoot, entry), path.join(root, entry), { recursive: true });
+  }
+  const fixtureFiles = path.join(root, ".agent-hooks/cc-sdd-bootstrap");
+  fs.mkdirSync(fixtureFiles, { recursive: true });
+  fs.writeFileSync(path.join(fixtureFiles, "fixture-claude.txt"), "Claude fixture payload\n");
+  fs.writeFileSync(path.join(fixtureFiles, "fixture-codex.txt"), "Codex fixture payload\n");
+  fs.appendFileSync(path.join(root, "lib/catalog.mjs"), `\n\n// E2E client fixtures.\ncatalog.files.push(\n  { path: \`.agent-hooks/cc-sdd-bootstrap/fixture-claude.txt\`, kind: "common", executable: false, client: "claude" },\n  { path: \`.agent-hooks/cc-sdd-bootstrap/fixture-codex.txt\`, kind: "common", executable: false, client: "codex" },\n);\ncatalog.codexHooks.push({ event: "SessionStart", command: codexHookCommand("install-cc-sdd.mjs", "session-start") });\ncatalog.gitignore.push({ line: ".agents/skills/kiro-*/", client: "codex" });\ncatalog.agentsSections.push({ id: "e2e-codex-fixture", body: "## Codex fixture section" });\n`);
+  return root;
+}
+
+function run(root, args, selectedPackageRoot = packageRoot) {
+  const result = spawnSync(process.execPath, [path.join(selectedPackageRoot, "bin/cc-sdd-bootstrap.mjs"), ...args], {
     cwd: root,
     input: "",
     encoding: "utf8",
@@ -34,6 +49,11 @@ function run(root, args) {
   assert.equal(result.signal, null, `子プロセスがシグナルで終了しました: ${result.signal}`);
   result.outputText = `${result.stdout ?? ""}${result.stderr ?? ""}`;
   return result;
+}
+
+function runFixture(root, args) {
+  fixturePackageRoot ??= makeFixturePackage();
+  return run(root, args, fixturePackageRoot);
 }
 
 function read(root, relativePath) {
@@ -357,4 +377,127 @@ test("雛形を保持する init は MIT ライセンスのお知らせを出し
   assert.equal(initialized.status, 0, initialized.outputText);
   assert.match(initialized.outputText, /お知らせ:[\s\S]*MIT ライセンス/);
   assert.equal(JSON.parse(read(root, CONFIG_PATH).toString("utf8")).ccSdd.keepTemplates, true);
+});
+
+test("クライアント選択・旧設定移行・切替は両クライアントの実カタログ項目を反映する", () => {
+  for (const [clients, claude, codex] of [["claude", true, false], ["codex", false, true], ["both", true, true]]) {
+    const root = makeRepo();
+    const initialized = runFixture(root, ["init", "--clients", clients]);
+    assert.equal(initialized.status, 0, initialized.outputText);
+    assert.equal(JSON.parse(read(root, CONFIG_PATH).toString("utf8")).clients, clients);
+    assert.equal(JSON.parse(read(root, LEDGER_PATH).toString("utf8")).clients, clients);
+    assert.equal(fs.existsSync(path.join(root, ".agent-hooks/cc-sdd-bootstrap/fixture-claude.txt")), claude, clients);
+    assert.equal(fs.existsSync(path.join(root, ".agent-hooks/cc-sdd-bootstrap/fixture-codex.txt")), codex, clients);
+    assert.equal(fs.existsSync(path.join(root, "CLAUDE.md")), claude, clients);
+    assert.equal(fs.existsSync(path.join(root, "AGENTS.md")), codex, clients);
+    const claudeSettings = fs.existsSync(path.join(root, ".claude/settings.json"))
+      ? JSON.parse(read(root, ".claude/settings.json").toString("utf8")) : {};
+    const codexHooks = fs.existsSync(path.join(root, ".codex/hooks.json"))
+      ? JSON.parse(read(root, ".codex/hooks.json").toString("utf8")) : {};
+    assert.equal(Boolean(claudeSettings.hooks?.SessionStart?.some((group) => group.hooks?.some((hook) => hook.command.includes("cc-sdd-bootstrap/")))), claude, `${clients} Claude hook`);
+    assert.equal(Boolean(codexHooks.hooks?.SessionStart?.some((group) => group.hooks?.some((hook) => hook.command.endsWith("# cc-sdd-bootstrap:managed")))), codex, `${clients} Codex hook`);
+    const updated = runFixture(root, ["update"]);
+    assert.equal(updated.status, 0, updated.outputText);
+    assert.equal(JSON.parse(read(root, CONFIG_PATH).toString("utf8")).clients, clients, `${clients} saved selection`);
+  }
+
+  const root = makeRepo();
+  assert.equal(runFixture(root, ["init", "--clients", "claude"]).status, 0);
+  const configPath = path.join(root, CONFIG_PATH);
+  const oldConfig = JSON.parse(fs.readFileSync(configPath, "utf8"));
+  delete oldConfig.clients;
+  fs.writeFileSync(configPath, `${JSON.stringify(oldConfig, null, 2)}\n`);
+  const ledgerPath = path.join(root, LEDGER_PATH);
+  const oldLedger = JSON.parse(fs.readFileSync(ledgerPath, "utf8"));
+  delete oldLedger.clients;
+  fs.writeFileSync(ledgerPath, `${JSON.stringify(oldLedger, null, 2)}\n`);
+  const migrated = runFixture(root, ["update"]);
+  assert.equal(migrated.status, 0, migrated.outputText);
+  assert.equal(JSON.parse(read(root, CONFIG_PATH).toString("utf8")).clients, "both");
+  assert.equal(JSON.parse(read(root, LEDGER_PATH).toString("utf8")).clients, "both");
+  for (const item of [".agent-hooks/cc-sdd-bootstrap/fixture-claude.txt", ".agent-hooks/cc-sdd-bootstrap/fixture-codex.txt", "CLAUDE.md", "AGENTS.md", ".claude/settings.json", ".codex/hooks.json"]) {
+    assert.ok(fs.existsSync(path.join(root, item)), item);
+  }
+  const migratedClaudeHooks = JSON.parse(read(root, ".claude/settings.json").toString("utf8"));
+  const migratedCodexHooks = JSON.parse(read(root, ".codex/hooks.json").toString("utf8"));
+  assert.ok(migratedClaudeHooks.hooks.SessionStart.some((group) => group.hooks.some((hook) => hook.command.includes("cc-sdd-bootstrap/"))));
+  assert.ok(migratedCodexHooks.hooks.SessionStart.some((group) => group.hooks.some((hook) => hook.command.endsWith("# cc-sdd-bootstrap:managed"))));
+  const before = snapshotTree(root);
+  const repeated = runFixture(root, ["update"]);
+  assert.equal(repeated.status, 0, repeated.outputText);
+  assert.match(repeated.outputText, /変更はありません/);
+  assertTreeSnapshot(root, before);
+
+  for (const [from, to] of [["claude", "codex"], ["codex", "claude"]]) {
+    const switchedRoot = makeRepo();
+    assert.equal(runFixture(switchedRoot, ["init", "--clients", from]).status, 0);
+    const switched = runFixture(switchedRoot, ["update", "--clients", to]);
+    assert.equal(switched.status, 0, switched.outputText);
+    assert.equal(JSON.parse(read(switchedRoot, CONFIG_PATH).toString("utf8")).clients, to);
+    assert.equal(fs.existsSync(path.join(switchedRoot, ".agent-hooks/cc-sdd-bootstrap/fixture-claude.txt")), to === "claude");
+    assert.equal(fs.existsSync(path.join(switchedRoot, ".agent-hooks/cc-sdd-bootstrap/fixture-codex.txt")), to === "codex");
+    assert.equal(fs.existsSync(path.join(switchedRoot, "CLAUDE.md")), to === "claude");
+    assert.equal(fs.existsSync(path.join(switchedRoot, "AGENTS.md")), to === "codex");
+    const switchedClaudeHooks = fs.existsSync(path.join(switchedRoot, ".claude/settings.json")) ? JSON.parse(read(switchedRoot, ".claude/settings.json").toString("utf8")) : {};
+    const switchedCodexHooks = fs.existsSync(path.join(switchedRoot, ".codex/hooks.json")) ? JSON.parse(read(switchedRoot, ".codex/hooks.json").toString("utf8")) : {};
+    assert.equal(Boolean(switchedClaudeHooks.hooks?.SessionStart?.some((group) => group.hooks?.some((hook) => hook.command.includes("cc-sdd-bootstrap/")))), to === "claude");
+    assert.equal(Boolean(switchedCodexHooks.hooks?.SessionStart?.some((group) => group.hooks?.some((hook) => hook.command.endsWith("# cc-sdd-bootstrap:managed")))), to === "codex");
+  }
+});
+
+test("update と uninstall は独立した利用者スキル・JSON・TOML・override を保持する", () => {
+  const root = makeRepo();
+  const custom = {
+    ".claude/skills/custom/SKILL.md": "# custom skill\n",
+    ".agents/skills/custom/SKILL.md": "# custom codex skill\n",
+    ".claude/settings.json": '{"hooks":{"Stop":[{"hooks":[{"type":"command","command":"echo claude user"}]}]},"permissions":{"allow":["Read"]}}\n',
+    ".codex/config.toml": 'model = "user-model"\n\n[features]\ncustom = true\n',
+    ".codex/hooks.json": '{"hooks":{"Stop":[{"hooks":[{"type":"command","command":"echo user"}]}],"SessionStart":[{"hooks":[{"type":"command","command":"echo user start"}]}]},"user":true}\n',
+    "AGENTS.override.md": "# User override\n",
+    ".gitignore": "user-build/\n",
+    "CLAUDE.md": "# Project notes\nKeep this Claude text.\n",
+    "AGENTS.md": "# Project notes\nKeep this Codex text.\n",
+  };
+  for (const [item, contents] of Object.entries(custom)) put(root, item, contents);
+  const initialized = runFixture(root, ["init", "--clients", "both"]);
+  assert.equal(initialized.status, 0, initialized.outputText);
+  const beforeUpdate = Object.fromEntries(Object.keys(custom).map((item) => [item, read(root, item)]));
+  const updated = runFixture(root, ["update"]);
+  assert.equal(updated.status, 0, updated.outputText);
+  assert.match(updated.outputText, /AGENTS\.override\.md[^\n]*AGENTS\.md[^\n]*管理区画[^\n]*参照/);
+  assert.match(updated.outputText, /プロジェクトを信頼[^\n]*\/hooks[^\n]*承認/);
+  for (const [item, bytes] of Object.entries(beforeUpdate)) assert.deepEqual(read(root, item), bytes, item);
+  assert.match(read(root, ".gitignore").toString("utf8"), /\.agents\/skills\/kiro-\*\//);
+  const ignoreCheck = spawnSync("git", ["check-ignore", "-q", ".agents/skills/custom/SKILL.md"], { cwd: root });
+  assert.equal(ignoreCheck.status, 1, "the independent Codex skill must not match the Kiro-only ignore pattern");
+  const beforeUninstall = Object.fromEntries(Object.keys(custom).map((item) => [item, read(root, item)]));
+  const removed = runFixture(root, ["uninstall"]);
+  assert.equal(removed.status, 0, removed.outputText);
+  for (const item of [".claude/skills/custom/SKILL.md", ".agents/skills/custom/SKILL.md", ".codex/config.toml", "AGENTS.override.md"]) {
+    assert.deepEqual(read(root, item), beforeUninstall[item], item);
+  }
+  for (const item of [".claude/settings.json", ".codex/hooks.json"]) {
+    assert.deepEqual(JSON.parse(read(root, item)), JSON.parse(custom[item]), item);
+  }
+  assert.equal(read(root, "CLAUDE.md").toString("utf8"), custom["CLAUDE.md"]);
+  assert.equal(read(root, "AGENTS.md").toString("utf8"), custom["AGENTS.md"]);
+  assert.deepEqual(read(root, ".gitignore"), Buffer.from(custom[".gitignore"]));
+});
+
+test("選択した Codex JSON の破損と壊れた AGENTS 目印は update を無変更で中止する", () => {
+  for (const [file, content, diagnostic] of [
+    [".codex/hooks.json", "{", ".codex/hooks.json"],
+    ["AGENTS.md", "# user\n<!-- cc-sdd-bootstrap:end -->\n", "AGENTS.md"],
+  ]) {
+    const root = makeRepo();
+    assert.equal(runFixture(root, ["init", "--clients", "codex"]).status, 0);
+    assert.equal(fs.existsSync(path.join(root, "CLAUDE.md")), false);
+    put(root, file, content);
+    const before = snapshotTree(root);
+    const failed = runFixture(root, ["update", "--clients", "both"]);
+    assert.equal(failed.status, 1, failed.outputText);
+    assert.match(failed.outputText, new RegExp(diagnostic.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+    assertTreeSnapshot(root, before);
+    assert.equal(fs.existsSync(path.join(root, "CLAUDE.md")), false, "pending Claude additions must not be partially applied");
+  }
 });
