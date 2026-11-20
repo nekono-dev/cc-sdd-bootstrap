@@ -21,13 +21,14 @@
 cc-sdd のスキルは、スキル一覧に載らないものがあり、`/kiro-*` と入力しても手順書を読まずに進められてしまう。また、discovery で複数の spec に分けても、各 spec の brief.md を書かずに終えられてしまう。この spec は、cc-sdd-bootstrap を導入したリポジトリで、この 2 つを会話の指示ではなくフック（Claude Code の動作の節目で自動実行される処理）で強制する仕組み（以下「kiro-gate」）を定める。
 
 ## Boundary Context
-- **In scope**: セッション開始時の spec の状態の知らせ、`/kiro-*` で始まる入力の検出、手順書を読むまでの他のツールの拒否、手順書が無いときの停止と再試行の案内、ターン終了時の未読と roadmap・brief の欠けの判定（1 回だけ止める）、導入・更新・取り除きでの配置と登録。
-- **Out of scope**: spec.json の承認や tasks.md のチェックの判定、roadmap.md 以外のファイルの判定、`/kiro-*` で始まらない自然文の依頼の強制、サブエージェントのモデルの判定（subagent-model-policy）、cc-sdd の導入そのもの（session-install）、cc-sdd のスキルの内容の改変、強制を設定で無効にする仕組み。
+- **In scope**: セッション開始時の spec の状態の知らせ、`/kiro-*` で始まる入力の検出、手順書を読むまでの他のツールの拒否、手順書が無いときの停止と再試行の案内、ターン終了時の未読と roadmap・brief の欠けの判定（1 回だけ止める）、導入・更新・取り除きでの配置と登録、自然文の依頼でのスキルの積極的な利用を促す対応表（CLAUDE.md の管理区画）。
+- **Out of scope**: spec.json の承認や tasks.md のチェックの判定、roadmap.md 以外のファイルの判定、`/kiro-*` で始まらない自然文の依頼のフックによる強制（案内は文章で行い、守らせない）、サブエージェントのモデルの判定（subagent-model-policy）、cc-sdd の導入そのもの（session-install）、cc-sdd のスキルの内容の改変、強制を設定で無効にする仕組み。
 - **Adjacent expectations**:
   - session-install が、スキルを `.claude/skills/kiro-*/SKILL.md` に導入し、導入の失敗の記録と再試行のコマンドを定める。kiro-gate は手順書が無いとき、その再試行のコマンドを案内する。
   - installer-core が、kiro-gate のファイルの配置、フックの登録、CLAUDE.md の管理区画、uninstall の仕組みを提供する。この spec はそれに載せるものを定める。
   - subagent-model-policy も同じツール呼び出しの直前のフックで動く。互いの判定は独立で、一方が通しても他方の拒否は残る。
-  - 強制が働くのは、直近の入力が `/kiro-*` で始まるターンだけである（自然文の依頼は対象外）。
+  - フックによる強制が働くのは、直近の入力が `/kiro-*` で始まるターンだけである。自然文の依頼では、CLAUDE.md の対応表でスキルの利用を促すだけで、守られることは保証しない。
+  - 一覧に載らないスキル（`kiro-discovery` など）は Skill ツールで呼べないため、対応表は SKILL.md を Read して手順を実行する形で案内する。
 
 ## Requirements
 
@@ -101,3 +102,21 @@ cc-sdd のスキルは、スキル一覧に載らないものがあり、`/kiro-
 3. When 利用者が `update` を実行する, the cc-sdd-bootstrap shall kiro-gate のファイルとフックの登録を、このリポジトリの配置物の内容に揃える。
 4. When 利用者が `uninstall` を実行する, the cc-sdd-bootstrap shall kiro-gate のファイルとフックの登録を取り除き、利用者が書いたフックは残す。
 5. The cc-sdd-bootstrap shall CLAUDE.md の管理区画に、`/kiro-*` で始めた作業は手順書を読むまで他の操作が拒否されること、および roadmap に載せた spec の brief.md が欠けたままではターンの終了が止まることを、installer-core の管理区画の仕組みを通して載せる。
+
+### Requirement 8: 自然文の依頼でのスキルの積極的な利用
+**Objective:** As a 導入先のリポジトリの開発者, I want `/kiro-*` で始めない依頼でも、依頼の種類に合う cc-sdd のスキルが使われるようにしたい, so that 新機能の相談や進み具合の確認でも、手順を飛ばさず cc-sdd の運用に乗る
+
+#### Acceptance Criteria
+1. The kiro-gate shall CLAUDE.md の管理区画に、依頼の種類と使うスキルの対応表を載せる。対応は次のとおりとする。
+   - 新機能・新プロジェクトの相談、分割の検討: `kiro-discovery`
+   - 次にやること・進み具合の確認: `kiro-spec-status`
+   - 既存コードと要件の差の確認: `kiro-validate-gap`
+   - 設計のレビュー: `kiro-validate-design`
+   - 実装後の最終確認: `kiro-validate-impl`
+   - プロジェクトの方針（ステアリング）の整備・更新: `kiro-steering`
+   - 完了・成功と報告する前: `kiro-verify-completion`
+2. The kiro-gate shall 対応表に、依頼がこれらに当たるときは `/kiro-*` で始まっていなくても、対応するスキルの SKILL.md（`.claude/skills/<名前>/SKILL.md`）を Read して手順を最後まで実行するよう書く。
+3. The kiro-gate shall 対応表に、依頼の種類が判断できないときは、スキルを使うか利用者に尋ねるよう書く。
+4. The kiro-gate shall 自然文の依頼に対して、フックによるツールの拒否・プロンプトの停止・終了の停止を行わない。
+5. When 利用者が `update` を実行する, the cc-sdd-bootstrap shall CLAUDE.md の管理区画の対応表を、このリポジトリの配置物の内容に揃える。
+6. When 利用者が `uninstall` を実行する, the cc-sdd-bootstrap shall 対応表を含む管理区画の kiro-gate の記述を取り除く。
