@@ -224,6 +224,13 @@ test("使い方は設定の定義から作られる", () => {
   for (const w of ["init", "update", "uninstall", "--force", "--help"]) assert.ok(u.includes(w), w);
 });
 
+test("独自の設定スキーマの使い方に未定義のフラグを出さない", () => {
+  const fields = [{ ...configFields.find((f) => f.flag === "lang"), flag: "locale" }];
+  const usage = buildUsage(fields);
+  assert.match(usage, /--locale/);
+  assert.doesNotMatch(usage, /--clients|--codex/);
+});
+
 test("runCli の終了コード: 使い方は 0、誤りは 2", async () => {
   const out = sink(), err = sink();
   assert.equal(await runCli(["--help"], { stdout: out, stderr: err }), 0);
@@ -482,4 +489,83 @@ test("旧設定の無指定更新は両方を補い、導入対象と委任設�
   assert.notEqual(invalid.code, 0);
   assert.match(invalid.stderr, /clients/);
   assert.deepEqual(read(configPath), saved);
+});
+
+test("Codex 導入の成功と変更なしで信頼設定・フック承認と上書き指示を案内する", async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "cc-sdd-cli-codex-guidance-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  fs.mkdirSync(path.join(root, ".git"));
+  fs.writeFileSync(path.join(root, "AGENTS.override.md"), "# 利用者の上書き指示\n");
+  const run = async (args) => {
+    const stdout = sink(), stderr = sink();
+    const code = await runCli(args, { cwd: root, packageRoot: path.resolve("."), interactive: false, stdout, stderr });
+    return { code, stdout: stdout.text(), stderr: stderr.text() };
+  };
+  const first = await run(["init", "--clients", "codex"]);
+  assert.equal(first.code, 0, first.stderr);
+  for (const phrase of ["導入対象: codex", "信頼", "/hooks", "AGENTS.override.md", "AGENTS.md"]) assert.ok(first.stdout.includes(phrase), phrase);
+  const second = await run(["update"]);
+  assert.equal(second.code, 0, second.stderr);
+  assert.match(second.stdout, /変更はありません/);
+  for (const phrase of ["導入対象: codex", "信頼", "/hooks", "AGENTS.override.md", "AGENTS.md"]) assert.ok(second.stdout.includes(phrase), phrase);
+  assert.equal(fs.readFileSync(path.join(root, "AGENTS.override.md"), "utf8"), "# 利用者の上書き指示\n");
+});
+
+test("Claude Code のみの導入では Codex 固有の案内を表示しない", async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "cc-sdd-cli-claude-guidance-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  fs.mkdirSync(path.join(root, ".git"));
+  const stdout = sink(), stderr = sink();
+  const code = await runCli(["init", "--clients", "claude"], { cwd: root, packageRoot: path.resolve("."), interactive: false, stdout, stderr });
+  assert.equal(code, 0, stderr.text());
+  assert.match(stdout.text(), /導入対象: claude/);
+  assert.doesNotMatch(stdout.text(), /信頼設定|\/hooks|AGENTS\.override\.md/);
+});
+
+test("update は削除された AGENTS.md 管理区画を作り直し利用者の文章を保つ", async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "cc-sdd-cli-agents-recreate-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  fs.mkdirSync(path.join(root, ".git"));
+  const run = async (args) => {
+    const stdout = sink(), stderr = sink();
+    const code = await runCli(args, { cwd: root, packageRoot: path.resolve("."), interactive: false, stdout, stderr });
+    return { code, stdout: stdout.text(), stderr: stderr.text() };
+  };
+  assert.equal((await run(["init", "--clients", "codex"])).code, 0);
+  const agents = path.join(root, "AGENTS.md");
+  const body = fs.readFileSync(agents, "utf8");
+  const begin = "<!-- cc-sdd-bootstrap:begin";
+  const userBytes = "# 利用者の指示\r\n\r\nここはそのまま残す。\r\n";
+  assert.ok(body.includes(begin));
+  fs.writeFileSync(agents, userBytes);
+  const before = fs.readFileSync(agents);
+  assert.equal(before.includes(Buffer.from(begin)), false);
+
+  const result = await run(["update"]);
+  assert.equal(result.code, 0, result.stderr);
+  assert.match(result.stdout, /AGENTS\.md の管理区画.*作り直した/);
+  const after = fs.readFileSync(agents);
+  assert.ok(after.subarray(0, Buffer.byteLength(userBytes)).equals(Buffer.from(userBytes)));
+  assert.ok(after.includes(Buffer.from(begin)));
+});
+
+test("Codex のフック統合中止は正しい設定ファイル名を示す", () => {
+  const text = formatAbort([{ kind: "settings", path: ".codex/hooks.json", detail: "フックを統合できません" }], "update");
+  assert.match(text, /\.codex\/hooks\.json/);
+  assert.doesNotMatch(text, /\.claude\/settings\.json/);
+});
+
+test("AGENTS.override.md のシンボリックリンクはリンク先を読まず存在案内に使う", async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "cc-sdd-cli-override-link-"));
+  const outside = fs.mkdtempSync(path.join(os.tmpdir(), "cc-sdd-cli-override-outside-"));
+  t.after(() => { fs.rmSync(root, { recursive: true, force: true }); fs.rmSync(outside, { recursive: true, force: true }); });
+  fs.mkdirSync(path.join(root, ".git"));
+  fs.writeFileSync(path.join(outside, "instructions.md"), "outside\n");
+  fs.symlinkSync(path.join(outside, "instructions.md"), path.join(root, "AGENTS.override.md"));
+  const stdout = sink(), stderr = sink();
+  const code = await runCli(["init", "--clients", "codex"], { cwd: root, packageRoot: path.resolve("."), interactive: false, stdout, stderr });
+  assert.equal(code, 0, stderr.text());
+  assert.match(stdout.text(), /AGENTS.override\.md/);
+  assert.equal(fs.lstatSync(path.join(root, "AGENTS.override.md")).isSymbolicLink(), true);
+  assert.equal(fs.readFileSync(path.join(outside, "instructions.md"), "utf8"), "outside\n");
 });
