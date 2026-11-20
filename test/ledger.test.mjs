@@ -11,9 +11,9 @@ test("sha256 は 64 桁の 16 進", () => {
   assert.equal(sha256(Buffer.from("abc")), "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad");
 });
 
-test("parseLedger: 正しい記録を読む", () => {
+test("parseLedger: 旧形式の記録は Claude Code の配置として読む", () => {
   const l = parseLedger(valid());
-  assert.deepEqual(l, { format: 1, bootstrapVersion: "0.1.0", files: { "a/x": { kind: "common", sha256: H1 } } });
+  assert.deepEqual(l, { format: 1, bootstrapVersion: "0.1.0", clients: "claude", files: { "a/x": { kind: "common", sha256: H1 } } });
 });
 
 test("parseLedger: 無い・壊れている・形が違うときは null", () => {
@@ -23,6 +23,8 @@ test("parseLedger: 無い・壊れている・形が違うときは null", () =>
   assert.equal(parseLedger("[]"), null);
   assert.equal(parseLedger("null"), null);
   assert.equal(parseLedger(valid({ format: 2 })), null);
+  assert.equal(parseLedger(valid({ clients: "other" })), null);
+  assert.equal(parseLedger(valid({ clients: null })), null);
   assert.equal(parseLedger(valid({ format: "1" })), null);
   assert.equal(parseLedger(valid({ bootstrapVersion: 1 })), null);
   assert.equal(parseLedger(valid({ files: [] })), null);
@@ -90,4 +92,14 @@ test("decideModified: Object.prototype のキー名の道筋を記録ありと�
     decideModified({ ledger, path: "constructor", current: Buffer.from("x"), incoming: null }),
     true,
   );
+});
+
+test("配置した導入対象をハッシュとともに書いて読み戻す", () => {
+  const content = Buffer.from("配置物");
+  for (const clients of ["claude", "codex", "both"]) {
+    const ledger = buildLedger("0.1.0", [{ path: "shared", kind: "common", content }], clients);
+    assert.equal(ledger.clients, clients);
+    assert.deepEqual(parseLedger(serializeLedger(ledger)), ledger);
+    assert.equal(ledger.files.shared.sha256, sha256(content));
+  }
 });

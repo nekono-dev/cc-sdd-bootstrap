@@ -11,7 +11,8 @@
  * @typedef {object} ConfigField
  * @property {string} path 設定ファイルの中の道筋（例 "ccSdd.version"）
  * @property {string} flag 引数の名前（例 "cc-sdd-version"）
- * @property {"string" | "boolean" | "map"} kind 値の種類
+ * @property {"string" | "boolean" | "map" | "enum"} kind 値の種類
+ * @property {readonly string[]} [choices] kind が enum のときに選べる値
  * @property {ConfigValue} defaultValue 既定値
  * @property {string} question 対話で示す日本語の質問文
  * @property {(value: unknown) => string | null} validate 不正なら日本語の理由、正しければ null
@@ -21,6 +22,19 @@
 
 /** 設定ファイルの形式の版 */
 export const CONFIG_FORMAT = 1;
+
+const CLIENT_CHOICES = /** @type {const} */ (["claude", "codex", "both"]);
+
+/** @typedef {(typeof CLIENT_CHOICES)[number]} ClientSelection */
+
+/**
+ * Claude Code・Codex の導入対象として指定できる値かを確認する。
+ * @param {unknown} value
+ * @returns {value is ClientSelection}
+ */
+export function isClientSelection(value) {
+  return CLIENT_CHOICES.some((choice) => choice === value);
+}
 
 const VERSION_RE = /^\d+\.\d+\.\d+(-.+)?$/;
 const LANG_RE = /^[a-z]{2}(-[A-Z]{2})?$/;
@@ -65,11 +79,22 @@ export const configFields = [
     notice: "雛形（`.kiro/settings/templates/`）は cc-sdd の成果物（MIT ライセンス）。コミットする場合はそのライセンスに従う。保持すると cc-sdd の版を上げても雛形は入れ替わらない（入れ替えるには `.kiro/settings/templates/` を消して新しいセッションを開く）",
   },
   {
+    path: "clients",
+    flag: "clients",
+    kind: "enum",
+    choices: CLIENT_CHOICES,
+    defaultValue: "both",
+    question: "導入対象を選んでください（claude: Claude Code のみ、codex: Codex のみ、both: 両方）",
+    validate(value) {
+      return isClientSelection(value) ? null : `${CLIENT_CHOICES.join("・")} のいずれかで指定してください`;
+    },
+  },
+  {
     path: "codex.enabled",
     flag: "codex",
     kind: "boolean",
     defaultValue: false,
-    question: "Codex も使いますか",
+    question: "Claude Code から Codex へ MCP で委任しますか",
     validate(value) {
       return typeof value === "boolean" ? null : "true か false で指定してください";
     },

@@ -14,6 +14,7 @@ import {
 const full = () => ({
   format: 1,
   ccSdd: { version: "3.1.0", lang: "ja", keepTemplates: false },
+  clients: "both",
   codex: { enabled: false },
   models: {},
 });
@@ -28,7 +29,7 @@ const field = (path, over = {}) => ({
   ...over,
 });
 
-test("定義は 5 項目で既定値が設計どおり", () => {
+test("定義は 6 項目で既定値が設計どおり", () => {
   assert.equal(CONFIG_FORMAT, 1);
   assert.deepEqual(
     configFields.map((f) => [f.path, f.flag, f.kind, f.defaultValue]),
@@ -36,6 +37,7 @@ test("定義は 5 項目で既定値が設計どおり", () => {
       ["ccSdd.version", "cc-sdd-version", "string", "3.1.0"],
       ["ccSdd.lang", "lang", "string", "ja"],
       ["ccSdd.keepTemplates", "keep-templates", "boolean", false],
+      ["clients", "clients", "enum", "both"],
       ["codex.enabled", "codex", "boolean", false],
       ["models", "model", "map", {}],
     ],
@@ -131,10 +133,11 @@ test("fillDefaults: 無い項目を既定値で補い、補った道筋を返す
   assert.deepEqual(r.config, {
     format: 1,
     ccSdd: { version: "3.0.0", lang: "ja", keepTemplates: false },
+    clients: "both",
     codex: { enabled: false },
     models: {},
   });
-  assert.deepEqual(r.filled, ["ccSdd.lang", "ccSdd.keepTemplates", "codex.enabled", "models"]);
+  assert.deepEqual(r.filled, ["ccSdd.lang", "ccSdd.keepTemplates", "clients", "codex.enabled", "models"]);
 });
 
 test("fillDefaults: 既存の値は変えず、完全なら何も補わない", () => {
@@ -180,10 +183,11 @@ test("resolveValues: base が無ければ既定値で、既定値を使った項
   assert.deepEqual(r.config, {
     format: 1,
     ccSdd: { version: "3.1.0", lang: "en", keepTemplates: false },
+    clients: "both",
     codex: { enabled: false },
     models: {},
   });
-  assert.deepEqual(r.defaulted, ["ccSdd.version", "ccSdd.keepTemplates", "codex.enabled", "models"]);
+  assert.deepEqual(r.defaulted, ["ccSdd.version", "ccSdd.keepTemplates", "clients", "codex.enabled", "models"]);
 });
 
 test("resolveValues: 引数が無い項目の既存の値と、知らない項目を変えない", () => {
@@ -280,5 +284,14 @@ test("validateConfig: format が整数でない・0 は拒否", () => {
     const e = validateConfig({ format: f }, configFields);
     assert.equal(e?.code, "CONFIG_INVALID");
     assert.match(e.messages[0], /^format: /);
+  }
+});
+
+test("導入対象の設定は三つの値を受け付け、他の値と型を拒む", () => {
+  for (const clients of ["claude", "codex", "both"]) {
+    assert.equal(validateConfig({ ...full(), clients }, configFields), null);
+  }
+  for (const clients of ["", "other", null, false, ["both"]]) {
+    assert.match(validateConfig({ ...full(), clients }, configFields)?.messages[0] ?? "", /^clients: /);
   }
 });

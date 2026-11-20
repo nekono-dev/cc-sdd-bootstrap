@@ -54,14 +54,14 @@ test('notice を持つ項目は keepTemplates だけ', () => {
 });
 
 test('fillDefaults で ccSdd.keepTemplates が既定値 false で補われる', () => {
-  const config = { format: 1, ccSdd: { version: '3.1.0', lang: 'ja' }, codex: { enabled: false }, models: {} };
+  const config = { format: 1, ccSdd: { version: '3.1.0', lang: 'ja' }, clients: 'both', codex: { enabled: false }, models: {} };
   const { config: filledConfig, filled } = fillDefaults(config, configFields);
   assert.equal(filledConfig.ccSdd.keepTemplates, false);
   assert.deepEqual(filled, ['ccSdd.keepTemplates']);
 });
 
 test('fillDefaults は keepTemplates がすでにあれば上書きしない', () => {
-  const config = { format: 1, ccSdd: { version: '3.1.0', lang: 'ja', keepTemplates: true }, codex: { enabled: false }, models: {} };
+  const config = { format: 1, ccSdd: { version: '3.1.0', lang: 'ja', keepTemplates: true }, clients: 'both', codex: { enabled: false }, models: {} };
   const { config: filledConfig, filled } = fillDefaults(config, configFields);
   assert.equal(filledConfig.ccSdd.keepTemplates, true);
   assert.deepEqual(filled, []);

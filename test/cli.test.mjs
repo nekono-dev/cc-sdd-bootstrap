@@ -433,3 +433,53 @@ test("入力が尽きたとき、既定のない map のキーは止まって失
   const io = fakeIo([]);
   await assert.rejects(promptValues(io, [mapField(["review"])], {}, {}), /入力が終わりました/);
 });
+
+test("導入対象の引数と既定値を表示し、MCP 委任と区別する", () => {
+  const usage = buildUsage(configFields);
+  assert.match(usage, /--clients <claude\|codex\|both>/);
+  assert.match(usage, /導入対象.*既定値: both/);
+  assert.match(usage, /Claude Code から Codex へ MCP で委任/);
+  for (const clients of ["claude", "codex", "both"]) {
+    assert.deepEqual(parse(["init", "--clients", clients, "--codex", "yes"]).given, { clients, "codex.enabled": true });
+  }
+  assert.equal(parse(["uninstall", "--clients", "claude"]).kind, "usage-error");
+});
+
+test("旧設定の無指定更新は両方を補い、導入対象と委任設定を独立に記録する", async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "cc-sdd-cli-clients-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  fs.mkdirSync(path.join(root, ".git"));
+  const configPath = path.join(root, ".cc-sdd-bootstrap.json");
+  const ledgerPath = path.join(root, LEDGER_PATH);
+  const run = async (args) => {
+    const stdout = sink();
+    const stderr = sink();
+    const code = await runCli(args, { cwd: root, packageRoot: path.resolve("."), interactive: false, stdout, stderr });
+    return { code, stdout: stdout.text(), stderr: stderr.text() };
+  };
+  assert.equal((await run(["init"])).code, 0);
+  const read = (file) => JSON.parse(fs.readFileSync(file, "utf8"));
+  assert.equal(read(configPath).clients, "both");
+  assert.equal(read(ledgerPath).clients, "both");
+
+  const old = { format: 1, codex: { enabled: true }, extra: { workspace: "local" } };
+  fs.writeFileSync(configPath, JSON.stringify(old));
+  const migrated = await run(["update"]);
+  assert.equal(migrated.code, 0, migrated.stderr);
+  assert.match(migrated.stdout, /補った項目:[\s\S]*clients: "both"/);
+  assert.match(migrated.stderr, /extra\.workspace/);
+
+  const selected = await run(["update", "--clients", "claude"]);
+  assert.equal(selected.code, 0, selected.stderr);
+  assert.equal(read(ledgerPath).clients, "claude");
+  assert.equal((await run(["update"])).code, 0);
+  const saved = read(configPath);
+  assert.equal(saved.clients, "claude");
+  assert.equal(saved.codex.enabled, true);
+  assert.deepEqual(saved.extra, old.extra);
+
+  const invalid = await run(["update", "--clients", "other"]);
+  assert.notEqual(invalid.code, 0);
+  assert.match(invalid.stderr, /clients/);
+  assert.deepEqual(read(configPath), saved);
+});
