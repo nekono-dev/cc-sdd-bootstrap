@@ -173,6 +173,12 @@ export function createKiroDelegationContext(options) {
     if (!match || !await canonicalSkill(match[1])) return null;
     const loc = await location(event.cwd, event.sessionId);
     if (!loc || (options.client === "codex" && !validId(event.turnId))) return null;
+    const hookProof = options.client === "codex" && nativeAdapter?.requiresCodexHookProof === true
+      ? (validId(event.model) && typeof (event.transcriptPath ?? event.transcript_path) === "string" && isAbsolute(event.transcriptPath ?? event.transcript_path)
+          ? { trusted: true, source: "host", turnId: event.turnId, model: event.model, transcriptPath: event.transcriptPath ?? event.transcript_path }
+          : null)
+      : null;
+    if (options.client === "codex" && nativeAdapter?.requiresCodexHookProof === true && !hookProof) return null;
     let reference;
     const updated = await mutate(loc, (old) => {
       if (!old || old.ended || (event.turnId && old.turnId !== event.turnId) ||
@@ -181,7 +187,7 @@ export function createKiroDelegationContext(options) {
       if (old.skill && old.skill !== match[1]) return null;
       reference = randomBytes(32).toString("base64url");
       const generation = old.generation;
-      const references = { ...old.references, [reference]: { toolUseId: event.toolUseId, generation, skill: match[1], command: event.command } };
+      const references = { ...old.references, [reference]: { toolUseId: event.toolUseId, generation, skill: match[1], command: event.command, ...(hookProof ? { hookProof } : {}) } };
       return { ...old, promptId: old.promptId ?? event.promptId ?? null,
         usedToolUseIds: [...old.usedToolUseIds, event.toolUseId], references };
     });
@@ -216,7 +222,7 @@ export function createKiroDelegationContext(options) {
         const next = await mutate(loc, (old) => {
           const current = old?.references?.[reference];
           if (!old || old.ended || old.generation !== item.generation || !current || current.toolUseId !== item.toolUseId || current.skill !== skill || current.command !== item.command || (old.skill && old.skill !== skill)) return null;
-          consumed = { project: old.project, client: old.client, sessionId: old.sessionId, turnId: old.turnId, generation: old.generation, skill: old.skill ?? skill, toolUseId: item.toolUseId };
+          consumed = { project: old.project, client: old.client, sessionId: old.sessionId, turnId: old.turnId, generation: old.generation, skill: old.skill ?? skill, toolUseId: item.toolUseId, ...(item.hookProof ? { hookProof: item.hookProof } : {}) };
           const references = { ...old.references };
           delete references[reference];
           return { ...old, active: true, skill: old.skill ?? skill, references };
