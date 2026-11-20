@@ -571,3 +571,124 @@ test("Codex 選択時は空の AGENTS.md 管理区画も作成・復元する（
   const body = updated.changes.find((c) => c.path === "AGENTS.md").content.toString();
   assert.ok(body.startsWith("# User instructions\n\n"));
 });
+
+test("対象切替: 以前の Codex 固有配置物を削除し、共有配置物を記録に残さない", () => {
+  const codexFile = `${D}/codex-only`;
+  const shared = `${D}/shared`;
+  const cat = { files: [...fakeCatalog.files, { path: codexFile, kind: "common", executable: false, client: "codex" }, { path: shared, kind: "common", executable: false }], hooks: [], codexHooks: [], gitignore: [], claudeSections: [], agentsSections: [] };
+  const initial = input({ catalog: cat, packageFiles: { [C]: B("new-c"), [P]: B("new-p"), [codexFile]: B("codex"), [shared]: B("shared") }, files: { [C]: null, [P]: null, [codexFile]: null, [shared]: null } });
+  initial.config = { format: 1, clients: "both" };
+  const installedState = applyPlan(initial, makePlan(initial));
+  installedState.config = { format: 1, clients: "claude" };
+  const switched = makePlan(installedState);
+  assert.ok(switched.changes.some((c) => c.action === "delete" && c.path === codexFile));
+  const nextLedger = JSON.parse(switched.changes.find((c) => c.path.endsWith("installed.json")).content.toString());
+  assert.ok(!Object.hasOwn(nextLedger.files, codexFile));
+  assert.ok(Object.hasOwn(nextLedger.files, shared));
+});
+
+test("uninstall: Codex の管理フックと AGENTS 区画を取り除き、利用者の内容を保持する", () => {
+  const i = fullInput();
+  i.config = { format: 1, clients: "codex" };
+  i.catalog = { ...fullCatalog, codexHooks: [{ event: "SessionStart", command: `node \"$repo_root/${D}/x.mjs\" # cc-sdd-bootstrap:managed` }], agentsSections: [{ id: "a", body: "Managed" }] };
+  i.snapshot.codexHooksJson = JSON.stringify({ hooks: { SessionStart: [{ hooks: [{ type: "command", command: `node \"$repo_root/${D}/x.mjs\" # cc-sdd-bootstrap:managed` }] }] }, user: true });
+  i.snapshot.agentsMd = `# User\n\n${CLAUDE_MD_BEGIN_LINE}\nManaged\n${AGENTS_MD_END_LINE}\n`;
+  i.operation = "uninstall";
+  const plan = uninstallPlan(i);
+  const by = Object.fromEntries(plan.changes.map((c) => [c.path, c]));
+  assert.ok(by[".codex/hooks.json"]);
+  assert.equal(JSON.parse(by[".codex/hooks.json"].content.toString()).user, true);
+  assert.equal(by["AGENTS.md"].content.toString(), "# User\n");
+});
+
+test("対象切替: 両方を記録した状態で不正な Codex hooks は他の変更を止める", () => {
+  const i = fullInput();
+  i.config = { format: 1, clients: "both" };
+  i.snapshot.ledger = serializeLedger(buildLedger("0.1.0", [], "both"));
+  i.snapshot.codexHooksJson = "{";
+  i.config.clients = "claude";
+  const plan = makePlan(i);
+  assert.ok(plan.blocks.some((b) => b.kind === "settings" && b.path === ".codex/hooks.json"));
+  assert.ok(plan.changes.some((c) => c.path === "CLAUDE.md"));
+});
+
+test("9.3: client 切替・uninstall は前回選択と双方の壊れた管理区画を検査する", () => {
+  const both = fullInput();
+  both.config = { format: 1, clients: "both" };
+  both.snapshot.ledger = serializeLedger(buildLedger("0.1.0", [], "both"));
+  both.catalog = { ...fullCatalog, hooks: [{ event: "SessionStart", command: `node \"$repo_root/${D}/x.mjs\" # cc-sdd-bootstrap:managed` }] };
+  both.snapshot.settings = JSON.stringify({ hooks: { UserEvent: [{ hooks: [{ type: "command", command: "user" }] }], SessionStart: [{ hooks: [{ type: "command", command: `node \"$repo_root/${D}/x.mjs\" # cc-sdd-bootstrap:managed` }] }] } });
+  const switched = makePlan({ ...both, config: { format: 1, clients: "codex" } });
+  const switchedSettings = JSON.parse(switched.changes.find((c) => c.path === ".claude/settings.json").content);
+  assert.ok(switchedSettings.hooks.UserEvent);
+  assert.ok(!JSON.stringify(switchedSettings).includes("cc-sdd-bootstrap:managed"));
+
+  const malformedUnselected = fullInput();
+  malformedUnselected.config = { format: 1, clients: "codex" };
+  malformedUnselected.snapshot.settings = "{";
+  malformedUnselected.snapshot.codexHooksJson = JSON.stringify({ user: true });
+  assert.ok(!makePlan(malformedUnselected).blocks.some((b) => b.path === ".claude/settings.json"));
+
+  for (const doc of ["CLAUDE.md", "AGENTS.md"]) {
+    const missingLedger = fullInput();
+    missingLedger.config = { format: 1, clients: doc === "CLAUDE.md" ? "claude" : "codex" };
+    missingLedger.snapshot.ledger = null;
+    missingLedger.snapshot[doc === "CLAUDE.md" ? "claudeMd" : "agentsMd"] = "<!-- cc-sdd-bootstrap:begin\n orphan\n";
+    assert.ok(makePlan(missingLedger).blocks.some((b) => b.kind === "markers" && b.path === doc), doc);
+  }
+
+  const uninstall = fullInput();
+  uninstall.config = { format: 1, clients: "codex" };
+  uninstall.snapshot.ledger = null;
+  uninstall.snapshot.codexHooksJson = JSON.stringify({ user: true });
+  uninstall.snapshot.agentsMd = "<!-- cc-sdd-bootstrap:end -->\n";
+  uninstall.operation = "uninstall";
+  assert.ok(uninstallPlan(uninstall).blocks.some((b) => b.path === "AGENTS.md"));
+  assert.ok(uninstallPlan(uninstall).pruneDirs.includes(".codex"));
+});
+
+test("回収は記録なしの管理フックを両方向で見つけ、無関係な Codex データは保つ", () => {
+  const managedClaude = `node "$CLAUDE_PROJECT_DIR/${D}/hook.mjs"`;
+  const foreignCodex = `echo user # cc-sdd-bootstrap:managed`;
+  const managedCodex = `node "$repo_root/${D}/hook.mjs" # cc-sdd-bootstrap:managed`;
+
+  const toCodex = fullInput();
+  toCodex.config = { format: 1, clients: "codex" };
+  toCodex.snapshot.ledger = null;
+  toCodex.snapshot.settings = JSON.stringify({ hooks: { Stop: [{ hooks: [{ type: "command", command: managedClaude }] }] } });
+  const switched = makePlan(toCodex);
+  assert.ok(switched.changes.some((c) => c.path === ".claude/settings.json" && c.action === "delete"));
+
+  const uninstall = fullInput();
+  uninstall.operation = "uninstall";
+  uninstall.config = null;
+  uninstall.snapshot.ledger = null;
+  uninstall.snapshot.settings = JSON.stringify({ hooks: { Stop: [{ hooks: [{ type: "command", command: managedClaude }] }] } });
+  const removed = makePlan(uninstall);
+  assert.ok(removed.changes.some((c) => c.path === ".claude/settings.json" && c.action === "delete"));
+
+  const foreign = fullInput();
+  foreign.config = { format: 1, clients: "both" };
+  foreign.snapshot.ledger = null;
+  foreign.snapshot.codexHooksJson = JSON.stringify({ hooks: { Stop: [{ hooks: [{ type: "command", command: foreignCodex }] }] } });
+  const foreignPlan = makePlan(foreign);
+  assert.ok(!foreignPlan.changes.some((c) => c.path === ".codex/hooks.json"));
+  assert.ok(!foreignPlan.pruneDirs.includes(".codex"));
+
+  const actual = fullInput();
+  actual.operation = "uninstall";
+  actual.config = null;
+  actual.snapshot.ledger = null;
+  actual.snapshot.codexHooksJson = JSON.stringify({ hooks: { Stop: [{ hooks: [{ type: "command", command: managedCodex }] }] } });
+  const actualPlan = makePlan(actual);
+  assert.ok(actualPlan.changes.some((c) => c.path === ".codex/hooks.json"));
+  assert.ok(actualPlan.pruneDirs.includes(".codex"));
+
+  const malformed = fullInput();
+  malformed.config = { format: 1, clients: "codex" };
+  malformed.snapshot.ledger = null;
+  malformed.snapshot.codexHooksJson = `{ "oops": "${D}/hook.mjs # cc-sdd-bootstrap:managed`;
+  const malformedPlan = makePlan(malformed);
+  assert.ok(malformedPlan.blocks.some((b) => b.path === ".codex/hooks.json"));
+  assert.ok(!malformedPlan.changes.some((c) => c.path === ".codex/hooks.json"));
+});
