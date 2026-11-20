@@ -1,6 +1,8 @@
 # Design Document: installer-core
 
 ## Overview
+Claude Code と Codex を同じ導入コマンドで管理する拡張を追加する。従来の単一クライアント導入を移行できる形で、クライアントを選べるようにする。
+
 **Purpose**: cc-sdd の運用一式を、利用先のリポジトリへ 1 つのコマンドで配置・更新・削除する導入コマンド（以下「導入コマンド」）を提供する。
 **Users**: cc-sdd の運用を始める開発者と、複数のリポジトリで運用を保守する開発者が、`npx github:nekono-dev/cc-sdd-bootstrap <init|update|uninstall>` で使う。下流の spec は、導入コマンドの「カタログ」と「設定の定義」に項目を足して、自分の配置物を届ける。
 **Impact**: このリポジトリに初めて製品のコード（`package.json`・`bin/`・`lib/`・`.agent-hooks/cc-sdd-bootstrap/`）を置く。自己適用で、暫定の導入の仕組み（`scripts/agent/`）を配置物に置き換える。
@@ -20,6 +22,7 @@
 ## Boundary Commitments
 
 ### This Spec Owns
+- 導入対象の選択・移行と、各クライアント用のフック、指示文書、除外行の配置・統合・削除。
 - 導入コマンドの入口（`bin/cc-sdd-bootstrap.mjs`）と、3 つの操作の流れ・引数・対話・出力・終了コード。
 - 設定ファイル `.cc-sdd-bootstrap.json` の形式、項目の定義の仕組み（設定の定義）、既定値・検証・補い。installer-core が定義する項目は `ccSdd.version`・`ccSdd.lang`・`codex.enabled`・`models`（役割の名前→モデルの対応。役割の一覧は持たない）。
 - カタログ（配置するファイル・フックの登録・`.gitignore` の行・CLAUDE.md の文章）の形式と、その読み方。
@@ -29,6 +32,7 @@
 - このリポジトリへの自己適用。
 
 ### Out of Boundary
+- Codex 向けスキルの取得・状態管理（session-install）、フックの実行時の動作（各下流 spec）、ユーザーによるプロジェクトとフックの信頼の決定。
 - 初期の配置物（`install-cc-sdd.sh`・`install-gate.mjs`）の振る舞いの変更。設定ファイルの版・言語を読むことを含め、session-install が引き継ぐ。
 - `.kiro/settings/cc-sdd-guide.md` の生成（session-install）。
 - 役割の一覧・各役割の既定のモデル・モデルの値の検証の詳細（subagent-model-policy）。installer-core は「文字列から文字列への対応」までを検証する。
@@ -40,9 +44,10 @@
 - Node.js 22 以上の標準モジュールだけ（`node:fs`・`node:path`・`node:url`・`node:util`・`node:readline/promises`・`node:crypto`・`node:test`）。外部パッケージは使わない。
 - `lib/` の中の依存の向きは「データ（`catalog`・`config-schema`）→ 純粋な処理（`config`・`ledger`・`blocks`・`settings-hooks`・`plan`）→ 入出力（`target`）→ `cli` → `bin`」。右側の層は左側の層から import してよい。
 - 配置物（`.agent-hooks/cc-sdd-bootstrap/` の下）は `lib/` を import しない（利用先には配置物しか無い）。
-- git の実行ファイルには依存しない（git のリポジトリの最上位かどうかは `.git` の有無で見る）。
+- 導入 CLI の最上位判定は `.git` の有無で行う。Codex の登録コマンドの実行時は Git と POSIX シェルでリポジトリの最上位を解決する。
 
 ### Revalidation Triggers
+- `clients` の値・カタログのクライアント条件・Codex 向けの登録および案内の形 → session-install、kiro-gate、subagent-model-policy、codex-delegation、plugin-skill。
 - 設定ファイルの形式（`format`・項目の道筋・既定値）を変える → 全ての下流の spec。
 - カタログの項目の形（`CatalogFile`・`CatalogHook`・`CatalogSection`）を変える → 全ての下流の spec。
 - 一式のフックの見分け方（コマンドに `/.agent-hooks/cc-sdd-bootstrap/` を含む）や、配置先のディレクトリ名を変える → session-install・kiro-gate・subagent-model-policy・codex-delegation。
@@ -141,6 +146,17 @@ poc/
 - `.kiro/steering/tech.md` — 「よく使うコマンド」に `node --test` と導入コマンドの実行例を書く。
 - `README.md` — 使い方（3 つの操作・引数・版の固定 `#<タグ>`・設定ファイル・書き換えの扱い・同時実行は想定しないこと）を書く。
 
+### Codex 対応で変更するファイル
+| パス | 責務 |
+|---|---|
+| `.agent-hooks/cc-sdd-bootstrap/config-schema.mjs`、`lib/config.mjs`、`lib/cli.mjs` | 導入対象の定義と検証、旧設定の補完、引数、信頼の案内 |
+| `lib/catalog.mjs` | 各クライアントの配置物・フック・指示・除外行 |
+| `lib/settings-hooks.mjs`、`lib/blocks.mjs` | フックと管理区画の共通の統合処理。区画の編集は既存の処理を再利用 |
+| `lib/target.mjs`、`lib/plan.mjs`、`lib/ledger.mjs` | 安全な読み取り、両クライアントの計画、適用後の配置対象の記録 |
+| `test/config.test.mjs`、`test/settings-hooks.test.mjs`、`test/plan.test.mjs`、`test/cli.e2e.test.mjs` | 設定・統合・操作の互換性を確認 |
+| `.cc-sdd-bootstrap.json`、`.claude/settings.json`、`.codex/hooks.json`、`CLAUDE.md`、`AGENTS.md`、`.gitignore`、`.agent-hooks/cc-sdd-bootstrap/installed.json` | 下流の実データを揃えた後の自己適用の生成結果 |
+| `poc/codex-hook-registration/run.py`、`poc/codex-hook-registration/result.md` | Codex CLI の登録・信頼の前提の再検証 |
+
 ## System Flows
 
 ### 操作の流れ（3 つの操作で共通）
@@ -219,6 +235,9 @@ flowchart TD
 | 2.5 | 不正な値で中止 | Config | `validateConfig` | 操作の流れ |
 | 2.6 | 導入済みなら update を案内 | Cli | `CliOutcome` | 操作の流れ |
 | 2.7 | コミットと次のセッションの案内 | Cli | — | — |
+| 2.8 | 新規導入は両方を既定にする | ConfigSchema, Config | `clients` | — |
+| 2.9 | Codex の信頼承認の案内 | Cli | 成功時の案内 | — |
+| 2.10 | 信頼設定の保持 | Plan, Target | 固定の書き込み先 | — |
 | 3.1 | `.cc-sdd-bootstrap.json` | Config, Target | `serializeConfig` | — |
 | 3.2 | 記録する項目 | ConfigSchema | `ConfigField` | — |
 | 3.3 | 型と値の検証 | Config | `validateConfig` | — |
@@ -226,6 +245,9 @@ flowchart TD
 | 3.5 | 増えた項目を補う | Config | `fillDefaults` | — |
 | 3.6 | 知らない項目を残して警告 | Config | `findUnknownKeys` | — |
 | 3.7 | 既存の値を書き換えない | Config | `resolveValues` | — |
+| 3.8 | 導入対象の列挙値 | ConfigSchema, Config | `clients` | — |
+| 3.9 | 旧設定の無指定更新 | Config, Cli | 更新時の補完 | — |
+| 3.10 | MCP 委任の選択を保持 | ConfigSchema, Config | `codex.enabled` | — |
 | 4.1 | `.agent-hooks/cc-sdd-bootstrap/` に置く | Catalog | `CatalogFile` | — |
 | 4.2 | 共通部分を置き換える | Plan | `makePlan` | ファイルの扱い |
 | 4.3 | 固有の部分は無いときだけ | Plan | `makePlan` | ファイルの扱い |
@@ -241,21 +263,31 @@ flowchart TD
 | 5.5 | 未導入なら init を案内 | Cli | `CliOutcome` | 操作の流れ |
 | 5.6 | update で値を変える | Cli, Config | `resolveValues` | — |
 | 5.7 | 変更が無いことの表示 | Plan, Cli | `Plan.changes` が空 | 操作の流れ |
+| 5.8 | 対象変更で不要な管理対象を解除 | Plan, Catalog, Ledger | 配置記録の `clients` | — |
 | 6.1 | フックの登録を加える | SettingsHooks | `mergeHooks` | — |
 | 6.2 | 他の内容を残す | SettingsHooks | `mergeHooks` | — |
 | 6.3 | 置き換えて重複させない | SettingsHooks | `mergeHooks` | — |
 | 6.4 | 繰り返しで同じ内容 | SettingsHooks | `mergeHooks` | — |
 | 6.5 | 読めない形式で中止 | SettingsHooks | `mergeHooks` | 操作の流れ |
+| 6.6 | Codex のフックを登録 | Plan, SettingsHooks | `codexHooks` | — |
+| 6.7 | 利用者の JSON と TOML の設定を保持 | SettingsHooks, Target | `ownership` | — |
+| 6.8 | Codex の登録を置き換え重複を防止 | SettingsHooks | `mergeHooks` | — |
+| 6.9 | 統合できない Codex 設定で適用を中止 | Plan, Cli | `PlanBlock` | — |
 | 7.1 | 除外の行を加える | Blocks, Catalog | `upsertBlock` | — |
 | 7.2 | 他の行を残す | Blocks | `upsertBlock` | — |
 | 7.3 | 揃えて重複させない | Blocks | `upsertBlock` | — |
 | 7.4 | 設定などを除外しない | Catalog | `catalog.gitignore` | — |
+| 7.5 | Codex の生成物に限定した除外 | Catalog, Plan | クライアント条件 | — |
 | 8.1 | 管理区画を作る | Blocks | `upsertBlock` | — |
 | 8.2 | 取り込みの行と下流の文章 | Catalog, Plan | `CatalogSection` | — |
 | 8.3 | 標準の決まりの中身を書かない | Catalog | `CatalogSection` | — |
 | 8.4 | 区画の中だけ置き換える | Blocks | `upsertBlock` | — |
 | 8.5 | 壊れた目印で中止 | Blocks | `findBlock` | 操作の流れ |
 | 8.6 | 区画が無ければ作り直す | Blocks, Plan | `upsertBlock` | — |
+| 8.7 | AGENTS.md の管理区画を統合 | Plan, Blocks | `upsertBlock` | — |
+| 8.8 | Codex の標準手順と指示 | Catalog | `agentsSections` | — |
+| 8.9 | 不正な目印で適用を中止 | Blocks, Plan | `findBlock` | — |
+| 8.10 | AGENTS.md の管理区画を再作成 | Blocks, Cli | `upsertBlock` | — |
 | 9.1 | 一式を取り除く | Plan, Blocks, SettingsHooks | `makePlan` | ファイルの扱い |
 | 9.2 | 他を残す | Plan | `makePlan` | ファイルの扱い |
 | 9.3 | 書き換えがあれば中止 | Plan | `PlanBlock` | ファイルの扱い |
@@ -267,6 +299,7 @@ flowchart TD
 | 10.1 | 同じ配置を持つ | 自己適用 | `init` の実行 | — |
 | 10.2 | 暫定の仕組みを持たない | 自己適用 | Modified Files | — |
 | 10.3 | 直後の update で変更なし | Plan, Ledger | `makePlan` | 操作の流れ |
+| 10.4 | 両クライアントへ自己適用 | Cli, Plan | `update --clients both` | — |
 
 ## Components and Interfaces
 
@@ -603,6 +636,46 @@ function runCli(argv: string[], io: CliIo): Promise<number>; // 終了コード�
 - 出力: 成功時は「作成」「更新」「削除」に分けた道筋の一覧、補った項目、警告（知らない項目）。init の成功時は、設定ファイルと配置物をコミットすること、cc-sdd 本体は次のセッション開始時に入ること、版の固定は `npx github:nekono-dev/cc-sdd-bootstrap#<タグ>` で行えることを示す（2.7）。uninstall の成功時は、Plan の `notices`（除外が外れて残る cc-sdd の導入物など）も示す。中止時は理由ごとに次の手（`--force` で再実行、目印を直す、`init` を使う、など）を示す（1.7）。
 - Bin は `lib/node-version.mjs` の `decideNodeSupported(process.versions.node)` で Node の版（先頭の数）を確かめ、22 未満なら必要な版を出して 1 で終わる（1.4）。その後で `lib/cli.mjs` を動的に読み込む（古い Node で読み込みの段階の誤りにしないため）。
 
+### Claude Code と Codex の導入対象
+
+`ConfigField` に列挙型を追加する。`clients` の許容値は `claude`・`codex`・`both` で、引数は `--clients <値>` とする。導入対象の指定は既存の設定と同じ経路で検証し、対話では値と意味を示す。
+
+| 操作 | 値の決定 |
+|---|---|
+| 新規導入 | 明示した引数、対話で選んだ値、`both` の順で採用 |
+| 更新 | 引数、保存済みの値、旧設定に補う値 `both` の順で採用 |
+| 取り除き | 設定値を使わず、配置記録と管理対象の目印から判定 |
+
+旧設定に `clients` が無く導入対象の指定を省略した場合は `both` を保存し、補った値を表示する。配置記録の旧形式は、すでに配置されているものを判定するために Claude Code の配置として扱う。同時に対象を明示した場合はその値を記録する。設定ファイルの `format: 1`、`--codex` と `codex.enabled` の意味は維持し、対話とヘルプでは後者を Claude Code からの MCP 委任と表示する。
+
+### カタログとクライアントごとの統合
+
+- 既存の `hooks`・`claudeSections` は Claude Code 用として残す。`codexHooks: CatalogHook[]` と `agentsSections: CatalogSection[]` を追加する。`CatalogHook` の `event`・`matcher`・`command`・`timeout` はそのまま使う。両方で使うスクリプトは `files` に一件だけ登録する。
+- `CatalogFile.client?` を `"claude" | "codex"` とする。省略は共有。対象を外したときは選択後のカタログを既存の配置記録と比較し、不要になった固有の配置物を既存の変更検出規則で扱う。`.gitignore` の行にも同じクライアント条件を加え、既存の `when` と両方を満たした項目だけを管理区画に入れる。Codex スキルの具体的な除外パターンは session-install が登録する。
+- `mergeHooks({ text, hooks, ownership })` はファイル単位の純粋な統合処理として再利用する。`ownership` は `"claude" | "codex"`。Claude 用の判定は従来どおり、Codex は管理ディレクトリのパスを持つコマンドのうち末尾が予約コメント `# cc-sdd-bootstrap:managed` のものを対象とする。スクリプトのパスだけを参照している利用者の登録は残す。イベント・組・ハンドラの既存項目は保持し、管理対象の登録を各イベントの末尾で安定したカタログ順に揃える。
+- Codex のコマンドは `repo_root="$(git rev-parse --show-toplevel)" && node "$repo_root/.agent-hooks/cc-sdd-bootstrap/<スクリプト>" <引数> # cc-sdd-bootstrap:managed` の形に揃える。Git の呼び出しはこの Codex フックの実行時だけで、導入 CLI のルート判定は従来のままとする。POSIX シェルを持つローカル Codex を対象にする。利用者の `.codex/config.toml` は読み書きの対象から外す。
+- AGENTS.md は CLAUDE.md と同じ管理区画の編集処理を別のファイルに適用する。標準手順は AGENTS.md の管理区画からファイルパスを示して読むよう指示し、参照するパスと案内は session-install がカタログに登録する。CLAUDE.md の `@` に相当する暗黙の展開を Codex に仮定しない。同じ階層の AGENTS.override.md が優先される環境では既存の上書きを尊重し、利用者が管理区画を参照できるよう案内する。
+- 生成済みの計画の保存先にはリポジトリ相対の固定パスを使う。既存の `readSnapshot` に `codexHooksJson: string | null`・`agentsMd: string | null` を追加し、Codex の各ファイルにも既存のパス・シンボリックリンク検査を適用する。利用者の登録・指示を保ち、変更を検出したファイルだけを書き戻す。
+
+### 対象の切り替えと取り除き
+
+`installed.json` の `format: 1` に省略可能な `clients` を加える。有効な旧記録に項目が無ければ Claude Code の配置と解釈する。既存の各ファイルのハッシュは従来の形式で扱い、記録に無い管理対象の登録・区画は管理の目印がある場合にだけ回収する。
+
+| 対象ファイルの状態 | 計画 |
+|---|---|
+| 新しい導入対象に含まれる | 管理対象の登録・区画を統合。読み取れない JSON や壊れた目印は計画を止める |
+| 対象から外れた、または取り除きを実行 | 配置記録または管理の目印から対象だったことを確認し、登録・区画だけを除去。既知の管理対象を安全に分離できないときは修復案内を出して止める |
+| 選ばれておらず、配置記録にも管理の目印にも該当しない | ファイルを変更しない |
+| 利用者の内容が残らない | 既存の空ファイル・ディレクトリの取り除き規則を使う |
+
+計画には両クライアントの統合・取り除きと配置記録の更新をまとめ、どちらかにエラーがあれば適用に進まない。途中の入出力エラーは既存の実行結果と再実行案内で扱う。Codex の更新と取り除きでもユーザーの信頼設定は編集しない。
+
+### 実行環境とリリース順序
+
+フックの利用にはプロジェクトの信頼と、ローカル Codex の `/hooks` などで個々の登録の承認が要る。コマンドや設定項目の変更で再承認が必要になり得る。導入 CLI は Codex を含む成功時に確認方法を表示する。登録の検出、承認状態、JSON・TOML の共存は Codex CLI 0.167.0 で確認済み。クラウドを含むイベント毎の制御は各フックの spec で対象環境を検証する。
+
+installer-core の契約と統合処理を先に実装できる。session-install が Codex 用の登録・標準手順の案内・除外行を追加し、その状態で実データによる自己適用（10.4）を完了する。両方を既定にするリリースはこの自己適用の後とし、統合処理はそれ以前に試験用カタログで検証する。kiro-gate はこの契約で項目を追加し、Claude 版と併用した通し試験を行う。
+
 ## Data Models
 
 ### 設定ファイル `.cc-sdd-bootstrap.json`
@@ -678,6 +751,12 @@ function runCli(argv: string[], io: CliIo): Promise<number>; // 終了コード�
 - このリポジトリで `node bin/cc-sdd-bootstrap.mjs init` の後に `update` が「変更はありません」（10.3）。
 - `poc/self-install/run.sh` が新しい道筋で全て OK になる（自己適用の後も cc-sdd が入り、失敗で止まる）。
 - `scripts/agent/` が無く、`.claude/settings.json` に暫定のフックの登録が無い（10.2）。
+
+### Codex 拡張の検証
+- 設定の試験で、三つの選択、不正値、旧形式の無指定更新、明示した更新、`codex.enabled` の保持を確認する（2.8、3.8–3.10）。
+- 統合の試験で、任意の JSON 項目、他のハンドラ、利用者の TOML、AGENTS.md の区画外を保持する。整形だけの書き戻しが無いこと、同じコマンドで二重登録が起きないことを確認する（6.6–6.8、8.7–8.8）。
+- 操作の通し試験で、旧環境から両方への追加、Codex のみに切り替え、再更新で差分ゼロ、設定が壊れている場合を含む取り除きを確認する。Codex の不正な JSON と壊れた目印では、Claude 側を含む全ファイルが保存前の状態であることを確認する（5.8、6.9、8.9–8.10、9.1–9.8）。
+- 独自のスキルや指示ファイルが除外されず、除外条件を外しても利用者の行が残ることを確認する（7.4–7.5）。信頼の案内と信頼設定の不変更は CLI の通し試験、登録の検出は実機 PoC で検証する（2.9–2.10）。session-install の登録を使って自己適用を完了する（10.4）。
 
 ## Security Considerations
 - 導入コマンドは、カタログに載った道筋と決まった 5 つのファイル（設定・記録・settings・`.gitignore`・CLAUDE.md）以外に書かない。道筋はカタログの不変条件（`DEPLOY_DIR` の下）で縛り、`..` を含む道筋を拒む。
