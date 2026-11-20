@@ -261,7 +261,7 @@ test("カタログから外れた固有の部分: 書き換えなしは削除、
 // ---- 3.2 導入と更新の統合の計算 ----
 import { sha256, parseLedger } from "../lib/ledger.mjs";
 import { CONFIG_PATH, LEDGER_PATH } from "../lib/catalog.mjs";
-import { GITIGNORE_BEGIN_LINE, CLAUDE_MD_BEGIN_LINE } from "../lib/plan.mjs";
+import { GITIGNORE_BEGIN_LINE, CLAUDE_MD_BEGIN_LINE, AGENTS_MD_END_LINE } from "../lib/plan.mjs";
 
 const hookCmd = `node "$CLAUDE_PROJECT_DIR"/${D}/x.mjs`;
 const fullCatalog = {
@@ -270,16 +270,17 @@ const fullCatalog = {
   gitignore: [".cache/", "foo"],
   claudeSections: [{ id: "a", body: "# A\n@a.md\n" }, { id: "b", body: "B" }],
 };
-const cfg = { format: 1, a: 1 };
+const cfg = { format: 1, clients: "claude", a: 1 };
 const fullInput = (o = {}) => {
   const i = input({ catalog: fullCatalog, files: { [C]: null, [P]: null }, ...o });
-  i.config = cfg;
+  // Low-level plan fixtures choose Claude explicitly; production config is normalized.
+  i.config = { ...cfg, clients: "claude" };
   return i;
 };
 /** 計画の結果を状態に反映して次の入力にする */
 function applyPlan(i, plan) {
   const snap = { ...i.snapshot, files: { ...i.snapshot.files } };
-  const keyOf = { [CONFIG_PATH]: "config", [LEDGER_PATH]: "ledger", ".claude/settings.json": "settings", ".gitignore": "gitignore", "CLAUDE.md": "claudeMd" };
+  const keyOf = { [CONFIG_PATH]: "config", [LEDGER_PATH]: "ledger", ".claude/settings.json": "settings", ".codex/hooks.json": "codexHooksJson", ".gitignore": "gitignore", "CLAUDE.md": "claudeMd", "AGENTS.md": "agentsMd" };
   for (const c of plan.changes) {
     const v = c.action === "write" ? c.content : null;
     if (keyOf[c.path]) snap[keyOf[c.path]] = v === null ? null : v.toString("utf8");
@@ -293,7 +294,7 @@ test("初回: 配置物・設定・記録・settings・.gitignore・CLAUDE.md �
   assert.deepEqual(plan.blocks, []);
   assert.deepEqual(plan.changes.map((c) => c.path), [C, P, CONFIG_PATH, LEDGER_PATH, ".claude/settings.json", ".gitignore", "CLAUDE.md"]);
   const by = Object.fromEntries(plan.changes.map((c) => [c.path, c.content.toString()]));
-  assert.equal(by[CONFIG_PATH], '{\n  "format": 1,\n  "a": 1\n}\n');
+  assert.equal(by[CONFIG_PATH], '{\n  "format": 1,\n  "clients": "claude",\n  "a": 1\n}\n');
   assert.equal(by[".gitignore"], `${GITIGNORE_BEGIN_LINE}\n.cache/\nfoo\n# <<< cc-sdd-bootstrap\n`);
   assert.equal(by["CLAUDE.md"], `${CLAUDE_MD_BEGIN_LINE}\n# A\n@a.md\n\nB\n<!-- cc-sdd-bootstrap:end -->\n`);
   assert.equal(JSON.parse(by[".claude/settings.json"]).hooks.SessionStart[0].hooks[0].command, hookCmd);
@@ -486,4 +487,87 @@ test("取り除き: 何も入っていない対象では変更なし", () => {
   const plan = uninstallPlan(i);
   assert.deepEqual(plan.changes, []);
   assert.deepEqual(plan.blocks, []);
+});
+
+test("選択クライアントだけの配置・統合を計画し、Codex の利用者内容も保持する", () => {
+  const claudeFile = `${D}/claude.txt`;
+  const codexFile = `${D}/codex.txt`;
+  const cat = {
+    files: [...fakeCatalog.files, { path: claudeFile, kind: "common", executable: false, client: "claude" }, { path: codexFile, kind: "common", executable: false, client: "codex" }],
+    hooks: [{ event: "SessionStart", command: hookCmd }],
+    codexHooks: [{ event: "SessionStart", command: `node "$repo_root/${D}/x.mjs" # cc-sdd-bootstrap:managed` }],
+    gitignore: ["shared/", { line: "claude-only/", client: "claude" }, { line: "codex-only/", client: "codex" }],
+    claudeSections: [{ id: "claude", body: "Claude section" }],
+    agentsSections: [{ id: "codex", body: "Codex section" }],
+  };
+  const i = fullInput({ catalog: cat, packageFiles: Object.fromEntries([...fakeCatalog.files, { path: claudeFile }, { path: codexFile }].map((f) => [f.path, B(f.path)])) });
+  i.config = { format: 1, clients: "codex" };
+  i.snapshot.files[claudeFile] = null;
+  i.snapshot.files[codexFile] = null;
+  i.snapshot.codexHooksJson = JSON.stringify({ user: true });
+  i.snapshot.agentsMd = "# User instructions\n";
+  const plan = makePlan(i);
+  const by = Object.fromEntries(plan.changes.map((c) => [c.path, c.content?.toString()]));
+  assert.ok(!plan.changes.some((c) => c.path === claudeFile));
+  assert.ok(plan.changes.some((c) => c.path === codexFile));
+  assert.equal(JSON.parse(by[".codex/hooks.json"]).user, true);
+  assert.ok(by[".gitignore"].includes("codex-only/"));
+  assert.ok(!by[".gitignore"].includes("claude-only/"));
+  assert.equal(by["CLAUDE.md"], undefined);
+  assert.ok(by["AGENTS.md"].includes("# User instructions\n"));
+  assert.ok(by["AGENTS.md"].includes("Codex section"));
+  const again = makePlan(applyPlan(i, plan));
+  assert.deepEqual(again.changes, []);
+  assert.deepEqual(again.blocks, []);
+});
+
+test("Claude・Codex・両方の各選択だけを統合する", () => {
+  const cat = {
+    files: [], hooks: [{ event: "ClaudeEvent", command: hookCmd }],
+    codexHooks: [{ event: "CodexEvent", command: `node "$repo_root/${D}/x.mjs" # cc-sdd-bootstrap:managed` }],
+    gitignore: [{ line: "claude-only/", client: "claude" }, { line: "codex-only/", client: "codex" }],
+    claudeSections: [{ id: "c", body: "Claude section" }], agentsSections: [{ id: "x", body: "Codex section" }],
+  };
+  for (const [selection, wantsClaude, wantsCodex] of [["claude", true, false], ["codex", false, true], ["both", true, true]]) {
+    const i = fullInput({ catalog: cat });
+    i.config = { format: 1, clients: selection };
+    const plan = makePlan(i);
+    const by = Object.fromEntries(plan.changes.map((c) => [c.path, c.content?.toString()]));
+    assert.equal(by["CLAUDE.md"]?.includes("Claude section") ?? false, wantsClaude, selection);
+    assert.equal(by["AGENTS.md"]?.includes("Codex section") ?? false, wantsCodex, selection);
+    assert.equal(by[".gitignore"]?.includes("claude-only/") ?? false, wantsClaude, selection);
+    assert.equal(by[".gitignore"]?.includes("codex-only/") ?? false, wantsCodex, selection);
+  }
+});
+
+test("選択中の Codex JSON や指示区画の破損は全変更を止める", () => {
+  const i = fullInput();
+  i.config = { format: 1, clients: "codex" };
+  i.catalog = { ...fullCatalog, codexHooks: [], agentsSections: [{ id: "a", body: "A" }] };
+  i.snapshot.codexHooksJson = "{";
+  i.snapshot.agentsMd = "<!-- cc-sdd-bootstrap:end -->\n";
+  const plan = makePlan(i);
+  assert.deepEqual(plan.blocks.map((b) => [b.kind, b.path]), [["settings", ".codex/hooks.json"], ["markers", "AGENTS.md"]]);
+  assert.ok(plan.changes.length > 0); // blocks がある計画は CLI が適用前に中止する
+});
+
+test("Codex 選択時は空の AGENTS.md 管理区画も作成・復元する（9.2）", () => {
+  const i = fullInput({ catalog: { ...fullCatalog, codexHooks: [], agentsSections: [] } });
+  i.config = { format: 1, clients: "codex" };
+  i.snapshot.codexHooksJson = null;
+  i.snapshot.agentsMd = null;
+  const plan = makePlan(i);
+  const agents = plan.changes.find((c) => c.path === "AGENTS.md");
+  assert.ok(agents, "missing AGENTS.md should be created");
+  assert.equal(agents.content.toString(), `${CLAUDE_MD_BEGIN_LINE}\n${AGENTS_MD_END_LINE}\n`);
+  assert.ok(!plan.changes.some((c) => c.path === ".codex/hooks.json"));
+
+  const applied = applyPlan(i, plan);
+  assert.deepEqual(makePlan(applied).changes, []);
+  applied.snapshot.agentsMd = "# User instructions\n";
+  const updated = makePlan(applied);
+  assert.ok(updated.changes.some((c) => c.path === "AGENTS.md"));
+  assert.ok(updated.notices.some((n) => n.includes("AGENTS.md") && n.includes("作り直した")));
+  const body = updated.changes.find((c) => c.path === "AGENTS.md").content.toString();
+  assert.ok(body.startsWith("# User instructions\n\n"));
 });
