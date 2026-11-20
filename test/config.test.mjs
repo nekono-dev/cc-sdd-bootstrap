@@ -29,7 +29,7 @@ const field = (path, over = {}) => ({
   ...over,
 });
 
-test("定義は 6 項目で既定値が設計どおり", () => {
+test("定義は既存設定とサブエージェント設定を含む", () => {
   assert.equal(CONFIG_FORMAT, 1);
   assert.deepEqual(
     configFields.map((f) => [f.path, f.flag, f.kind, f.defaultValue]),
@@ -40,8 +40,36 @@ test("定義は 6 項目で既定値が設計どおり", () => {
       ["clients", "clients", "enum", "both"],
       ["codex.enabled", "codex", "boolean", false],
       ["models", "model", "map", {}],
+      ["subagents.claudeModels", "claude-models", "map", {}],
+      ["subagents.codexModels", "codex-models", "map", {}],
+      ["subagents.localModels", "local-models", "map", {}],
+      ["subagents.efforts", "effort", "map", {}],
     ],
   );
+});
+
+test("サブエージェント設定は format 1 のまま未知の役割キーと旧 models を保持する", () => {
+  const config = {
+    ...full(),
+    models: { manufacture: "legacy", futureRole: "legacy-model" },
+    subagents: {
+      claudeModels: { review: "sonnet", futureRole: "custom" },
+      codexModels: { design: "gpt-6.1-sol" },
+      localModels: { research: "local-id" },
+      efforts: { design: "high" },
+    },
+  };
+  assert.equal(validateConfig(config, configFields), null);
+  const roundTrip = parseConfig(serializeConfig(config));
+  assert.equal(roundTrip.ok, true);
+  assert.deepEqual(roundTrip.config, config);
+});
+
+test("推論量マップは medium/high のみ受け付け、項目パスと理由を示す", () => {
+  const config = { ...full(), subagents: { efforts: { review: "low" } } };
+  const error = validateConfig(config, configFields);
+  assert.equal(error.code, "CONFIG_INVALID");
+  assert.ok(error.messages.some((message) => message.startsWith("subagents.efforts: ") && /review/.test(message) && /medium.*high/.test(message)));
 });
 
 test("parseConfig: 正しい設定を読む", () => {
@@ -136,13 +164,15 @@ test("fillDefaults: 無い項目を既定値で補い、補った道筋を返す
     clients: "both",
     codex: { enabled: false },
     models: {},
+    subagents: { claudeModels: {}, codexModels: {}, localModels: {}, efforts: {} },
   });
-  assert.deepEqual(r.filled, ["ccSdd.lang", "ccSdd.keepTemplates", "clients", "codex.enabled", "models"]);
+  assert.deepEqual(r.filled, ["ccSdd.lang", "ccSdd.keepTemplates", "clients", "codex.enabled", "models", "subagents.claudeModels", "subagents.codexModels", "subagents.localModels", "subagents.efforts"]);
 });
 
 test("fillDefaults: 既存の値は変えず、完全なら何も補わない", () => {
   const c = full();
   c.ccSdd.lang = "en";
+  c.subagents = { claudeModels: {}, codexModels: {}, localModels: {}, efforts: {} };
   const r = fillDefaults(c, configFields);
   assert.deepEqual(r.config, c);
   assert.deepEqual(r.filled, []);
@@ -175,7 +205,7 @@ test("resolveValues: 優先順位は 引数 > 対話 > 既存 > 既定値", () =
   assert.equal(r.config.ccSdd.version, "3.2.0");
   assert.equal(r.config.ccSdd.lang, "fr");
   assert.equal(r.config.codex.enabled, true);
-  assert.deepEqual(r.defaulted, []);
+  assert.deepEqual(r.defaulted, ["subagents.claudeModels", "subagents.codexModels", "subagents.localModels", "subagents.efforts"]);
 });
 
 test("resolveValues: base が無ければ既定値で、既定値を使った項目を返す", () => {
@@ -186,13 +216,15 @@ test("resolveValues: base が無ければ既定値で、既定値を使った項
     clients: "both",
     codex: { enabled: false },
     models: {},
+    subagents: { claudeModels: {}, codexModels: {}, localModels: {}, efforts: {} },
   });
-  assert.deepEqual(r.defaulted, ["ccSdd.version", "ccSdd.keepTemplates", "clients", "codex.enabled", "models"]);
+  assert.deepEqual(r.defaulted, ["ccSdd.version", "ccSdd.keepTemplates", "clients", "codex.enabled", "models", "subagents.claudeModels", "subagents.codexModels", "subagents.localModels", "subagents.efforts"]);
 });
 
 test("resolveValues: 引数が無い項目の既存の値と、知らない項目を変えない", () => {
   const base = { ...full(), extra: { k: 1 } };
   base.ccSdd.lang = "en";
+  base.subagents = { claudeModels: {}, codexModels: {}, localModels: {}, efforts: {} };
   const r = resolveValues({ base, given: {}, prompted: {}, fields: configFields });
   assert.deepEqual(r.config, base);
   assert.deepEqual(r.defaulted, []);

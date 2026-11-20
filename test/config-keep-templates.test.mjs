@@ -57,12 +57,12 @@ test('fillDefaults で ccSdd.keepTemplates が既定値 false で補われる', 
   const config = { format: 1, ccSdd: { version: '3.1.0', lang: 'ja' }, clients: 'both', codex: { enabled: false }, models: {} };
   const { config: filledConfig, filled } = fillDefaults(config, configFields);
   assert.equal(filledConfig.ccSdd.keepTemplates, false);
-  assert.deepEqual(filled, ['ccSdd.keepTemplates']);
+  assert.deepEqual(filled, ['ccSdd.keepTemplates', 'subagents.claudeModels', 'subagents.codexModels', 'subagents.localModels', 'subagents.efforts']);
 });
 
 test('fillDefaults は keepTemplates がすでにあれば上書きしない', () => {
   const config = { format: 1, ccSdd: { version: '3.1.0', lang: 'ja', keepTemplates: true }, clients: 'both', codex: { enabled: false }, models: {} };
   const { config: filledConfig, filled } = fillDefaults(config, configFields);
   assert.equal(filledConfig.ccSdd.keepTemplates, true);
-  assert.deepEqual(filled, []);
+  assert.deepEqual(filled, ['subagents.claudeModels', 'subagents.codexModels', 'subagents.localModels', 'subagents.efforts']);
 });

@@ -101,8 +101,8 @@ test("引数なしの非対話 init は既定値と一式を作り、直後の u
   assert.equal(initialized.status, 0, initialized.stderr);
   assert.match(initialized.outputText, /既定値を使った項目/);
   const config = JSON.parse(read(root, CONFIG_PATH));
-  assert.deepEqual(config, { format: 1, ccSdd: { version: "3.1.0", lang: "ja", keepTemplates: false }, clients: "both", codex: { enabled: false }, models: {} });
-  for (const [key, value] of Object.entries({ "ccSdd.version": "3.1.0", "ccSdd.lang": "ja", "ccSdd.keepTemplates": false, clients: "both", "codex.enabled": false, models: {} })) {
+  assert.deepEqual(config, { format: 1, ccSdd: { version: "3.1.0", lang: "ja", keepTemplates: false }, clients: "both", codex: { enabled: false }, models: {}, subagents: { claudeModels: {}, codexModels: {}, localModels: {}, efforts: {} } });
+  for (const [key, value] of Object.entries({ "ccSdd.version": "3.1.0", "ccSdd.lang": "ja", "ccSdd.keepTemplates": false, clients: "both", "codex.enabled": false, models: {}, "subagents.claudeModels": {}, "subagents.codexModels": {}, "subagents.localModels": {}, "subagents.efforts": {} })) {
     assert.match(initialized.outputText, new RegExp(`${key.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}.*${JSON.stringify(value)}`));
   }
   assert.ok(fs.existsSync(path.join(root, CONFIG_PATH)));
@@ -134,6 +134,49 @@ test("引数なしの非対話 init は既定値と一式を作り、直後の u
   assert.equal(updated.status, 0, updated.stderr);
   assert.match(updated.outputText, /変更はありません/);
   assertSnapshot(root, before);
+});
+
+test("update は旧設定と未知の役割を保ち、4つの役割マップを部分上書きできる", () => {
+  const root = makeRepo();
+  const initialized = run(root, ["init"]);
+  assert.equal(initialized.status, 0, initialized.outputText);
+  const configPath = path.join(root, CONFIG_PATH);
+  const config = JSON.parse(fs.readFileSync(configPath, "utf8"));
+  config.models = { manufacture: "legacy-model", futureRole: "legacy-future-model" };
+  config.subagents = {
+    claudeModels: { manufacture: "claude-haiku", futureRole: "claude-future" },
+    codexModels: { review: "gpt-6.1-sol", futureRole: "codex-future" },
+    localModels: { design: "local-design-id", futureRole: "local-future" },
+    efforts: { manufacture: "high", futureRole: "medium" },
+  };
+  fs.writeFileSync(configPath, `${JSON.stringify(config, null, 2)}\n`);
+
+  const updated = run(root, [
+    "update",
+    "--claude-models", "manufacture=claude-sonnet",
+    "--codex-models", "review=gpt-6.1-luna",
+    "--local-models", "design=local-updated-id",
+    "--effort", "manufacture=medium",
+  ]);
+  assert.equal(updated.status, 0, updated.outputText);
+  assert.match(updated.outputText, /update が完了しました/);
+  const saved = JSON.parse(fs.readFileSync(configPath, "utf8"));
+  assert.deepEqual(saved.models, config.models);
+  assert.deepEqual(saved.subagents, {
+    claudeModels: { manufacture: "claude-sonnet", futureRole: "claude-future" },
+    codexModels: { review: "gpt-6.1-luna", futureRole: "codex-future" },
+    localModels: { design: "local-updated-id", futureRole: "local-future" },
+    efforts: { manufacture: "medium", futureRole: "medium" },
+  });
+
+  // update は保存済み設定を読み込んでスキーマ検証してから計画を適用する。
+  const validated = run(root, ["update"]);
+  assert.equal(validated.status, 0, validated.outputText);
+  assert.match(validated.outputText, /変更はありません/);
+  const rerun = run(root, ["update"]);
+  assert.equal(rerun.status, 0, rerun.outputText);
+  assert.match(rerun.outputText, /変更はありません/);
+  assert.deepEqual(JSON.parse(fs.readFileSync(configPath, "utf8")), saved);
 });
 
 test("既存の settings・gitignore・CLAUDE.md は init 後の uninstall で元に戻る", () => {

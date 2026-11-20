@@ -38,6 +38,41 @@ export function isClientSelection(value) {
 
 const VERSION_RE = /^\d+\.\d+\.\d+(-.+)?$/;
 const LANG_RE = /^[a-z]{2}(-[A-Z]{2})?$/;
+const subagentFields = [
+  ...["claudeModels", "codexModels", "localModels"].map((name) => ({
+    path: `subagents.${name}`,
+    flag: name.replace(/[A-Z]/g, (letter) => `-${letter.toLowerCase()}`),
+    kind: "map",
+    defaultValue: {},
+    question: `サブエージェントの ${name} を入力してください`,
+    mapKeys: [],
+    validate: validateStringMap,
+  })),
+  {
+    path: "subagents.efforts",
+    flag: "effort",
+    kind: "map",
+    defaultValue: {},
+    question: "役割ごとの推論量を入力してください",
+    mapKeys: [],
+    validate(value) {
+      const problem = validateStringMap(value);
+      if (problem) return problem;
+      for (const [key, effort] of Object.entries(value)) {
+        if (effort !== "medium" && effort !== "high") return `${key} の推論量は medium または high で指定してください`;
+      }
+      return null;
+    },
+  },
+];
+
+function validateStringMap(value) {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return "役割の名前と値の対応（オブジェクト）で指定してください";
+  for (const [key, entry] of Object.entries(value)) {
+    if (typeof entry !== "string" || entry.trim() === "") return `${key} の値は空でない文字列で指定してください`;
+  }
+  return null;
+}
 
 /** @type {ConfigField[]} */
 export const configFields = [
@@ -118,6 +153,7 @@ export const configFields = [
       return null;
     },
   },
+  ...subagentFields,
 ];
 
 /**
