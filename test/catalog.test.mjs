@@ -8,6 +8,8 @@ import {
   catalog,
   DEPLOY_DIR,
   OWNED_MARKER,
+  CODEX_OWNED_MARKER,
+  codexHookCommand,
   CONFIG_PATH,
   LEDGER_PATH,
 } from "../lib/catalog.mjs";
@@ -120,9 +122,30 @@ test("hooks の command は全て一式の見分けの文字列を含み、設�
   ]);
 });
 
+test("Codex の登録と指示を Claude Code の項目から独立して定義できる", () => {
+  assert.notEqual(catalog.codexHooks, catalog.hooks);
+  assert.notEqual(catalog.agentsSections, catalog.claudeSections);
+  assert.ok(Array.isArray(catalog.codexHooks));
+  assert.ok(Array.isArray(catalog.agentsSections));
+  for (const hook of catalog.codexHooks) {
+    assert.ok(hook.command.includes(OWNED_MARKER));
+    assert.ok(hook.command.endsWith(CODEX_OWNED_MARKER));
+  }
+});
+
+test("Codex のコマンドは Git ルートのスクリプトを呼び、末尾に管理の目印を持つ", () => {
+  assert.equal(CODEX_OWNED_MARKER, "# cc-sdd-bootstrap:managed");
+  assert.equal(
+    codexHookCommand("install-cc-sdd.mjs", "session-start"),
+    'repo_root="$(git rev-parse --show-toplevel)" && node "$repo_root/.agent-hooks/cc-sdd-bootstrap/install-cc-sdd.mjs" session-start # cc-sdd-bootstrap:managed',
+  );
+  assert.throws(() => codexHookCommand("../outside.mjs", "session-start"), TypeError);
+  assert.throws(() => codexHookCommand("install-cc-sdd.mjs", "$(other)"), TypeError);
+});
+
 test("gitignore は設計の 5 要素である", () => {
   assert.deepEqual(catalog.gitignore, [
-    ".claude/skills/kiro-*/",
+    { line: ".claude/skills/kiro-*/", client: "claude" },
     { line: ".kiro/settings/", when: { path: "ccSdd.keepTemplates", equals: false } },
     { line: ".kiro/settings/*", when: { path: "ccSdd.keepTemplates", equals: true } },
     { line: "!.kiro/settings/templates/", when: { path: "ccSdd.keepTemplates", equals: true } },
@@ -130,12 +153,16 @@ test("gitignore は設計の 5 要素である", () => {
   ]);
 });
 
-test("gitignore は設定・配置物・配置の記録・.claude/settings.json に当たらない（7.4）", () => {
+test("gitignore は管理ファイルと利用者のスキルに当たらない（7.4, 7.5）", () => {
   const protectedPaths = [
     CONFIG_PATH,
     ...catalog.files.map((f) => f.path),
     LEDGER_PATH,
     ".claude/settings.json",
+    ".codex/hooks.json",
+    "CLAUDE.md",
+    "AGENTS.md",
+    ".agents/skills/my-skill/SKILL.md",
   ];
   for (const line of catalog.gitignore) {
     const pattern = typeof line === "string" ? line : line.line;
