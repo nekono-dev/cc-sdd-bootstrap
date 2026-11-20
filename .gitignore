@@ -1,7 +1,5 @@
 node_modules/
 
-# 導入の失敗の記録など、手元だけの状態
-/.cache/
 # 個人の承認
 .claude/settings.local.json
 # brw create が作る作業ブランチの worktree
@@ -10,5 +8,5 @@ node_modules/
 # >>> cc-sdd-bootstrap（この区画は cc-sdd-bootstrap が管理する）
 .claude/skills/kiro-*/
 .kiro/settings/
-/.cache/cc-sdd-install.failed
+/.cache/
 # <<< cc-sdd-bootstrap

@@ -5,7 +5,9 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { after, test } from "node:test";
+import { resolveGitignoreLines } from "../lib/plan.mjs";
 import { catalog, CONFIG_PATH, DEPLOY_DIR, LEDGER_PATH } from "../lib/catalog.mjs";
+import { serializeLedger, sha256 } from "../lib/ledger.mjs";
 
 const packageRoot = path.resolve(path.dirname(new URL(import.meta.url).pathname), "..");
 const tempRoots = new Set();
@@ -79,14 +81,14 @@ test("引数なしの非対話 init は既定値と一式を作り、直後の u
   assert.equal(initialized.status, 0, initialized.stderr);
   assert.match(initialized.outputText, /既定値を使った項目/);
   const config = JSON.parse(read(root, CONFIG_PATH));
-  assert.deepEqual(config, { format: 1, ccSdd: { version: "3.1.0", lang: "ja" }, codex: { enabled: false }, models: {} });
-  for (const [key, value] of Object.entries({ "ccSdd.version": "3.1.0", "ccSdd.lang": "ja", "codex.enabled": false, models: {} })) {
+  assert.deepEqual(config, { format: 1, ccSdd: { version: "3.1.0", lang: "ja", keepTemplates: false }, codex: { enabled: false }, models: {} });
+  for (const [key, value] of Object.entries({ "ccSdd.version": "3.1.0", "ccSdd.lang": "ja", "ccSdd.keepTemplates": false, "codex.enabled": false, models: {} })) {
     assert.match(initialized.outputText, new RegExp(`${key.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}.*${JSON.stringify(value)}`));
   }
   assert.ok(fs.existsSync(path.join(root, CONFIG_PATH)));
   assert.ok(fs.existsSync(path.join(root, LEDGER_PATH)));
   for (const file of catalog.files) assert.ok(fs.existsSync(path.join(root, file.path)), file.path);
-  assert.equal(fs.statSync(path.join(root, catalog.files.find((file) => file.executable).path)).mode & 0o777, 0o755);
+  for (const file of catalog.files) assert.equal((fs.statSync(path.join(root, file.path)).mode & 0o111) !== 0, file.executable, file.path);
   for (const item of [".claude/settings.json", ".gitignore", "CLAUDE.md"]) assert.ok(fs.existsSync(path.join(root, item)), item);
   const settings = JSON.parse(read(root, ".claude/settings.json"));
   for (const hook of catalog.hooks) {
@@ -95,7 +97,10 @@ test("引数なしの非対話 init は既定値と一式を作り、直後の u
   const gitignore = read(root, ".gitignore").toString();
   assert.match(gitignore, /# >>> cc-sdd-bootstrap/);
   assert.match(gitignore, /# <<< cc-sdd-bootstrap/);
-  for (const line of catalog.gitignore) assert.ok(gitignore.includes(line), line);
+  const defaultLines = resolveGitignoreLines(catalog.gitignore, { format: 1, ccSdd: { keepTemplates: false } });
+  for (const line of defaultLines) assert.ok(gitignore.split("\n").includes(line), line);
+  assert.ok(!gitignore.split("\n").includes(".kiro/settings/*"));
+  assert.ok(!gitignore.split("\n").includes("!.kiro/settings/templates/"));
   const claude = read(root, "CLAUDE.md").toString();
   assert.match(claude, /<!-- cc-sdd-bootstrap:begin/);
   assert.match(claude, /<!-- cc-sdd-bootstrap:end/);
@@ -109,20 +114,6 @@ test("引数なしの非対話 init は既定値と一式を作り、直後の u
   assert.equal(updated.status, 0, updated.stderr);
   assert.match(updated.outputText, /変更はありません/);
   assertSnapshot(root, before);
-});
-
-test("update は導入スクリプトの実行権限を戻す", () => {
-  const root = makeRepo();
-  assert.equal(run(root, ["init"]).status, 0);
-  const script = path.join(root, catalog.files.find((file) => file.executable).path);
-  fs.chmodSync(script, 0o644);
-  const update = run(root, ["update"]);
-  assert.equal(update.status, 0, update.outputText);
-  assert.equal(fs.statSync(script).mode & 0o777, 0o755);
-  assert.match(update.outputText, /更新[\s\S]*実行権限を戻した/);
-  const again = run(root, ["update"]);
-  assert.equal(again.status, 0, again.outputText);
-  assert.match(again.outputText, /変更はありません/);
 });
 
 test("既存の settings・gitignore・CLAUDE.md は init 後の uninstall で元に戻る", () => {
@@ -261,4 +252,109 @@ test("途中の書き込み失敗は済んだもの・失敗したもの・未�
     assert.match(output, new RegExp(item.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
   }
   assert.equal(fs.statSync(path.join(root, ".claude")).isFile(), true);
+});
+
+test("初期の配置物を含む導入先の update は古い入口を新しいフックに置き換える", () => {
+  const root = makeRepo();
+  assert.equal(run(root, ["init"]).status, 0);
+  const oldPath = `${DEPLOY_DIR}/install-cc-sdd.sh`;
+  const oldContents = Buffer.from("#!/usr/bin/env bash\necho old\n");
+  put(root, oldPath, oldContents);
+  const ledger = JSON.parse(read(root, LEDGER_PATH).toString("utf8"));
+  ledger.files[oldPath] = { kind: "common", sha256: sha256(oldContents) };
+  fs.writeFileSync(path.join(root, LEDGER_PATH), serializeLedger(ledger));
+  const settingsPath = path.join(root, ".claude/settings.json");
+  const settings = JSON.parse(fs.readFileSync(settingsPath, "utf8"));
+  const oldCommand = `"$CLAUDE_PROJECT_DIR/${oldPath}" --claude`;
+  const group = settings.hooks.SessionStart.find((item) => item.hooks?.some((hook) => hook.command.includes(".agent-hooks/cc-sdd-bootstrap/")));
+  group.hooks.find((hook) => hook.command.includes(".agent-hooks/cc-sdd-bootstrap/")).command = oldCommand;
+  fs.writeFileSync(settingsPath, `${JSON.stringify(settings, null, 2)}\n`);
+
+  const updated = run(root, ["update"]);
+  assert.equal(updated.status, 0, updated.outputText);
+  assert.equal(fs.existsSync(path.join(root, oldPath)), false);
+  const result = JSON.parse(fs.readFileSync(settingsPath, "utf8"));
+  const owned = (result.hooks.SessionStart ?? []).flatMap((item) => item.hooks ?? []).filter((hook) => hook.command.includes(".agent-hooks/cc-sdd-bootstrap/"));
+  assert.equal(owned.length, 1);
+  assert.equal(owned[0].command, catalog.hooks.find((hook) => hook.event === "SessionStart").command);
+  for (const [event, groups] of Object.entries(result.hooks)) {
+    const count = groups.flatMap((item) => item.hooks ?? []).filter((hook) => hook.command.includes(".agent-hooks/cc-sdd-bootstrap/")).length;
+    assert.equal(count, 1, event);
+  }
+});
+
+test("記録後に書き換えた古い導入スクリプトがある update は --force を案内する", () => {
+  const root = makeRepo();
+  assert.equal(run(root, ["init"]).status, 0);
+  const oldPath = `${DEPLOY_DIR}/install-cc-sdd.sh`;
+  const oldContents = Buffer.from("#!/usr/bin/env bash\necho old\n");
+  put(root, oldPath, oldContents);
+  const ledger = JSON.parse(read(root, LEDGER_PATH).toString("utf8"));
+  ledger.files[oldPath] = { kind: "common", sha256: sha256(oldContents) };
+  fs.writeFileSync(path.join(root, LEDGER_PATH), serializeLedger(ledger));
+  const settingsPath = path.join(root, ".claude/settings.json");
+  const settings = JSON.parse(fs.readFileSync(settingsPath, "utf8"));
+  const group = settings.hooks.SessionStart.find((item) => item.hooks?.some((hook) => hook.command.includes(".agent-hooks/cc-sdd-bootstrap/")));
+  group.hooks.find((hook) => hook.command.includes(".agent-hooks/cc-sdd-bootstrap/")).command = `"$CLAUDE_PROJECT_DIR/${oldPath}" --claude`;
+  fs.writeFileSync(settingsPath, `${JSON.stringify(settings, null, 2)}\n`);
+  put(root, oldPath, "#!/usr/bin/env bash\necho user change\n");
+
+  const updated = run(root, ["update"]);
+  assert.notEqual(updated.status, 0, updated.outputText);
+  assert.equal(fs.existsSync(path.join(root, oldPath)), true);
+  assert.match(updated.outputText, /--force/);
+});
+
+test("keepTemplates を変更した update は gitignore の管理区画を書き直す", () => {
+  const root = makeRepo();
+  assert.equal(run(root, ["init"]).status, 0);
+  const configPath = path.join(root, CONFIG_PATH);
+  const config = JSON.parse(fs.readFileSync(configPath, "utf8"));
+  const gitignoreLines = () => fs.readFileSync(path.join(root, ".gitignore"), "utf8").split("\n");
+  assert.ok(gitignoreLines().includes(".kiro/settings/"));
+  assert.ok(!gitignoreLines().includes(".kiro/settings/*"));
+  assert.ok(!gitignoreLines().includes("!.kiro/settings/templates/"));
+  assert.ok(gitignoreLines().includes("/.cache/"));
+
+  config.ccSdd.keepTemplates = true;
+  fs.writeFileSync(configPath, `${JSON.stringify(config, null, 2)}\n`);
+  assert.equal(run(root, ["update"]).status, 0);
+  assert.ok(gitignoreLines().includes(".kiro/settings/*"));
+  assert.ok(gitignoreLines().includes("!.kiro/settings/templates/"));
+  assert.ok(!gitignoreLines().includes(".kiro/settings/"));
+  assert.ok(gitignoreLines().includes("/.cache/"));
+
+  config.ccSdd.keepTemplates = false;
+  fs.writeFileSync(configPath, `${JSON.stringify(config, null, 2)}\n`);
+  assert.equal(run(root, ["update"]).status, 0);
+  assert.ok(gitignoreLines().includes(".kiro/settings/"));
+  assert.ok(!gitignoreLines().includes(".kiro/settings/*"));
+  assert.ok(!gitignoreLines().includes("!.kiro/settings/templates/"));
+  assert.ok(gitignoreLines().includes("/.cache/"));
+});
+
+test("uninstall は除外解除後に .cache の未追跡候補を知らせる", () => {
+  const root = makeRepo();
+  assert.equal(run(root, ["init"]).status, 0);
+  put(root, ".cache/cc-sdd-install.failed", "失敗\n");
+  put(root, ".cache/cc-sdd-install.state.json", "{}\n");
+  const removed = run(root, ["uninstall"]);
+  assert.equal(removed.status, 0, removed.outputText);
+  assert.match(removed.outputText, /\.cache(?![\w/.-])/);
+  assert.match(removed.outputText, /\.gitignore の除外が外れた/);
+  const gitignorePath = path.join(root, ".gitignore");
+  assert.ok(!fs.existsSync(gitignorePath) || !/# >>> cc-sdd-bootstrap/.test(fs.readFileSync(gitignorePath, "utf8")));
+});
+
+test("雛形を保持する init は MIT ライセンスのお知らせを出して設定に保存する", () => {
+  const defaultRoot = makeRepo();
+  const defaultInit = run(defaultRoot, ["init"]);
+  assert.equal(defaultInit.status, 0, defaultInit.outputText);
+  assert.doesNotMatch(defaultInit.outputText, /MIT/);
+
+  const root = makeRepo();
+  const initialized = run(root, ["init", "--keep-templates", "yes"]);
+  assert.equal(initialized.status, 0, initialized.outputText);
+  assert.match(initialized.outputText, /お知らせ:[\s\S]*MIT ライセンス/);
+  assert.equal(JSON.parse(read(root, CONFIG_PATH).toString("utf8")).ccSdd.keepTemplates, true);
 });

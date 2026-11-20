@@ -2,13 +2,21 @@
   "format": 1,
   "bootstrapVersion": "0.1.0",
   "files": {
-    ".agent-hooks/cc-sdd-bootstrap/install-cc-sdd.sh": {
+    ".agent-hooks/cc-sdd-bootstrap/config-schema.mjs": {
       "kind": "common",
-      "sha256": "d0ebfd7c352540b9deb6810840f9ac3093a3bfd8eb41f8eca025a66cb1abb8f4"
+      "sha256": "0533923ce0baa63eccbfdd36cba47c4535a18bdcb38f703fb600746d66f64b31"
+    },
+    ".agent-hooks/cc-sdd-bootstrap/install-cc-sdd.mjs": {
+      "kind": "common",
+      "sha256": "6e417212e1be47630e8c0dd89b09925a794b25ab7d850d036ff6f3045a9af45f"
     },
     ".agent-hooks/cc-sdd-bootstrap/install-gate.mjs": {
       "kind": "common",
-      "sha256": "30d119704453b1e4d9cebf71f61070b5665ed7c80de6f4a214e6d7135b58e7f9"
+      "sha256": "ae3f2f572eea36ae5547c3b3e48bb5af3dcfea46e677439ea0152ac01ab036dc"
+    },
+    ".agent-hooks/cc-sdd-bootstrap/install-rules.mjs": {
+      "kind": "common",
+      "sha256": "44ecf3c73e746223cba368b13efafb4ec09afb26acf656b81a4d3d9282ba46b1"
     }
   }
 }
