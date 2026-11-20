@@ -1,11 +1,11 @@
 // フックの登録の統合（純粋）の単体テスト
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { catalog, OWNED_MARKER } from "../lib/catalog.mjs";
+import { catalog, CODEX_OWNED_MARKER, OWNED_MARKER } from "../lib/catalog.mjs";
 import { mergeHooks } from "../lib/settings-hooks.mjs";
 
 const hooks = catalog.hooks;
-const merge = (text, h = hooks) => mergeHooks({ text, hooks: h });
+const merge = (text, h = hooks, ownership = "claude") => mergeHooks({ text, hooks: h, ownership });
 const own = (name) => `"$CLAUDE_PROJECT_DIR${OWNED_MARKER}${name}"`;
 
 test("text が null なら新しいファイルの中身を作る（6.1）", () => {
@@ -66,6 +66,45 @@ test("前の版の一式のフックを置き換え、重複させない（6.3�
   assert.equal(j.hooks.SessionStart[0].hooks[0].command, "echo user");
   assert.equal(j.hooks.SessionStart[1].hooks[0].command, hooks[0].command);
   assert.equal(JSON.stringify(j).split(OWNED_MARKER).length - 1, 2);
+});
+
+test("Codex は正確な管理サフィックスがある登録だけを置き換える（6.6, 6.7, 6.8, 6.9, 9.2）", () => {
+  const native = `node \"$repo_root${OWNED_MARKER}install-gate.mjs\" user-prompt-submit`;
+  const oldManaged = `${native} ${CODEX_OWNED_MARKER}`;
+  const codexHooks = [
+    { event: "Stop", command: `node \"$repo_root${OWNED_MARKER}install-gate.mjs\" stop ${CODEX_OWNED_MARKER}` },
+  ];
+  const src = {
+    version: 1,
+    hooks: {
+      Stop: [
+        { matcher: "native", hooks: [{ type: "command", command: native }] },
+        { matcher: "marker-only-user", hooks: [{ type: "command", command: `echo user ${CODEX_OWNED_MARKER}` }] },
+        { matcher: "path-without-marker", hooks: [{ type: "command", command: `node \"$repo_root${OWNED_MARKER}user-script.mjs\"` }] },
+        { matcher: "managed", hooks: [{ type: "command", command: oldManaged }] },
+      ],
+      Other: [{ hooks: [{ type: "mcp", server: "user-server" }] }],
+    },
+    extra: { preserve: true },
+  };
+  const first = merge(JSON.stringify(src), codexHooks, "codex");
+  assert.equal(first.changed, true);
+  const json = JSON.parse(first.text);
+  assert.equal(json.version, 1);
+  assert.deepEqual(json.extra, { preserve: true });
+  assert.deepEqual(json.hooks.Other, src.hooks.Other);
+  assert.equal(json.hooks.Stop.length, 4);
+  assert.deepEqual(json.hooks.Stop[0], src.hooks.Stop[0]);
+  assert.deepEqual(json.hooks.Stop[1], src.hooks.Stop[1]);
+  assert.deepEqual(json.hooks.Stop[2], src.hooks.Stop[2]);
+  assert.equal(json.hooks.Stop[3].hooks[0].command, codexHooks[0].command);
+
+  const second = merge(first.text, codexHooks, "codex");
+  assert.deepEqual(second, { text: first.text, changed: false });
+  const removed = merge(first.text, [], "codex");
+  const removedJson = JSON.parse(removed.text);
+  assert.deepEqual(removedJson.hooks.Stop, src.hooks.Stop.slice(0, 3));
+  assert.deepEqual(removedJson.hooks.Other, src.hooks.Other);
 });
 
 test("2 回続けても同じ内容で、2 回目は changed:false（6.4）", () => {
