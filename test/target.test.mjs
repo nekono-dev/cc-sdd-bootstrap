@@ -72,6 +72,71 @@ test("readSnapshot: 読めるものは文字列・Buffer、無いものは null"
   });
 });
 
+test("readSnapshot: Codex の固定パスを文字列で読み、無い場合は null", () => {
+  withTmp((d) => {
+    put(d, ".codex/hooks.json", '{"hooks":[]}');
+    put(d, "AGENTS.md", "利用者の指示\n");
+    const existing = readSnapshot(d, [], []);
+    assert.equal(existing.codexHooksJson, '{"hooks":[]}');
+    assert.equal(existing.agentsMd, "利用者の指示\n");
+
+    fs.rmSync(path.join(d, ".codex/hooks.json"));
+    fs.rmSync(path.join(d, "AGENTS.md"));
+    const missing = readSnapshot(d, [], []);
+    assert.equal(missing.codexHooksJson, null);
+    assert.equal(missing.agentsMd, null);
+  });
+});
+
+test("readSnapshot: Codex 管理パスのシンボリックリンクを拒む", () => {
+  withTmp((d) => {
+    const outside = fs.mkdtempSync(path.join(os.tmpdir(), "ccsdd-outside-"));
+    try {
+      put(outside, "hooks.json", "{}");
+      put(outside, "agents.md", "keep");
+      fs.mkdirSync(path.join(d, ".codex"));
+      fs.symlinkSync(path.join(outside, "hooks.json"), path.join(d, ".codex/hooks.json"));
+      assert.throws(() => readSnapshot(d, [], []), /シンボリックリンク.*\.codex\/hooks\.json/);
+      fs.unlinkSync(path.join(d, ".codex/hooks.json"));
+      fs.symlinkSync(path.join(outside, "agents.md"), path.join(d, "AGENTS.md"));
+      assert.throws(() => readSnapshot(d, [], []), /シンボリックリンク.*AGENTS\.md/);
+      assert.equal(fs.readFileSync(path.join(outside, "hooks.json"), "utf8"), "{}");
+      assert.equal(fs.readFileSync(path.join(outside, "agents.md"), "utf8"), "keep");
+    } finally {
+      fs.rmSync(outside, { recursive: true, force: true });
+    }
+  });
+});
+
+test("applyPlan: Codex 管理パスのシンボリックリンクを通る書き込みを拒む", () => {
+  withTmp((d) => {
+    const outside = fs.mkdtempSync(path.join(os.tmpdir(), "ccsdd-outside-"));
+    try {
+      put(outside, "hooks.json", "user hooks");
+      put(outside, "agents.md", "user instructions");
+      fs.mkdirSync(path.join(d, ".codex"));
+      fs.symlinkSync(path.join(outside, "hooks.json"), path.join(d, ".codex/hooks.json"));
+      const hookChange = w(".codex/hooks.json", "managed hooks");
+      const hookResult = applyPlan(d, plan([hookChange]));
+      assert.equal(hookResult.ok, false);
+      assert.equal(hookResult.failed.change, hookChange);
+      assert.match(hookResult.failed.message, /\.codex\/hooks\.json/);
+
+      fs.unlinkSync(path.join(d, ".codex/hooks.json"));
+      fs.symlinkSync(path.join(outside, "agents.md"), path.join(d, "AGENTS.md"));
+      const agentsChange = w("AGENTS.md", "managed instructions");
+      const agentsResult = applyPlan(d, plan([agentsChange]));
+      assert.equal(agentsResult.ok, false);
+      assert.equal(agentsResult.failed.change, agentsChange);
+      assert.match(agentsResult.failed.message, /AGENTS\.md/);
+      assert.equal(fs.readFileSync(path.join(outside, "hooks.json"), "utf8"), "user hooks");
+      assert.equal(fs.readFileSync(path.join(outside, "agents.md"), "utf8"), "user instructions");
+    } finally {
+      fs.rmSync(outside, { recursive: true, force: true });
+    }
+  });
+});
+
 test("readSnapshot: ignoredPresent は実在する道筋だけ（glob・先頭と末尾の区切りの除去）", () => {
   withTmp((d) => {
     put(d, ".claude/skills/kiro-a/SKILL.md");
