@@ -7,6 +7,7 @@
   - `/kiro-*` で始まる入力は、スキルが無い・一覧に載る・一覧に載らない（`disable-model-invocation`）のどれでも、UserPromptSubmit のフックに `prompt` が入力のまま（手順書に展開されず）届く。スキルが無い `/kiro-ghost` も弾かれず、普通の文としてモデルに渡る（`poc/kiro-gate`）。
   - PreToolUse の deny は、手順書を読む前の Bash を実際に止める。拒否の理由はモデルに届き、モデルは手順書を Read してからやり直す。PostToolUse に matcher `Read` を付けても記録できる。
   - Stop は、終了を止めた後の 2 回目の入力で `stop_hook_active` が真になる。真のときに通せば終了できる。
+  - 対話モード（tmux で確認）でも `prompt` は入力のままだが、スキルが無い `/kiro-*` はフックに届かず、Claude Code が「Unknown command」と示してモデルに渡さない。要件 2 の停止が働くのは、未知のコマンドがモデルに渡る使い方（`claude -p` など）に限られる。
   - skyshare の実装は純粋な判定（`decidePreToolUse` など）と入出力（`handlers`・状態の読み書き）が 1 ファイルに同居している。このリポジトリの型（data → 純粋 → 入出力）に合わせて 2 つに分ける。
 
 ## Research Log
