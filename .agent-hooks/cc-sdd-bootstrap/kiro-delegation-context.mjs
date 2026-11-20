@@ -257,8 +257,10 @@ export function createKiroDelegationContext(options) {
       const result = resolveNative(settings, context.client, request.role, { readOnly: request.readOnly === true });
       if (!result.ok || result.value.agentName !== normalized.value.agentName) { failure = result.error?.reason ?? "指定された役割定義が設定と一致しません"; return null; }
       let evidence;
-      try { evidence = await nativeAdapter.collectEvidence({ context, policy: result.value, launch: normalized.value, hostEvent: null }); } catch (error) { failure = `${request.role} のモデル・推論量・権限を確認できません: ${error.message}。ホストの承認と構成を確認してください`; return null; }
-      const verdict = decideNativeAgentGate(result.value, evidence);
+      try { evidence = await nativeAdapter.collectEvidence({ context, policy: result.value, settings, launch: normalized.value, hostEvent: null }); } catch (error) { failure = `${request.role} のモデル・推論量・権限を確認できません: ${error.message}。ホストの承認と構成を確認してください`; return null; }
+      const gatePolicy = nativeGatePolicy(nativeAdapter, result.value);
+      if (!gatePolicy) { failure = `${request.role} のモデルを確認できません`; return null; }
+      const verdict = decideNativeAgentGate(gatePolicy, evidence);
       if (!verdict.allowed) { failure = gateFailure(verdict, result.value); failureAlternatives = verdict.alternatives ?? []; return null; }
       if (standalone) {
         const install = await verifyStandaloneInstall(context.project, context.client, settings, normalized.value.agentName);
@@ -297,8 +299,10 @@ export function createKiroDelegationContext(options) {
       const policy = resolveNative(settings, old.client, item.role, { readOnly: item.readOnly });
       if (!policy.ok) { refusal.reason = policy.error.reason; return null; }
       let evidence;
-      try { evidence = await nativeAdapter.collectEvidence({ context: item, policy: policy.value, launch: launch.value, hostEvent: event }); } catch (error) { refusal = { reason: `${item.role} のモデル・推論量・権限を確認できません: ${error.message}。ホストの承認と構成を確認してください`, alternatives: [] }; return null; }
-      const verdict = decideNativeAgentGate(policy.value, evidence);
+      try { evidence = await nativeAdapter.collectEvidence({ context: item, policy: policy.value, settings, launch: launch.value, hostEvent: event }); } catch (error) { refusal = { reason: `${item.role} のモデル・推論量・権限を確認できません: ${error.message}。ホストの承認と構成を確認してください`, alternatives: [] }; return null; }
+      const gatePolicy = nativeGatePolicy(nativeAdapter, policy.value);
+      if (!gatePolicy) { refusal = { reason: `${item.role} のモデルを確認できません`, alternatives: [] }; return null; }
+      const verdict = decideNativeAgentGate(gatePolicy, evidence);
       if (!verdict.allowed) { refusal = { reason: gateFailure(verdict, policy.value), alternatives: verdict.alternatives ?? [] }; return null; }
       const pending = { ...old.nativePreflights }; delete pending[requestId];
       return { ...old, nativePreflights: pending, usedNativeToolUseIds: [...(old.usedNativeToolUseIds ?? []), event.toolUseId] };
@@ -488,3 +492,9 @@ function inside(candidate, parent) {
   return rel === "" || (!rel.startsWith(`..${sep}`) && rel !== ".." && !isAbsolute(rel));
 }
 function overlaps(a, b) { return inside(a, b) || inside(b, a); }
+function nativeGatePolicy(adapter, policy) {
+  if (typeof adapter?.resolvePolicyModel !== "function") return policy;
+  let modelId;
+  try { modelId = adapter.resolvePolicyModel(policy.modelId); } catch { return null; }
+  return typeof modelId === "string" && modelId ? { ...policy, modelId } : null;
+}
