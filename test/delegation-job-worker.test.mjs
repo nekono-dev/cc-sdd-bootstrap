@@ -34,6 +34,15 @@ test("同一接続の adapter で能力確認・起動・状態・停止し、�
   assert.equal(h.worker.isBusy(), false);
 });
 
+test("制御要求は依頼 ID を所有 jobId に解決し、所有外は拒否する", async () => {
+  const h = harness();
+  assert.equal((await h.worker.start(request)).kind, "started");
+  assert.equal((await h.worker.controlStatus("req-1")).status, "running");
+  assert.equal((await h.worker.controlStop("req-1")).status, "stopped");
+  assert.equal((await h.worker.controlStatus("not-owned")).status, "unknown");
+  assert.match((await h.worker.controlStatus("not-owned")).reason, /所有/);
+});
+
 test("適格候補なしは接続・起動せず、予約を解放する", async () => {
   let connected = 0; let started = 0; let released = 0;
   const h = harness({ select: async () => ({ kind: "unavailable", reasons: ["候補なし"] }), connect: async () => { connected++; return { ...h.adapter, start: async () => { started++; } }; }, store: { reserve: async () => ({ kind: "created" }), release: async () => { released++; return true; }, markUnknown: async () => true } });
@@ -253,6 +262,22 @@ test("矛盾した not-started 起動応答は unknown として接続所有・�
   assert.equal(closed, 1);
 });
 
+test("読み取り専用の起動前拒否は制御記録を世代照合して解放し、再試行できる", async () => {
+  let tracked = false; let releases = 0; let starts = 0;
+  const store = {
+    reserve: async () => ({ kind: "created" }), release: async () => true, markUnknown: async () => true,
+    track: async () => tracked ? { kind: "existing", record: { generation: "a".repeat(32), controlDirectory: `control-${"a".repeat(32)}` } } : (tracked = true, { kind: "tracked", record: { generation: "a".repeat(32), controlDirectory: `control-${"a".repeat(32)}` } }),
+    releaseTrack: async ({ generation }) => { assert.equal(generation, "a".repeat(32)); tracked = false; releases++; return true; },
+  };
+  const h = harness({ store, select: async () => ({ kind: "mcp", candidate: {}, model: "m", access: "read-only", effort: "high" }), connect: async () => ({ ...harness().adapter,
+    capabilities: async () => ({ kind: "agent", harness: "test", tier: "cloud", models: [{ id: "m", accepted: [{ access: "read-only", effort: "high" }] }] }),
+    start: async () => { starts++; return starts === 1 ? { kind: "not-started", reason: "起動前拒否" } : { kind: "started", job: { serverId: "s", connectionId: "c", jobId: "j" } }; } }) });
+  const input = { ...request, access: "read-only" };
+  assert.equal((await h.worker.start(input)).kind, "unavailable");
+  assert.equal(releases, 1);
+  assert.equal((await h.worker.start(input)).kind, "started", "同じ依頼を再試行できる");
+});
+
 test("不正な状態・停止応答は終端確定に使わず接続所有を保つ", async () => {
   let statusResult = { status: "running", extra: true };
   let stopResult = { status: "stopped", jobId: "other" };
@@ -305,6 +330,24 @@ test("状態照会が期限切れでも後続の停止要求を実行する", as
   assert.equal((await status).status, "unknown");
   assert.equal((await stopped).status, "stopped");
   assert.equal(stops, 1);
+});
+
+test("共有キュー待機中に期限切れとなった制御停止は実行しない", async () => {
+  const base = harness();
+  let releaseStatus;
+  let stops = 0;
+  let now = 100;
+  const adapter = { ...base.adapter, status: () => new Promise((resolve) => { releaseStatus = () => resolve({ status: "running" }); }), stop: async () => { stops++; return { status: "stopped" }; } };
+  const worker = createJobWorker({ select: async () => ({ kind: "mcp", candidate: {}, model: "m", access: "workspace-write", effort: "high" }), connect: async () => adapter, store: { reserve: async () => ({ kind: "created" }), markUnknown: async () => true }, now: () => now, operationTimeoutMs: 1000 });
+  await worker.start(request);
+  const status = worker.controlStatus("req-1");
+  await new Promise((resolve) => setImmediate(resolve));
+  const stopped = worker.controlStop("req-1", 150);
+  now = 151;
+  releaseStatus();
+  await status;
+  assert.equal((await stopped).status, "unknown", "期限切れ要求は unknown を返す");
+  assert.equal(stops, 0, "期限切れ要求で adapter.stop を呼ばない");
 });
 
 test("jobId がない送信後 unknown でも所有者を生存扱いにする", async () => {

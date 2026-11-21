@@ -28,6 +28,34 @@ test("same work resend under another request ID attaches exclusively to original
   } finally { await rm(f.base, { recursive: true, force: true }); }
 });
 
+test("稼働中の書き込み予約と同じ依頼 ID への read-only track は制御先を変更しない", async () => {
+  const f = await fixture();
+  try {
+    const input = { requestId: "shared-id", project: f.project, cwd: f.project, skill: "kiro-implement", taskId: "4.4" };
+    const write = await f.store.reserve(input);
+    assert.equal(write.kind, "created");
+    const tracked = await f.store.track(input);
+    assert.equal(tracked.kind, "blocked", "稼働中の書き込み依頼 ID を追跡登録しない");
+    const target = await f.store.resolveControlTarget(input);
+    assert.equal(target.generation, write.record.generation, "元の書き込み世代を保持する");
+    assert.equal(target.controlDirectory, write.record.controlDirectory);
+  } finally { await rm(f.base, { recursive: true, force: true }); }
+});
+
+test("read-only track 後の同じ依頼 ID の書き込み予約は拒否し、元の制御先を保つ", async () => {
+  const f = await fixture();
+  try {
+    const input = { requestId: "shared-readonly-id", project: f.project, cwd: f.project, skill: "kiro-review", taskId: "4.4" };
+    const tracked = await f.store.track(input);
+    assert.equal(tracked.kind, "tracked");
+    const reservation = await f.store.reserve(input);
+    assert.equal(reservation.kind, "blocked", "read-only 追跡と衝突する書き込み予約を拒否する");
+    const target = await f.store.resolveControlTarget(input);
+    assert.equal(target.generation, tracked.record.generation, "拒否後も元の read-only 所有世代を保持する");
+    assert.equal(target.controlDirectory, tracked.record.controlDirectory);
+  } finally { await rm(f.base, { recursive: true, force: true }); }
+});
+
 test("候補不在時に予約を解放すると同じ作業を再予約できる", async () => {
   const f = await fixture();
   try {
@@ -101,6 +129,24 @@ test("request IDs inherited from Object.prototype are reserved, reused, and isol
       assert.equal(resend.kind, "existing", `${requestId}: same work resend`);
       const reuse = await f.store.reserve({ requestId, project: f.project, cwd: f.project, skill: "kiro-review", taskId });
       assert.equal(reuse.kind, "blocked", `${requestId}: different work reuse`);
+    }
+  } finally { await rm(f.base, { recursive: true, force: true }); }
+});
+
+test("controls は prototype 名の依頼 ID を JSON 再読込後も追跡できる", async () => {
+  const f = await fixture();
+  try {
+    for (const requestId of ["constructor", "toString", "__proto__"]) {
+      const input = { requestId, project: f.project, cwd: f.project, skill: "kiro-review", taskId: `4.4-${requestId}` };
+      const first = await f.store.track(input);
+      assert.equal(first.kind, "tracked", `${requestId}: 初回追跡`);
+      const reloadedStore = createDelegationJobStore({ root: f.runtime, writableRoots: [f.writable], resolveWorktreeRoot: f.resolveWorktreeRoot });
+      const second = await reloadedStore.track(input);
+      assert.equal(second.kind, "existing", `${requestId}: 再読込後の重複追跡`);
+      assert.equal(second.record.generation, first.record.generation, `${requestId}: 世代を保持`);
+      assert.deepEqual(await reloadedStore.resolveControlTarget(input), {
+        generation: first.record.generation, controlDirectory: first.record.controlDirectory,
+      });
     }
   } finally { await rm(f.base, { recursive: true, force: true }); }
 });

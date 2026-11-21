@@ -263,33 +263,43 @@ test("unknown 中の停止も終了確認までシグナルを送り続ける", 
   input.end(); await serving; await rm(root, { recursive: true, force: true });
 });
 
-test("停止処理中に stdin が失敗しても猶予後に SIGKILL を送り終了を待つ", async () => {
+test("停止処理中に stdin が失敗しても猶予後に SIGKILL を送り終了を待つ", async (t) => {
   const { EventEmitter } = await import("node:events");
   const { mkdtemp, mkdir, rm } = await import("node:fs/promises"); const { tmpdir } = await import("node:os"); const { join } = await import("node:path");
   const root = await mkdtemp(join(tmpdir(), "codex-stop-kill-")); const cwd = join(root, "work"); await mkdir(cwd);
-  const input = new PassThrough(); const output = new PassThrough(); let response = ""; output.on("data", (chunk) => { response += chunk; });
-  let child; const signals = []; let resolveKill; let groupAlive = true;
+  const input = new PassThrough(); const output = new PassThrough(); let responseBuffer = ""; const waiting = new Map();
+  output.on("data", (chunk) => { responseBuffer += chunk; let newline; while ((newline = responseBuffer.indexOf("\n")) >= 0) { const line = responseBuffer.slice(0, newline); responseBuffer = responseBuffer.slice(newline + 1); const message = JSON.parse(line); waiting.get(message.id)?.(line); waiting.delete(message.id); } });
+  const responseFor = (id) => new Promise((resolve) => waiting.set(id, resolve));
+  let child; const signals = []; let resolveKill; let resolveTerm; let resolveGone; let groupAlive = true;
   const killed = new Promise((resolve) => { resolveKill = resolve; });
+  const termed = new Promise((resolve) => { resolveTerm = resolve; });
+  const goneChecked = new Promise((resolve) => { resolveGone = resolve; });
+  const keepAlive = setInterval(() => {}, 1000);
+  t.after(() => clearInterval(keepAlive));
   const spawnProcess = () => {
     child = new EventEmitter(); child.stdout = new PassThrough(); child.stdin = new PassThrough(); child.pid = 12346; child.on("exit", () => { groupAlive = false; });
-    child.kill = (signal) => { signals.push(signal); if (signal === "SIGKILL") resolveKill(); return true; };
+    child.kill = (signal) => { signals.push(signal); if (signal === "SIGTERM") resolveTerm(); if (signal === "SIGKILL") resolveKill(); return true; };
     child.stdin.end = () => {};
     queueMicrotask(() => child.emit("spawn")); return child;
   };
-  const serving = codex.serve({ input, output, listModels: async () => [{ model: "model-a", supportedReasoningEfforts: [{ reasoningEffort: "medium" }] }], spawnProcess, killProcess: (pid, signal) => { if (signal === 0) { if (!groupAlive) throw Object.assign(new Error("gone"), { code: "ESRCH" }); return true; } child.kill(signal); }, allowedRoots: [root], stopGraceMs: 20 });
+  const serving = codex.serve({ input, output, listModels: async () => [{ model: "model-a", supportedReasoningEfforts: [{ reasoningEffort: "medium" }] }], spawnProcess, killProcess: (pid, signal) => { if (signal === 0) { if (!groupAlive) { resolveGone(); throw Object.assign(new Error("gone"), { code: "ESRCH" }); } return true; } child.kill(signal); }, allowedRoots: [root], stopGraceMs: 20 });
   const send = (id, name, args) => input.write(`${JSON.stringify({ jsonrpc: "2.0", id, method: "tools/call", params: { name, arguments: args } })}\n`);
+  const startedResponse = responseFor(1);
   send(1, "codex_start", { cwd, model: "model-a", effort: "medium", access: "read-only", instruction: "x" });
-  while (!response.includes('"id":1')) await new Promise((resolve) => setTimeout(resolve, 2));
-  const jobId = JSON.parse(response.trim().split("\n")[0]).result.structuredContent.jobId;
+  const jobId = JSON.parse(await startedResponse).result.structuredContent.jobId;
+  const stoppedResponse = responseFor(2);
   send(2, "codex_stop", { jobId });
-  while (!signals.includes("SIGTERM")) await new Promise((resolve) => setTimeout(resolve, 2));
+  await termed;
   child.stdin.emit("error", new Error("EPIPE"));
   await killed;
   assert.ok(signals.includes("SIGKILL"), "stdin エラー後も SIGKILL まで停止を続ける");
-  assert.ok(!response.includes('"id":2'), "終了確認までは停止応答を返さない");
+  const stopResult = JSON.parse(await stoppedResponse).result.structuredContent;
+  assert.equal(stopResult.status, "unknown", "子プロセスの終了確認前は停止済みとしない");
   child.emit("exit", null, "SIGKILL");
-  while (!response.includes('"id":2')) await new Promise((resolve) => setTimeout(resolve, 2));
-  assert.equal(JSON.parse(response.trim().split("\n")[1]).result.structuredContent.status, "stopped");
+  await goneChecked;
+  const finalStatusResponse = responseFor(3);
+  send(3, "codex_status", { jobId });
+  assert.equal(JSON.parse(await finalStatusResponse).result.structuredContent.status, "stopped");
   input.end(); await serving; await rm(root, { recursive: true, force: true });
 });
 
