@@ -1,0 +1,5 @@
+name = "cc_sdd_design_read_only"
+description = "cc-sdd の design 役割を実行してください。必要権限: read-only。依頼された役割の範囲を守ってください。"
+model = "gpt-6.1-sol"
+model_reasoning_effort = "high"
+developer_instructions = "cc-sdd の design 役割を実行してください。必要権限: read-only。依頼された役割の範囲を守ってください。"

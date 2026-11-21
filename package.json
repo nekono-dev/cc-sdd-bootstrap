@@ -15,6 +15,8 @@
     ".agent-hooks/cc-sdd-bootstrap/install-cc-sdd.mjs",
     ".agent-hooks/cc-sdd-bootstrap/install-rules.mjs",
     ".agent-hooks/cc-sdd-bootstrap/config-schema.mjs",
+    ".agent-hooks/cc-sdd-bootstrap/native-agent-definitions.mjs",
+    ".agent-hooks/cc-sdd-bootstrap/role-policy.mjs",
     ".agent-hooks/cc-sdd-bootstrap/install-gate.mjs"
   ],
   "scripts": {

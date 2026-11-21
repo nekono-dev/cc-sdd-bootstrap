@@ -1,10 +1,11 @@
 {
   "format": 1,
   "bootstrapVersion": "0.1.0",
+  "clients": "both",
   "files": {
     ".agent-hooks/cc-sdd-bootstrap/config-schema.mjs": {
       "kind": "common",
-      "sha256": "0533923ce0baa63eccbfdd36cba47c4535a18bdcb38f703fb600746d66f64b31"
+      "sha256": "3b19e4674dc7df2d89ca99bccc279110a8344fee7552effac5a39f02396c1430"
     },
     ".agent-hooks/cc-sdd-bootstrap/install-cc-sdd.mjs": {
       "kind": "common",
@@ -17,6 +18,54 @@
     ".agent-hooks/cc-sdd-bootstrap/install-rules.mjs": {
       "kind": "common",
       "sha256": "44ecf3c73e746223cba368b13efafb4ec09afb26acf656b81a4d3d9282ba46b1"
+    },
+    ".claude/agents/cc-sdd-debug.md": {
+      "kind": "common",
+      "sha256": "b44e7ba4f8e8f5f7f8557f17eed6c8a5e2a5dd54932d3cca4c86fd9a8e8d9639"
+    },
+    ".claude/agents/cc-sdd-design-read-only.md": {
+      "kind": "common",
+      "sha256": "1483859fbe760092694b6660f698d0e89cc0e72f9270c3aaf159792d1b582cf1"
+    },
+    ".claude/agents/cc-sdd-design.md": {
+      "kind": "common",
+      "sha256": "e0cc720e3d9609daaa90afe57501aa8339571ee0deb9ce13374322c87e12fe69"
+    },
+    ".claude/agents/cc-sdd-manufacture.md": {
+      "kind": "common",
+      "sha256": "53b0c9853ef98589f65fbff230eff9929be8a26ec3459a2f5d43f889db4621e3"
+    },
+    ".claude/agents/cc-sdd-research.md": {
+      "kind": "common",
+      "sha256": "c7b65bce9ed158e479950ead3d1dbeb312990f82d24d8896b300bd5e441bc36a"
+    },
+    ".claude/agents/cc-sdd-review.md": {
+      "kind": "common",
+      "sha256": "f992421ca5b578b2c43ac056847aaec9c35b6a31d4d4e0b2cad06d8e1786b0d6"
+    },
+    ".codex/agents/cc_sdd_debug.toml": {
+      "kind": "common",
+      "sha256": "95f5dbb7a8804296e479fc05cc631f24d2d4992e4dc1cd2d4635b5ea62f296a7"
+    },
+    ".codex/agents/cc_sdd_design.toml": {
+      "kind": "common",
+      "sha256": "6b6cf56c2547c782a4cddfcdd057b40fb274db5df9aa7c00bb326374df503074"
+    },
+    ".codex/agents/cc_sdd_design_read_only.toml": {
+      "kind": "common",
+      "sha256": "a909975b5a1210b6d83e5468e3288418f0edd35bbe5983ec6f4b3db03f818b05"
+    },
+    ".codex/agents/cc_sdd_manufacture.toml": {
+      "kind": "common",
+      "sha256": "d70675a7117f584c19ceda8895c01cffa4f8c57d22401082b6b227386d26bde1"
+    },
+    ".codex/agents/cc_sdd_research.toml": {
+      "kind": "common",
+      "sha256": "68547f7a50811cb943827ceca5be479a1fed1f5376b0c51f3a18672170dee24c"
+    },
+    ".codex/agents/cc_sdd_review.toml": {
+      "kind": "common",
+      "sha256": "641032e553386e6321ed9ccf588c161c1dcf5241382b3b69c5b8b9710447ce0c"
     }
   }
 }

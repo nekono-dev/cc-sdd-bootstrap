@@ -38,8 +38,8 @@ function makeFixturePackage() {
   return root;
 }
 
-function run(root, args, selectedPackageRoot = packageRoot) {
-  const result = spawnSync(process.execPath, [path.join(selectedPackageRoot, "bin/cc-sdd-bootstrap.mjs"), ...args], {
+function run(root, args, selectedPackageRoot = packageRoot, nodeArgs = []) {
+  const result = spawnSync(process.execPath, [...nodeArgs, path.join(selectedPackageRoot, "bin/cc-sdd-bootstrap.mjs"), ...args], {
     cwd: root,
     input: "",
     encoding: "utf8",
@@ -293,8 +293,22 @@ test("導入状態・git 前提・未知の指定に対応する終了コード�
 
 test("途中の書き込み失敗は済んだもの・失敗したもの・未処理を表示する", () => {
   const root = makeRepo();
-  fs.writeFileSync(path.join(root, ".claude"), "通常ファイルなので設定ファイルを書けない\n");
-  const result = run(root, ["init"]);
+  const preload = path.join(root, "fail-settings-rename.cjs");
+  fs.writeFileSync(preload, [
+    'const fs = require("node:fs");',
+    'const path = require("node:path");',
+    'const renameSync = fs.renameSync;',
+    'fs.renameSync = function (source, target, ...args) {',
+    '  if (target === path.join(process.cwd(), ".claude/settings.json")) {',
+    '    const error = new Error("EACCES: injected settings rename failure");',
+    '    error.code = "EACCES";',
+    '    throw error;',
+    '  }',
+    '  return renameSync.call(this, source, target, ...args);',
+    '};',
+    "",
+  ].join("\n"));
+  const result = run(root, ["init"], packageRoot, ["--require", preload]);
   assert.equal(result.status, 1);
   const output = result.outputText;
   assert.match(output, /済んだもの/);
@@ -302,7 +316,7 @@ test("途中の書き込み失敗は済んだもの・失敗したもの・未�
   assert.match(output, /\.claude\/settings\.json/);
   assert.match(output, /未処理のもの/);
   assert.match(output, /済んだもの:[\s\S]*失敗したもの:[\s\S]*未処理のもの:/);
-  assert.match(output, /EEXIST|ENOTDIR|ディレクトリ|directory/i);
+  assert.match(output, /EACCES/);
   assert.match(output, /権限|種類|ファイル.*ディレクトリ/);
   assert.match(output, /update.*もう一度|もう一度.*update/);
   const completed = [CONFIG_PATH, LEDGER_PATH, ...catalog.files.map((file) => file.path)];
@@ -310,11 +324,22 @@ test("途中の書き込み失敗は済んだもの・失敗したもの・未�
     assert.ok(fs.existsSync(path.join(root, item)), item);
     assert.match(output, new RegExp(item.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
   }
-  for (const item of [".gitignore", "CLAUDE.md"]) {
+  for (const item of [".claude/settings.json", ".gitignore", "CLAUDE.md"]) {
     assert.equal(fs.existsSync(path.join(root, item)), false, item);
     assert.match(output, new RegExp(item.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
   }
-  assert.equal(fs.statSync(path.join(root, ".claude")).isFile(), true);
+});
+
+test("native 生成先の通常ファイル親では適用前に失敗し、何も書かない", () => {
+  const root = makeRepo();
+  fs.mkdirSync(path.join(root, ".claude"), { recursive: true });
+  fs.writeFileSync(path.join(root, ".claude/agents"), "利用者ファイル\n");
+  const before = snapshotTree(root);
+  const result = run(root, ["init", "--clients", "claude"]);
+  assert.equal(result.status, 1);
+  assert.match(result.outputText, /\.claude\/agents/);
+  assert.match(result.outputText, /ディレクトリ|directory|種類/);
+  assertTreeSnapshot(root, before);
 });
 
 test("初期の配置物を含む導入先の update は古い入口を新しいフックに置き換える", () => {

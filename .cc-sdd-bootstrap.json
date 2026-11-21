@@ -8,5 +8,12 @@
   "codex": {
     "enabled": false
   },
-  "models": {}
+  "models": {},
+  "clients": "both",
+  "subagents": {
+    "claudeModels": {},
+    "codexModels": {},
+    "localModels": {},
+    "efforts": {}
+  }
 }

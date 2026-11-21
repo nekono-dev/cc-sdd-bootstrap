@@ -7,8 +7,118 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { catalog, LEDGER_PATH } from "../lib/catalog.mjs";
+import { generateNativeAgentDefinitions } from "../.agent-hooks/cc-sdd-bootstrap/native-agent-definitions.mjs";
+import { parseLedger, sha256 } from "../lib/ledger.mjs";
 
 const parse = (argv) => parseCliArgs(argv, configFields);
+
+test("init は選択したクライアントのネイティブ定義を記録して配置する", async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "cc-sdd-native-agent-init-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  fs.mkdirSync(path.join(root, ".git"));
+  const code = await runCli(["init", "--clients", "claude"], { cwd: root, packageRoot: path.resolve("."), interactive: false, stdout: sink(), stderr: sink() });
+  assert.equal(code, 0);
+  const defs = generateNativeAgentDefinitions({ format: 1 }, "claude");
+  const ledger = parseLedger(fs.readFileSync(path.join(root, LEDGER_PATH), "utf8"));
+  assert.equal(defs.length, 6);
+  for (const def of defs) {
+    const bytes = fs.readFileSync(path.join(root, def.relativePath));
+    assert.equal(bytes.toString(), def.content);
+    assert.equal(ledger.files[def.relativePath].sha256, sha256(bytes));
+  }
+});
+
+test("対話で選んだクライアントだけの定義を配置し、記録する", async (t) => {
+  for (const client of ["claude", "codex"]) {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), `cc-sdd-native-interactive-${client}-`));
+    t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+    fs.mkdirSync(path.join(root, ".git"));
+    fs.mkdirSync(path.join(root, client === "claude" ? ".claude/agents" : ".codex/agents"), { recursive: true });
+    const userAgent = path.join(root, client === "claude" ? ".claude/agents/custom.md" : ".codex/agents/custom.toml");
+    fs.writeFileSync(userAgent, "利用者定義\n");
+    const stdin = new (await import("node:stream")).PassThrough();
+    stdin.end(configFields.map((field) => field.path === "clients" ? client : "").join("\n") + "\n");
+    const code = await runCli(["init"], { cwd: root, packageRoot: path.resolve("."), interactive: true, stdin, stdout: sink(), stderr: sink() });
+    assert.equal(code, 0);
+    const selected = generateNativeAgentDefinitions({ format: 1 }, client);
+    const other = generateNativeAgentDefinitions({ format: 1 }, client === "claude" ? "codex" : "claude");
+    const ledger = parseLedger(fs.readFileSync(path.join(root, LEDGER_PATH), "utf8"));
+    assert.equal(fs.readFileSync(userAgent, "utf8"), "利用者定義\n");
+    for (const def of selected) assert.ok(fs.existsSync(path.join(root, def.relativePath)), def.relativePath);
+    for (const def of other) {
+      assert.equal(fs.existsSync(path.join(root, def.relativePath)), false, def.relativePath);
+      assert.equal(ledger.files[def.relativePath], undefined, def.relativePath);
+    }
+  }
+});
+
+test("native 生成先の親が通常ファイルまたは末端がディレクトリなら全体を無変更で拒否する", async (t) => {
+  for (const kind of ["parent-file", "leaf-directory"]) {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), `cc-sdd-native-invalid-${kind}-`));
+    t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+    fs.mkdirSync(path.join(root, ".git"));
+    if (kind === "parent-file") {
+      fs.mkdirSync(path.join(root, ".claude"));
+      fs.writeFileSync(path.join(root, ".claude/agents"), "利用者ファイル\n");
+    } else {
+      fs.mkdirSync(path.join(root, ".claude/agents/cc-sdd-manufacture.md"), { recursive: true });
+    }
+    const before = kind === "parent-file" ? "利用者ファイル\n" : "directory";
+    const stderr = sink();
+    const code = await runCli(["init", "--clients", "claude"], { cwd: root, packageRoot: path.resolve("."), interactive: false, stdout: sink(), stderr });
+    assert.equal(code, 1);
+    assert.match(stderr.text(), /\.claude\/agents/);
+    assert.equal(fs.existsSync(path.join(root, ".cc-sdd-bootstrap.json")), false);
+    assert.equal(fs.existsSync(path.join(root, LEDGER_PATH)), false);
+    assert.equal(kind === "parent-file" ? fs.readFileSync(path.join(root, ".claude/agents"), "utf8") : fs.statSync(path.join(root, ".claude/agents/cc-sdd-manufacture.md")).isDirectory() ? "directory" : "not-directory", before);
+  }
+});
+
+test("クライアント切替で旧管理定義だけを削除し、利用者定義を保つ", async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "cc-sdd-native-agent-switch-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  fs.mkdirSync(path.join(root, ".git"));
+  const invoke = (args) => runCli(args, { cwd: root, packageRoot: path.resolve("."), interactive: false, stdout: sink(), stderr: sink() });
+  assert.equal(await invoke(["init", "--clients", "both"]), 0);
+  const customPath = path.join(root, ".claude/agents/my-review.md");
+  fs.writeFileSync(customPath, "user owned\n");
+  assert.equal(await invoke(["update", "--clients", "claude"]), 0);
+  assert.equal(fs.existsSync(path.join(root, ".codex/agents/cc_sdd_review.toml")), false);
+  assert.equal(fs.readFileSync(customPath, "utf8"), "user owned\n");
+  const ledger = parseLedger(fs.readFileSync(path.join(root, LEDGER_PATH), "utf8"));
+  assert.ok(Object.keys(ledger.files).some((file) => file === ".claude/agents/cc-sdd-review.md"));
+  assert.ok(!Object.keys(ledger.files).some((file) => file.startsWith(".codex/agents/")));
+});
+
+test("予約名の未記録定義は衝突として扱い、計画全体を書き込まない", async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "cc-sdd-native-agent-conflict-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  fs.mkdirSync(path.join(root, ".git"));
+  fs.mkdirSync(path.join(root, ".claude/agents"), { recursive: true });
+  const target = path.join(root, ".claude/agents/cc-sdd-review.md");
+  fs.writeFileSync(target, "user owned\n");
+  const stderr = sink();
+  const code = await runCli(["init", "--clients", "claude"], { cwd: root, packageRoot: path.resolve("."), interactive: false, stdout: sink(), stderr });
+  assert.equal(code, 1);
+  assert.match(stderr.text(), /\.claude\/agents\/cc-sdd-review\.md/);
+  assert.equal(fs.existsSync(path.join(root, ".cc-sdd-bootstrap.json")), false);
+  assert.equal(fs.readFileSync(target, "utf8"), "user owned\n");
+});
+
+test("定義先の親 symlink は拒否し、参照先に触れない", async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "cc-sdd-native-agent-symlink-"));
+  const outside = fs.mkdtempSync(path.join(os.tmpdir(), "cc-sdd-native-agent-outside-"));
+  t.after(() => { fs.rmSync(root, { recursive: true, force: true }); fs.rmSync(outside, { recursive: true, force: true }); });
+  fs.mkdirSync(path.join(root, ".git"));
+  fs.symlinkSync(outside, path.join(root, ".claude"), "dir");
+  const before = fs.readdirSync(outside);
+  const stderr = sink();
+  const code = await runCli(["init", "--clients", "claude"], { cwd: root, packageRoot: path.resolve("."), interactive: false, stdout: sink(), stderr });
+  assert.equal(code, 1);
+  assert.deepEqual(fs.readdirSync(outside), before);
+  assert.equal(fs.existsSync(path.join(root, ".cc-sdd-bootstrap.json")), false);
+  assert.match(stderr.text(), /symbolic link|symlink|リンク/i);
+});
 
 test("成功表示は作成・更新・削除と変更の注記を分ける", () => {
   const text = formatSuccess({ operation: "update", plan: { changes: [

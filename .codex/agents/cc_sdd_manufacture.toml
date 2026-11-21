@@ -1,0 +1,5 @@
+name = "cc_sdd_manufacture"
+description = "cc-sdd の manufacture 役割を実行してください。必要権限: workspace-write。依頼された役割の範囲を守ってください。"
+model = "gpt-6-luna"
+model_reasoning_effort = "medium"
+developer_instructions = "cc-sdd の manufacture 役割を実行してください。必要権限: workspace-write。依頼された役割の範囲を守ってください。"
