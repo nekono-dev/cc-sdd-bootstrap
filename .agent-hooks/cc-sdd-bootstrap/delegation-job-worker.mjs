@@ -6,16 +6,20 @@ import { createHash, randomUUID } from "node:crypto";
 import { serveControl } from "./delegation-job-control.mjs";
 import { isAbsolute, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
+import { realpath } from "node:fs/promises";
 
 const ROLES = new Set(["manufacture", "review", "design", "research", "debug"]);
 const ACCESS = new Set(["read-only", "workspace-write"]);
 const FIELDS = new Set(["requestId", "project", "cwd", "role", "instruction", "skill", "taskId", "access", "readOnly", "model", "effort", "settings", "host", "candidates", "native", "options"]);
 const DEFAULT_OPERATION_TIMEOUT_MS = 5000;
+const OWNER_HEARTBEAT_INTERVAL_MS = 5000;
+const OWNER_HEARTBEAT_TTL_MS = 120000;
 const TERMINAL = new Set(["succeeded", "failed", "stopped"]);
 const STATES = new Set(["running", "succeeded", "failed", "stopped", "unknown"]);
 const identity = (value) => typeof value === "string" && value.length > 0 && value.trim() === value;
 const object = (value) => value !== null && typeof value === "object" && !Array.isArray(value);
 const onlyKeys = (value, keys) => object(value) && Object.keys(value).every((key) => keys.has(key));
+const storeSucceeded = (value) => value === true;
 const withTimeout = (promise, timeoutMs = DEFAULT_OPERATION_TIMEOUT_MS) => new Promise((resolve, reject) => {
   const timer = setTimeout(() => reject(new Error("MCP 操作が時間内に完了しません")), timeoutMs);
   Promise.resolve(promise).then((value) => { clearTimeout(timer); resolve(value); }, (error) => { clearTimeout(timer); reject(error); });
@@ -55,6 +59,12 @@ function validJob(value) {
   return onlyKeys(value, new Set(["serverId", "connectionId", "jobId"])) && [value.serverId, value.connectionId, value.jobId].every(identity);
 }
 
+function normalizeTerminalResult(value) {
+  if (!onlyKeys(value, new Set(["status", "summary", "at"])) || !TERMINAL.has(value.status) ||
+      typeof value.summary !== "string" || !Number.isFinite(value.at)) return null;
+  return { status: value.status, summary: value.summary, at: value.at };
+}
+
 function safeJobId(value) {
   return onlyKeys(value, new Set(["serverId", "connectionId", "jobId"])) && identity(value.jobId);
 }
@@ -72,10 +82,13 @@ function classifyStart(value) {
 
 /** 依頼ごとに接続を保持し、MCP の起動・照会・停止を直列化する。 */
 export function createJobWorker(deps) {
-  if (!object(deps) || Object.keys(deps).some((key) => !["select", "connect", "store", "now", "operationTimeoutMs"].includes(key)) ||
+  if (!object(deps) || Object.keys(deps).some((key) => !["select", "connect", "store", "now", "operationTimeoutMs", "isAlive", "setInterval", "clearInterval", "heartbeatIntervalMs"].includes(key)) ||
       typeof deps.select !== "function" || typeof deps.connect !== "function" || !object(deps.store) ||
       typeof deps.store.reserve !== "function" || typeof deps.store.markUnknown !== "function" || typeof deps.now !== "function" ||
-      deps.operationTimeoutMs !== undefined && (!Number.isInteger(deps.operationTimeoutMs) || deps.operationTimeoutMs < 1 || deps.operationTimeoutMs > 60000)) {
+      deps.operationTimeoutMs !== undefined && (!Number.isInteger(deps.operationTimeoutMs) || deps.operationTimeoutMs < 1 || deps.operationTimeoutMs > 60000) ||
+      deps.heartbeatIntervalMs !== undefined && (!Number.isInteger(deps.heartbeatIntervalMs) || deps.heartbeatIntervalMs < 1 || deps.heartbeatIntervalMs >= OWNER_HEARTBEAT_TTL_MS) ||
+      deps.setInterval !== undefined && typeof deps.setInterval !== "function" || deps.clearInterval !== undefined && typeof deps.clearInterval !== "function" ||
+      deps.isAlive !== undefined && typeof deps.isAlive !== "function") {
     return Object.freeze({ start: async () => ({ kind: "unavailable", reasons: ["worker の依存関係が不正です"] }), status: async () => ({ status: "unknown" }), stop: async () => ({ status: "unknown" }), release: async () => {}, isBusy: () => false });
   }
   const jobs = new Map();
@@ -90,8 +103,19 @@ export function createJobWorker(deps) {
   const close = async (entry) => {
     if (entry.closed) return;
     entry.closed = true;
+    if (entry.heartbeatTimer !== undefined) (deps.clearInterval ?? clearInterval)(entry.heartbeatTimer);
     owned.delete(entry);
     try { await entry.adapter.close?.(); } catch { /* 接続終了後も終端結果は維持 */ }
+  };
+  const maintainOwner = (entry) => {
+    if (!entry.generation || typeof deps.store.heartbeat !== "function" || entry.heartbeatTimer !== undefined) return;
+    entry.heartbeatTimer = (deps.setInterval ?? setInterval)(async () => {
+      if (entry.closed) return;
+      const heartbeat = await Promise.resolve().then(() => deps.store.heartbeat({ requestId: entry.request.requestId, project: entry.request.project, cwd: entry.request.cwd,
+        skill: entry.request.skill, taskId: entry.request.taskId, generation: entry.generation, now: deps.now() })).catch(() => false);
+      if (!storeSucceeded(heartbeat)) entry.ownerLost = true;
+    }, deps.heartbeatIntervalMs ?? OWNER_HEARTBEAT_INTERVAL_MS);
+    entry.heartbeatTimer?.unref?.();
   };
   const releaseReservation = async (request, generation) => {
     if (!request) return;
@@ -103,8 +127,21 @@ export function createJobWorker(deps) {
     } catch { /* 起動前の拒否結果を維持 */ }
   };
   const finish = async (entry, state) => {
+    if (TERMINAL.has(state.status)) {
+      const recorded = !entry.generation || typeof deps.store.recordTerminal !== "function" ? !entry.generation : await deps.store.recordTerminal({
+        requestId: entry.request.requestId, project: entry.request.project, cwd: entry.request.cwd, skill: entry.request.skill, taskId: entry.request.taskId,
+        generation: entry.generation, status: state.status, summary: typeof state.output === "string" ? state.output.slice(0, 500) : state.status, now: deps.now(),
+      }).catch(() => false);
+      if (!storeSucceeded(recorded)) {
+        entry.result = { status: "unknown", reason: "終端結果を依頼記録に保存できません。所有者を維持し、終了未確認として扱います" };
+        await deps.store.markUnknown({ requestId: entry.request.requestId, project: entry.request.project, cwd: entry.request.cwd, skill: entry.request.skill, taskId: entry.request.taskId, reason: entry.result.reason }).catch(() => false);
+        return entry.result;
+      }
+      entry.result = state;
+      await close(entry);
+      return state;
+    }
     entry.result = state;
-    if (TERMINAL.has(state.status)) await close(entry);
     return state;
   };
 
@@ -117,7 +154,11 @@ export function createJobWorker(deps) {
       try { reservation = await deps.store.reserve({ requestId: request.requestId, project: request.project, cwd: request.cwd, skill: request.skill, taskId: request.taskId }); }
       catch { return { kind: "unavailable", reasons: ["書き込み依頼を排他記録できません"] }; }
       if (!object(reservation) || reservation.kind !== "created") {
-        if (reservation?.kind === "existing") return { kind: "pending", requestId: request.requestId, reason: "同じ作業の先行記録があります" };
+        if (reservation?.kind === "existing" && reservation.status === "terminal") {
+          const terminal = normalizeTerminalResult(reservation.result);
+          return terminal ? { kind: "terminal", result: terminal } : { kind: "unavailable", reasons: ["既存の終端記録を検証できません。同じ書き込み作業は再起動しません"] };
+        }
+        if (reservation?.kind === "existing") return { kind: "pending", requestId: request.requestId, reason: "同じ作業の先行記録があります。終了を確認するまで別候補を起動できません" };
         return { kind: "unavailable", reasons: [typeof reservation?.reason === "string" ? reservation.reason : "書き込み依頼を予約できません"] };
       }
     }
@@ -158,6 +199,11 @@ export function createJobWorker(deps) {
     if (readOnly && typeof deps.store.track === "function") {
       try {
         reservation = await deps.store.track({ requestId: request.requestId, project: request.project, cwd: request.cwd, skill: request.skill, taskId: request.taskId });
+        const terminal = object(reservation) && reservation.kind === "existing" && reservation.status === "terminal" ? normalizeTerminalResult(reservation.result) : null;
+        if (terminal) {
+          await closeAdapter(adapter);
+          return { kind: "terminal", result: terminal };
+        }
         if (!object(reservation) || !["tracked", "existing"].includes(reservation.kind) || !object(reservation.record) ||
             typeof reservation.record.generation !== "string" || typeof reservation.record.controlDirectory !== "string") {
           await closeAdapter(adapter);
@@ -166,6 +212,7 @@ export function createJobWorker(deps) {
         reservationGeneration = reservation.record.generation;
         if (reservation.kind === "existing") {
           await closeAdapter(adapter);
+          if (reservation.status === "terminal") return { kind: "unavailable", reasons: ["既存の終端記録を検証できません。同じ依頼は再起動しません"] };
           return { kind: "pending", requestId: request.requestId, reason: "同じ読み取り専用依頼の接続所有者が稼働中です",
             control: { generation: reservation.record.generation, controlDirectory: reservation.record.controlDirectory } };
         }
@@ -184,8 +231,11 @@ export function createJobWorker(deps) {
       return { kind: "unavailable", reasons: [typeof result?.reason === "string" ? result.reason : "MCP が起動前に拒否しました"] };
     }
     if (result.kind === "unknown") {
-      if (!readOnly) await deps.store.markUnknown({ requestId: request.requestId, project: request.project, cwd: request.cwd, skill: request.skill, taskId: request.taskId }).catch(() => false);
+      await deps.store.markUnknown({ requestId: request.requestId, project: request.project, cwd: request.cwd, skill: request.skill, taskId: request.taskId, reason: result.reason }).catch(() => false);
       const entry = { adapter, job: object(result?.job) ? result.job : null, request, generation: reservation?.record?.generation, requestIds: reservation?.record?.requestIds ?? [request.requestId], closed: false, result: { status: "unknown", ...(typeof result?.reason === "string" ? { reason: result.reason } : {}) } };
+      if (entry.generation && typeof deps.store.recordOwner === "function") await deps.store.recordOwner({ requestId: request.requestId, project: request.project, cwd: request.cwd, skill: request.skill, taskId: request.taskId,
+        generation: entry.generation, pid: process.pid, now: deps.now() }).catch(() => false);
+      maintainOwner(entry);
       owned.add(entry);
       if (entry.job) { jobs.set(entry.job.jobId, entry); requestJobs.set(request.requestId, entry.job.jobId); }
       for (const id of reservation?.record?.requestIds ?? []) if (identity(id)) requestJobs.set(id, entry.job?.jobId);
@@ -196,6 +246,17 @@ export function createJobWorker(deps) {
     jobs.set(result.job.jobId, entry);
     requestJobs.set(request.requestId, result.job.jobId);
     for (const id of reservation?.record?.requestIds ?? []) if (identity(id)) requestJobs.set(id, result.job.jobId);
+    if (entry.generation && typeof deps.store.recordOwner === "function") {
+      const ownedRecord = await deps.store.recordOwner({ requestId: request.requestId, project: request.project, cwd: request.cwd, skill: request.skill, taskId: request.taskId,
+        generation: entry.generation, pid: process.pid, now: deps.now() }).catch(() => false);
+      if (!storeSucceeded(ownedRecord)) {
+        entry.result = { status: "unknown", reason: "所有者を依頼記録に保存できません。終了を確認できません。確認または停止してから再実行してください" };
+        await deps.store.markUnknown({ requestId: request.requestId, project: request.project, cwd: request.cwd, skill: request.skill, taskId: request.taskId, reason: entry.result.reason }).catch(() => false);
+        owned.add(entry);
+        return { kind: "pending", requestId: request.requestId, reason: "所有者を依頼記録に保存できません。終了を確認できません。確認または停止してから再実行してください" };
+      }
+    }
+    maintainOwner(entry);
     return { kind: "started", job: { serverId: result.job.serverId, connectionId: result.job.connectionId, jobId: result.job.jobId },
       ...(readOnly && reservation?.record ? { control: { generation: reservation.record.generation, controlDirectory: reservation.record.controlDirectory } } : {}) };
   }
@@ -207,8 +268,16 @@ export function createJobWorker(deps) {
       const entry = jobs.get(jobId);
       if (!entry) return { status: "unknown", reason: "この worker が所有するジョブではありません" };
       if (entry.result && TERMINAL.has(entry.result.status)) return entry.result;
+      if (entry.generation && typeof deps.store.heartbeat === "function") {
+        const heartbeat = await deps.store.heartbeat({ requestId: entry.request.requestId, project: entry.request.project, cwd: entry.request.cwd, skill: entry.request.skill, taskId: entry.request.taskId, generation: entry.generation, now: deps.now() }).catch(() => false);
+        if (!storeSucceeded(heartbeat)) return { status: "unknown", reason: "所有者の生存を依頼記録で確認できません" };
+      }
       try { return await finish(entry, normalizeState(await withTimeout(entry.adapter.status(jobId), deps.operationTimeoutMs), entry.job?.jobId)); }
-      catch { return { status: "unknown", reason: "同じ接続から状態を確認できません" }; }
+      catch {
+        await Promise.resolve(deps.store.markUnknown?.({ requestId: entry.request.requestId, project: entry.request.project, cwd: entry.request.cwd,
+          skill: entry.request.skill, taskId: entry.request.taskId, reason: "同じ接続から状態を確認できません" })).catch(() => false);
+        return { status: "unknown", reason: "同じ接続から状態を確認できません" };
+      }
     });
   }
 
@@ -220,7 +289,11 @@ export function createJobWorker(deps) {
       if (!entry) return { status: "unknown", reason: "この worker が所有するジョブではありません" };
       if (entry.result && TERMINAL.has(entry.result.status)) return entry.result;
       try { return await finish(entry, normalizeState(await withTimeout((entry.adapter.stop ?? entry.adapter.cancel)(jobId), deps.operationTimeoutMs), entry.job?.jobId)); }
-      catch { return { status: "unknown", reason: "同じ接続から停止を確認できません" }; }
+      catch {
+        await Promise.resolve(deps.store.markUnknown?.({ requestId: entry.request.requestId, project: entry.request.project, cwd: entry.request.cwd,
+          skill: entry.request.skill, taskId: entry.request.taskId, reason: "同じ接続から停止を確認できません" })).catch(() => false);
+        return { status: "unknown", reason: "同じ接続から停止を確認できません" };
+      }
     });
   }
 
@@ -272,10 +345,27 @@ export function createJobWorker(deps) {
     if (typeof deps.store.resolveControlTarget !== "function") return { kind: "unavailable", reason: "制御先を確認できません" };
     try {
       const target = await deps.store.resolveControlTarget({ requestId: request.requestId, project: request.project, cwd: request.cwd, skill: request.skill, taskId: request.taskId });
-      return onlyKeys(target, new Set(["generation", "controlDirectory"])) && typeof target.generation === "string" && /^[a-f0-9]{32}$/.test(target.generation) &&
-        target.controlDirectory === `control-${target.generation}`
-        ? { generation: target.generation, controlDirectory: target.controlDirectory }
-        : { kind: "unavailable", reason: "制御先を確認できません" };
+      if (onlyKeys(target, new Set(["kind", "result"])) && target.kind === "terminal" && onlyKeys(target.result, new Set(["status", "summary", "at"])) && TERMINAL.has(target.result.status) && typeof target.result.summary === "string" && Number.isFinite(target.result.at))
+        return { kind: "terminal", result: { status: target.result.status, summary: target.result.summary, at: target.result.at } };
+      if (!onlyKeys(target, new Set(["generation", "controlDirectory"])) || typeof target.generation !== "string" || !/^[a-f0-9]{32}$/.test(target.generation) || target.controlDirectory !== `control-${target.generation}`)
+        return { kind: "unavailable", reason: "制御先を確認できません" };
+      if (typeof deps.store.inspectOwner === "function") {
+        const owner = await deps.store.inspectOwner({ requestId: request.requestId, project: request.project, cwd: request.cwd, skill: request.skill, taskId: request.taskId,
+          generation: target.generation, now: deps.now(), heartbeatTtlMs: OWNER_HEARTBEAT_TTL_MS,
+          isAlive: deps.isAlive ?? (async (pid) => { try { process.kill(pid, 0); return true; } catch (error) { return error.code === "EPERM"; } }) });
+        if (onlyKeys(owner, new Set(["kind"])) && owner.kind === "alive") return { generation: target.generation, controlDirectory: target.controlDirectory };
+        if (onlyKeys(owner, new Set(["kind", "result"])) && owner.kind === "terminal" && onlyKeys(owner.result, new Set(["status", "summary", "at"])) && TERMINAL.has(owner.result.status) && typeof owner.result.summary === "string" && Number.isFinite(owner.result.at))
+          return { kind: "terminal", result: { status: owner.result.status, summary: owner.result.summary, at: owner.result.at } };
+        if (onlyKeys(owner, new Set(["kind", "reason"])) && owner.kind === "lost" && (owner.reason === undefined || typeof owner.reason === "string" && owner.reason.length > 0)) {
+          if (typeof deps.store.markUnknown === "function") {
+            await deps.store.markUnknown({ requestId: request.requestId, project: request.project, cwd: request.cwd,
+              skill: request.skill, taskId: request.taskId, reason: owner.reason ?? "制御所有者を確認できません。終了を確認できません。確認または停止してから再実行してください" });
+          }
+          return { kind: "unavailable", reason: owner.reason ?? "接続所有者を確認できません。終了を確認するまで再実行できません" };
+        }
+        return { kind: "unavailable", reason: "接続所有者の応答を確認できません。終了を確認するまで再実行できません" };
+      }
+      return { generation: target.generation, controlDirectory: target.controlDirectory };
     } catch { return { kind: "unavailable", reason: "制御先を確認できません" }; }
   };
   return Object.freeze({ start, status, stop, controlStatus, controlStop, controlTarget, acceptedControlRequestIds, acceptControlRequest, release, pendingJobId: () => [...owned].find((entry) => entry.result?.status === "unknown" && identity(entry.job?.jobId))?.job.jobId ?? null, isBusy: () => owned.size > 0 });
@@ -283,14 +373,15 @@ export function createJobWorker(deps) {
 
 /** 本番依存を接続し、選択した登録から Pi / Codex adapter を組み立てる。 */
 export function createDefaultJobWorker(options) {
-  if (!object(options) || Object.keys(options).some((key) => !["select", "store", "now", "connectOptions", "adapterFactory", "readTransport", "resolveRegistration", "spawnProcess"].includes(key)) ||
-      !object(options.store) || Object.keys(options.store).some((key) => !["reserve", "release", "markUnknown", "track", "releaseTrack", "resolveControlTarget"].includes(key)) ||
+  if (!object(options) || Object.keys(options).some((key) => !["select", "store", "now", "connectOptions", "adapterFactory", "readTransport", "resolveRegistration", "spawnProcess", "isAlive"].includes(key)) ||
+      !object(options.store) || Object.keys(options.store).some((key) => !["reserve", "release", "markUnknown", "track", "releaseTrack", "resolveControlTarget", "recordOwner", "heartbeat", "recordTerminal", "inspectOwner"].includes(key)) ||
       typeof options.store.reserve !== "function" || typeof options.store.markUnknown !== "function" || options.store.resolveControlTarget !== undefined && typeof options.store.resolveControlTarget !== "function" ||
       options.store.release !== undefined && typeof options.store.release !== "function" ||
       options.store.track !== undefined && typeof options.store.track !== "function" ||
       options.store.releaseTrack !== undefined && typeof options.store.releaseTrack !== "function" ||
       options.select !== undefined && typeof options.select !== "function" ||
       options.now !== undefined && typeof options.now !== "function" ||
+      options.isAlive !== undefined && typeof options.isAlive !== "function" ||
       options.connectOptions !== undefined && !object(options.connectOptions) && typeof options.connectOptions !== "function" ||
       options.adapterFactory !== undefined && typeof options.adapterFactory !== "function" ||
       options.readTransport !== undefined && typeof options.readTransport !== "function" ||
@@ -351,7 +442,7 @@ export function createDefaultJobWorker(options) {
     return selected;
   });
   select.releaseProbed = async () => { for (const adapter of adapters.values()) await closeAdapter(adapter); adapters.clear(); };
-  return createJobWorker({ select, connect, store: options.store, now: options.now ?? Date.now });
+  return createJobWorker({ select, connect, store: options.store, now: options.now ?? Date.now, ...(options.isAlive ? { isAlive: options.isAlive } : {}) });
 }
 
 /** 標準入力から依頼を一件受け、所有ジョブの終端までプロセスを維持する。 */
@@ -376,6 +467,10 @@ export async function runWorkerProcess(options) {
   });
   let request;
   try { request = JSON.parse(lines[0] ?? ""); } catch { request = null; }
+  if (object(request) && identity(request.project) && identity(request.cwd) && isAbsolute(request.project) && isAbsolute(request.cwd)) {
+    const [project, cwd] = await Promise.all([realpath(request.project).catch(() => null), realpath(request.cwd).catch(() => null)]);
+    request = project && cwd ? { ...request, project, cwd } : null;
+  }
   let worker;
   try { worker = deps.worker ?? await deps.createWorker?.(request); } catch { worker = null; }
   const raw = worker && typeof worker.start === "function" ? await worker.start(request) : { kind: "unavailable", reasons: ["worker を初期化できません"] };
@@ -386,6 +481,8 @@ export async function runWorkerProcess(options) {
     ? { kind: "started", job: { serverId: raw.job.serverId, connectionId: raw.job.connectionId, jobId: raw.job.jobId }, ...(control ? { control } : {}) }
     : object(raw) && raw.kind === "pending" && identity(raw.requestId) && typeof raw.reason === "string"
       ? { kind: "pending", requestId: raw.requestId, reason: raw.reason, ...(control ? { control } : {}) }
+      : object(raw) && onlyKeys(raw, new Set(["kind", "result"])) && raw.kind === "terminal" && onlyKeys(raw.result, new Set(["status", "summary", "at"])) && TERMINAL.has(raw.result.status) && typeof raw.result.summary === "string" && Number.isFinite(raw.result.at)
+        ? { kind: "terminal", result: { status: raw.result.status, summary: raw.result.summary, at: raw.result.at } }
       : object(raw) && raw.kind === "native" && identity(raw.agentName) && typeof raw.reason === "string"
         ? { kind: "native", agentName: raw.agentName, reason: raw.reason }
         : { kind: "unavailable", reasons: object(raw) && raw.kind === "unavailable" && Array.isArray(raw.reasons) && raw.reasons.every((item) => typeof item === "string") ? [...raw.reasons] : ["worker が認識できない結果を返しました"] };

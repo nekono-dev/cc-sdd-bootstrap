@@ -66,6 +66,9 @@ export async function resolveControlTarget(input) {
     return { kind: "unavailable", reason: "制御先の入力が不正です" };
   try {
     const result = await input.store.resolveControlTarget({ requestId: input.requestId, project: input.project, cwd: input.cwd, skill: input.skill, taskId: input.taskId });
+    if (keys(result, new Set(["kind", "result"])) && result.kind === "terminal" && keys(result.result, new Set(["status", "summary", "at"])) &&
+        new Set(["succeeded", "failed", "stopped"]).has(result.result.status) && typeof result.result.summary === "string" && Number.isFinite(result.result.at))
+      return { kind: "terminal", result: { status: result.result.status, summary: result.result.summary, at: result.result.at } };
     if (!keys(result, new Set(["generation", "controlDirectory"])) || typeof result.generation !== "string" || !/^[a-f0-9]{32}$/.test(result.generation) ||
         result.controlDirectory !== `control-${result.generation}`) return { kind: "unavailable", reason: "制御先を確認できません" };
     return { generation: result.generation, controlDirectory: result.controlDirectory };

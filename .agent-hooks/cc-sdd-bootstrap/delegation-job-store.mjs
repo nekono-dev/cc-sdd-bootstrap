@@ -8,7 +8,7 @@ const SKILL = /^kiro-[a-z0-9][a-z0-9-]*$/;
 const TASK = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
 const REQUEST = /^[A-Za-z0-9_][A-Za-z0-9._:-]{0,127}$/;
 export const isDelegationIdentifier = (value) => typeof value === "string" && REQUEST.test(value);
-const KEYS = new Set(["requestId", "project", "cwd", "skill", "taskId", "generation"]);
+const BASE_INPUT_KEYS = ["requestId", "project", "cwd", "skill", "taskId"];
 const FACTORY_KEYS = new Set(["root", "writableRoots", "resolveWorktreeRoot"]);
 const runFile = promisify(execFile);
 
@@ -30,10 +30,10 @@ export function createDelegationJobStore(options) {
     return realpath(stdout.trim());
   });
 
-  function validInput(input, allowGeneration = false) {
+  function validInput(input, optionalKeys = []) {
     return input !== null && typeof input === "object" && !Array.isArray(input) &&
-      Object.keys(input).every((key) => KEYS.has(key) && (key !== "generation" || allowGeneration)) &&
-      (Object.keys(input).length === 5 || allowGeneration && Object.keys(input).length === 6) &&
+      Object.keys(input).every((key) => BASE_INPUT_KEYS.includes(key) || optionalKeys.includes(key)) &&
+      BASE_INPUT_KEYS.every((key) => Object.hasOwn(input, key)) &&
       typeof input.requestId === "string" && REQUEST.test(input.requestId) &&
       typeof input.project === "string" && isAbsolute(input.project) &&
       typeof input.cwd === "string" && isAbsolute(input.cwd) &&
@@ -64,12 +64,15 @@ export function createDelegationJobStore(options) {
         value.controls !== undefined && (!value.controls || typeof value.controls !== "object" || Array.isArray(value.controls))) return false;
     for (const [key, record] of Object.entries(value.records)) {
       if (typeof key !== "string" || !/^[a-f0-9]{64}$/.test(key) || !record || typeof record !== "object" || Array.isArray(record) ||
-          Object.keys(record).some((field) => !["project", "skill", "taskId", "requestId", "requestIds", "status", "generation", "controlDirectory"].includes(field)) ||
+          Object.keys(record).some((field) => !["project", "skill", "taskId", "requestId", "requestIds", "status", "generation", "controlDirectory", "ownerPid", "heartbeatAt", "result", "unknownReason"].includes(field)) ||
           typeof record.project !== "string" || !isAbsolute(record.project) || typeof record.skill !== "string" || !SKILL.test(record.skill) ||
           typeof record.taskId !== "string" || !TASK.test(record.taskId) ||
           typeof record.requestId !== "string" || !REQUEST.test(record.requestId) || !Array.isArray(record.requestIds) || !record.requestIds.length ||
           record.requestIds.some((id) => typeof id !== "string" || !REQUEST.test(id)) ||
-          !["reserved", "available", "unknown", "tracking"].includes(record.status) || typeof record.generation !== "string" || !/^[a-f0-9]{32}$/.test(record.generation) ||
+          !["reserved", "available", "unknown", "tracking", "terminal"].includes(record.status) || typeof record.generation !== "string" || !/^[a-f0-9]{32}$/.test(record.generation) ||
+          record.ownerPid !== undefined && (!Number.isInteger(record.ownerPid) || record.ownerPid < 1) || record.heartbeatAt !== undefined && !Number.isFinite(record.heartbeatAt) ||
+          record.result !== undefined && (!record.result || typeof record.result !== "object" || Array.isArray(record.result) || Object.keys(record.result).some((key) => !["status", "summary", "at"].includes(key)) || !["succeeded", "failed", "stopped"].includes(record.result.status) || typeof record.result.summary !== "string" || !Number.isFinite(record.result.at)) ||
+          record.unknownReason !== undefined && typeof record.unknownReason !== "string" ||
           record.controlDirectory !== undefined && (typeof record.controlDirectory !== "string" || !/^control-[A-Za-z0-9._:-]{1,128}$/.test(record.controlDirectory))) return false;
       if (new Set(record.requestIds).size !== record.requestIds.length || record.requestIds.some((id) =>
         !Object.hasOwn(value.requests, id) || value.requests[id] !== key)) return false;
@@ -79,10 +82,15 @@ export function createDelegationJobStore(options) {
     for (const [id, key] of Object.entries(value.requests)) if (typeof id !== "string" || !REQUEST.test(id) || typeof key !== "string" ||
         !Object.hasOwn(value.records, key) || !Array.isArray(value.records[key].requestIds) || !value.records[key].requestIds.includes(id)) return false;
     for (const [id, control] of Object.entries(value.controls ?? {})) if (!REQUEST.test(id) || !control || typeof control !== "object" || Array.isArray(control) ||
-        Object.keys(control).some((field) => !["project", "skill", "taskId", "generation", "controlDirectory"].includes(field)) ||
+        Object.keys(control).some((field) => !["project", "skill", "taskId", "generation", "controlDirectory", "status", "ownerPid", "heartbeatAt", "result", "unknownReason"].includes(field)) ||
         typeof control.project !== "string" || !isAbsolute(control.project) || typeof control.skill !== "string" || !SKILL.test(control.skill) ||
         typeof control.taskId !== "string" || !TASK.test(control.taskId) || typeof control.generation !== "string" || !/^[a-f0-9]{32}$/.test(control.generation) ||
-        typeof control.controlDirectory !== "string" || !/^control-[A-Za-z0-9._:-]{1,128}$/.test(control.controlDirectory)) return false;
+        typeof control.controlDirectory !== "string" || !/^control-[A-Za-z0-9._:-]{1,128}$/.test(control.controlDirectory) ||
+        control.status !== undefined && !["tracking", "unknown", "terminal"].includes(control.status) ||
+        control.ownerPid !== undefined && (!Number.isInteger(control.ownerPid) || control.ownerPid < 1) ||
+        control.heartbeatAt !== undefined && !Number.isFinite(control.heartbeatAt) ||
+        control.result !== undefined && (!control.result || typeof control.result !== "object" || Array.isArray(control.result) || Object.keys(control.result).some((key) => !["status", "summary", "at"].includes(key)) || !["succeeded", "failed", "stopped"].includes(control.result.status) || typeof control.result.summary !== "string" || !Number.isFinite(control.result.at)) ||
+        control.unknownReason !== undefined && typeof control.unknownReason !== "string") return false;
     return true;
   }
 
@@ -111,8 +119,8 @@ export function createDelegationJobStore(options) {
     finally { await handle?.close().catch(() => {}); await rm(path, { force: true }).catch(() => {}); }
   }
 
-  async function withLedger(input, update, allowGeneration = false) {
-    if (!validInput(input, allowGeneration)) return { kind: "blocked", reason: "依頼 ID、作業ツリー、手順またはタスクを確認できません" };
+  async function withLedger(input, update, optionalKeys = []) {
+    if (!validInput(input, optionalKeys)) return { kind: "blocked", reason: "依頼 ID、作業ツリー、手順またはタスクを確認できません" };
     const cwd = await realpath(input.cwd).catch(() => null);
     let project = null;
     try {
@@ -154,6 +162,14 @@ export function createDelegationJobStore(options) {
     return withLedger(input, (current, workKey, existing, project) => {
       if (Object.hasOwn(current.controls ?? {}, input.requestId))
         return { next: null, value: { kind: "blocked", reason: "依頼 ID は既存の読み取り専用制御先に結び付いています" } };
+      if (existing?.status === "terminal") {
+        const requestIds = existing.requestIds.includes(input.requestId) ? existing.requestIds : [...existing.requestIds, input.requestId];
+        const requests = Object.assign(Object.create(null), current.requests, { [input.requestId]: workKey });
+        const records = Object.assign(Object.create(null), current.records, { [workKey]: { ...existing, requestIds } });
+        const next = requestIds.length === existing.requestIds.length && Object.hasOwn(current.requests, input.requestId)
+          ? null : { ...current, records, requests };
+        return { next, value: { kind: "existing", status: "terminal", result: existing.result } };
+      }
       if (existing?.status === "tracking") existing = undefined;
       if (existing?.status === "available" && existing.requestId === input.requestId) {
         const record = { ...existing, status: "reserved" };
@@ -169,7 +185,7 @@ export function createDelegationJobStore(options) {
           ...current, records, requests,
         };
         return { next, value: existing.status === "unknown"
-          ? { kind: "blocked", reason: "同じ書き込み作業の先行ジョブが未確定です", record: { ...existing, requestIds } }
+          ? { kind: "blocked", reason: "終了を確認できません。確認または停止してから再実行してください" }
           : { kind: "existing", record: { ...existing, requestIds } } };
       }
       const generation = randomBytes(16).toString("hex");
@@ -184,14 +200,69 @@ export function createDelegationJobStore(options) {
   }
 
   async function markUnknown(input) {
-    const result = await withLedger(input, (current, workKey, existing) => {
-      if (!existing || !existing.requestIds.includes(input.requestId)) return { next: null, value: false };
-      const record = { ...existing, status: "unknown" };
-      const records = Object.assign(Object.create(null), current.records);
-      records[workKey] = record;
-      return { next: { ...current, records }, value: true };
-    });
+    if (input?.reason !== undefined && typeof input.reason !== "string") return false;
+    const result = await withLedger(input, (current, workKey, existing, project) => {
+      const reason = typeof input.reason === "string" ? input.reason.slice(0, 200) : "終了を確認できません。確認または停止してから再実行してください";
+      if (existing && existing.status !== "terminal" && existing.requestIds.includes(input.requestId)) {
+        const records = Object.assign(Object.create(null), current.records, { [workKey]: { ...existing, status: "unknown", unknownReason: reason } });
+        return { next: { ...current, records }, value: true };
+      }
+      const control = current.controls?.[input.requestId];
+      if (control && control.status !== "terminal" && control.project === project && control.skill === input.skill && control.taskId === input.taskId) {
+        const controls = Object.assign(Object.create(null), current.controls, { [input.requestId]: { ...control, status: "unknown", unknownReason: reason } });
+        return { next: { ...current, controls }, value: true };
+      }
+      return { next: null, value: false };
+    }, ["reason"]);
     return result === true;
+  }
+
+  async function updateOwner(input, update, operationKeys) {
+    const result = await withLedger(input, (current, workKey, existing, project) => {
+      if (existing && existing.requestIds.includes(input.requestId) && existing.project === project &&
+          existing.skill === input.skill && existing.taskId === input.taskId && existing.generation === input.generation) {
+        if (existing.status === "terminal") return { next: null, value: false };
+        const record = update(existing);
+        const records = Object.assign(Object.create(null), current.records, { [workKey]: record });
+        return { next: { ...current, records }, value: true };
+      }
+      const controls = Object.assign(Object.create(null), current.controls);
+      const control = controls[input.requestId];
+      if (!control || control.project !== project || control.skill !== input.skill || control.taskId !== input.taskId ||
+          control.generation !== input.generation || control.status === "terminal") return { next: null, value: false };
+      const record = update({ ...control, status: control.status ?? "tracking" });
+      controls[input.requestId] = record;
+      return { next: { ...current, controls }, value: true };
+    }, ["generation", ...operationKeys]);
+    return result === true;
+  }
+  async function recordOwner(input) {
+    if (!input || Object.keys(input).some((key) => ![...BASE_INPUT_KEYS, "generation", "pid", "now"].includes(key)) || !Number.isInteger(input.pid) || input.pid < 1 || !Number.isFinite(input.now) || typeof input.generation !== "string" || !/^[a-f0-9]{32}$/.test(input.generation)) return false;
+    return updateOwner(input, (record) => ({ ...record, ownerPid: input.pid, heartbeatAt: input.now }), ["pid", "now"]);
+  }
+  async function heartbeat(input) {
+    if (!input || Object.keys(input).some((key) => ![...BASE_INPUT_KEYS, "generation", "now"].includes(key)) || !Number.isFinite(input.now) || typeof input.generation !== "string" || !/^[a-f0-9]{32}$/.test(input.generation)) return false;
+    return updateOwner(input, (record) => ({ ...record, heartbeatAt: input.now }), ["now"]);
+  }
+  async function recordTerminal(input) {
+    if (!input || Object.keys(input).some((key) => ![...BASE_INPUT_KEYS, "generation", "status", "summary", "now"].includes(key)) || typeof input.generation !== "string" || !/^[a-f0-9]{32}$/.test(input.generation) || !new Set(["succeeded", "failed", "stopped"]).has(input.status) || typeof input.summary !== "string" || !Number.isFinite(input.now)) return false;
+    return updateOwner(input, (record) => ({ ...record, status: "terminal", result: { status: input.status, summary: input.summary.slice(0, 500), at: input.now }, unknownReason: undefined }), ["status", "summary", "now"]);
+  }
+  async function inspectOwner(input) {
+    if (!input || Object.keys(input).some((key) => ![...BASE_INPUT_KEYS, "generation", "now", "heartbeatTtlMs", "isAlive"].includes(key)) || typeof input.generation !== "string" || !/^[a-f0-9]{32}$/.test(input.generation) || !Number.isFinite(input.now) || !Number.isFinite(input.heartbeatTtlMs) || input.heartbeatTtlMs < 0 || typeof input.isAlive !== "function") return { kind: "unknown", reason: "所有者を確認できません" };
+    const found = await withLedger(input, (current, key, record, project) => {
+      const control = current.controls?.[input.requestId];
+      const match = record?.generation === input.generation ? record
+        : control?.generation === input.generation && control.project === project && control.skill === input.skill && control.taskId === input.taskId ? control : null;
+      return { next: null, value: match };
+    }, ["generation", "now", "heartbeatTtlMs", "isAlive"]);
+    if (!found) return { kind: "unknown", reason: "所有者を確認できません" };
+    if (found.status === "terminal") return { kind: "terminal", result: found.result };
+    let alive = false;
+    try { alive = await input.isAlive(found.ownerPid) === true; } catch {}
+    if (!alive || !Number.isFinite(found.heartbeatAt) || input.now - found.heartbeatAt > input.heartbeatTtlMs)
+      return { kind: "lost", reason: "制御所有者を確認できません。終了を確認できません。確認または停止してから再実行してください" };
+    return { kind: "alive" };
   }
 
   /** 読み取り専用ジョブの制御先を保存する。書き込み予約の重複判定には使わない。 */
@@ -202,9 +273,10 @@ export function createDelegationJobStore(options) {
       const prior = Object.hasOwn(current.controls ?? {}, input.requestId) ? current.controls[input.requestId] : undefined;
       if (prior && (prior.project !== project || prior.skill !== input.skill || prior.taskId !== input.taskId))
         return { next: null, value: { kind: "blocked", reason: "依頼 ID が別の作業に結び付いています" } };
+      if (prior?.status === "terminal") return { next: null, value: { kind: "existing", status: "terminal", result: prior.result } };
       if (prior) return { next: null, value: { kind: "existing", record: prior } };
       const generation = randomBytes(16).toString("hex");
-      const record = { project, skill: input.skill, taskId: input.taskId, generation, controlDirectory: `control-${generation}` };
+      const record = { project, skill: input.skill, taskId: input.taskId, generation, controlDirectory: `control-${generation}`, status: "tracking" };
       const controls = Object.assign(Object.create(null), current.controls, { [input.requestId]: record });
       return { next: { ...current, controls }, value: { kind: "tracked", record } };
     });
@@ -228,25 +300,30 @@ export function createDelegationJobStore(options) {
   async function resolveControlTarget(input) {
     return withLedger(input, (current, workKey, existing, project) => {
       const control = Object.hasOwn(current.controls ?? {}, input.requestId) ? current.controls[input.requestId] : undefined;
+      if (control && control.project === project && control.skill === input.skill && control.taskId === input.taskId && control.status === "terminal")
+        return { next: null, value: { kind: "terminal", result: control.result } };
       if (control && control.project === project && control.skill === input.skill && control.taskId === input.taskId)
         return { next: null, value: { generation: control.generation, controlDirectory: control.controlDirectory } };
+      if (existing?.status === "terminal" && existing.requestIds.includes(input.requestId))
+        return { next: null, value: { kind: "terminal", result: existing.result } };
       if (!existing || !existing.requestIds.includes(input.requestId) || !existing.controlDirectory) return { next: null, value: null };
       return { next: null, value: { generation: existing.generation, controlDirectory: existing.controlDirectory } };
     });
   }
 
   async function releaseTrack(input) {
-    return withLedger(input, (current) => {
+    const result = await withLedger(input, (current) => {
       const control = Object.hasOwn(current.controls ?? {}, input.requestId) ? current.controls[input.requestId] : undefined;
       if (!control || control.generation !== input.generation || control.project !== input.project || control.skill !== input.skill || control.taskId !== input.taskId)
         return { next: null, value: false };
       const controls = Object.assign(Object.create(null), current.controls);
       delete controls[input.requestId];
       return { next: { ...current, controls }, value: true };
-    }, true);
+    }, ["generation"]);
+    return result === true;
   }
 
-  return Object.freeze({ reserve, release, markUnknown, track, releaseTrack, resolveControlTarget });
+  return Object.freeze({ reserve, release, markUnknown, track, releaseTrack, resolveControlTarget, recordOwner, heartbeat, recordTerminal, inspectOwner });
 }
 
 function inside(parent, child) {

@@ -152,7 +152,7 @@ test("実 worker の終端状態を観測するまで process runner が所有�
   const adapter = { ...harness().adapter, async status() { statusCalls++; return statusCalls === 1 ? { status: "running" } : { status: "succeeded" }; }, async close() { closed++; } };
   const worker = createJobWorker({ select: async () => ({ kind: "mcp", candidate: {}, model: "m", access: "workspace-write", effort: "high" }), connect: async () => adapter, store: { reserve: async () => ({ kind: "created" }), release: async () => true, markUnknown: async () => true }, now: Date.now });
   const running = runWorkerProcess({ stdin: input, stdout: output, deps: { worker } });
-  input.write(`${JSON.stringify(request)}\n`);
+  input.write(`${JSON.stringify({ ...request, project: process.cwd(), cwd: process.cwd() })}\n`);
   const result = await running;
   assert.equal(result.kind, "started");
   assert.ok(statusCalls > 0, "worker が状態をポーリングする");
@@ -332,6 +332,39 @@ test("状態照会が期限切れでも後続の停止要求を実行する", as
   assert.equal(stops, 1);
 });
 
+test("状態照会が保留中も独立 heartbeat が所有者を生存扱いに保つ", async () => {
+  const base = harness();
+  let beat;
+  let heartbeatAt = 10;
+  let now = 10;
+  let releaseStatus;
+  const generation = "a".repeat(32);
+  const store = {
+    reserve: async () => ({ kind: "created", record: { generation, requestIds: [request.requestId] } }),
+    recordOwner: async () => true,
+    heartbeat: async (input) => { heartbeatAt = input.now; return true; },
+    recordTerminal: async () => true,
+    markUnknown: async () => true,
+    resolveControlTarget: async () => ({ generation, controlDirectory: `control-${generation}` }),
+    inspectOwner: async ({ now: at, heartbeatTtlMs }) => at - heartbeatAt > heartbeatTtlMs ? { kind: "lost", reason: "期限切れ" } : { kind: "alive" },
+  };
+  const worker = createJobWorker({ select: async () => ({ kind: "mcp", candidate: {}, model: "m", access: "workspace-write", effort: "high" }), connect: async () => ({
+    ...base.adapter,
+    status: () => new Promise((resolve) => { releaseStatus = () => resolve({ status: "running" }); }),
+  }), store, now: () => now, operationTimeoutMs: 60000,
+    setInterval: (callback) => { beat = callback; return 1; }, clearInterval: () => {}, heartbeatIntervalMs: 5 });
+  assert.equal((await worker.start(request)).kind, "started");
+  const pendingStatus = worker.status("j");
+  await new Promise((resolve) => setImmediate(resolve));
+  now = 20000;
+  await beat();
+  const target = await worker.controlTarget({ requestId: request.requestId, project: request.project, cwd: request.cwd, skill: request.skill, taskId: request.taskId });
+  assert.equal(target.generation, generation, `照会中の所有者を生存扱いにする: 実際=${JSON.stringify(target)}`);
+  releaseStatus();
+  await pendingStatus;
+  await worker.stop("j");
+});
+
 test("共有キュー待機中に期限切れとなった制御停止は実行しない", async () => {
   const base = harness();
   let releaseStatus;
@@ -395,7 +428,7 @@ test("pending の既知 jobId は process runner が同じ worker 接続で終�
   };
   const worker = createJobWorker({ select: async () => ({ kind: "mcp", candidate: {}, model: "m", access: "workspace-write", effort: "high" }), connect: async () => adapter, store: { reserve: async () => ({ kind: "created" }), release: async () => true, markUnknown: async () => true }, now: Date.now });
   const running = runWorkerProcess({ stdin: input, stdout: output, deps: { worker } });
-  input.end(`${JSON.stringify(request)}\n`);
+  input.end(`${JSON.stringify({ ...request, project: process.cwd(), cwd: process.cwd() })}\n`);
   const result = await running;
   assert.equal(result.kind, "pending");
   assert.equal(statusCalls, 1);

@@ -28,6 +28,37 @@ test("same work resend under another request ID attaches exclusively to original
   } finally { await rm(f.base, { recursive: true, force: true }); }
 });
 
+test("terminal と owner を記録し、後続照会と unknown の書き込み再送を安全に扱う", async () => {
+  const f = await fixture();
+  try {
+    const input = { requestId: "terminal-a", project: f.project, cwd: f.project, skill: "kiro-implement", taskId: "4.5-terminal" };
+    const created = await f.store.reserve(input);
+    const generation = created.record.generation;
+    assert.equal(await f.store.recordOwner({ requestId: input.requestId, project: input.project, cwd: input.cwd, skill: input.skill, taskId: input.taskId, generation, pid: 987654321, now: 10 }), true);
+    assert.equal(await f.store.heartbeat({ ...input, generation, now: 20 }), true);
+    assert.deepEqual(await f.store.inspectOwner({ ...input, generation, now: 21, heartbeatTtlMs: 5, isAlive: () => true }), { kind: "alive" });
+    const terminal = { ...input, generation, status: "succeeded", summary: "完了", now: 30 };
+    assert.equal(await f.store.recordTerminal(terminal), true);
+    assert.deepEqual(await f.store.inspectOwner({ ...input, generation, now: 31, heartbeatTtlMs: 5, isAlive: () => false }), { kind: "terminal", result: { status: "succeeded", summary: "完了", at: 30 } });
+    assert.deepEqual(await f.store.reserve({ ...input, requestId: "terminal-b" }), { kind: "existing", status: "terminal", result: { status: "succeeded", summary: "完了", at: 30 } });
+    assert.deepEqual(await f.store.resolveControlTarget({ ...input, requestId: "terminal-b" }), { kind: "terminal", result: { status: "succeeded", summary: "完了", at: 30 } });
+    assert.equal(await f.store.markUnknown({ ...input, reason: "秘密指示は含めない" }), false);
+    assert.equal((await f.store.reserve({ ...input, requestId: "terminal-c" })).status, "terminal");
+  } finally { await rm(f.base, { recursive: true, force: true }); }
+});
+
+test("unknown は書き込み再送を別依頼 ID でも止め、read-only track は許可する", async () => {
+  const f = await fixture();
+  try {
+    const input = { requestId: "unknown-a", project: f.project, cwd: f.project, skill: "kiro-implement", taskId: "4.5-unknown" };
+    const record = (await f.store.reserve(input)).record;
+    assert.equal(await f.store.recordOwner({ ...input, generation: record.generation, pid: 987654321, now: 1 }), true);
+    assert.equal(await f.store.markUnknown({ ...input, reason: "connection lost" }), true);
+    assert.deepEqual(await f.store.reserve({ ...input, requestId: "unknown-b" }), { kind: "blocked", reason: "終了を確認できません。確認または停止してから再実行してください" });
+    assert.equal((await f.store.track({ ...input, requestId: "readonly-retry" })).kind, "tracked");
+  } finally { await rm(f.base, { recursive: true, force: true }); }
+});
+
 test("稼働中の書き込み予約と同じ依頼 ID への read-only track は制御先を変更しない", async () => {
   const f = await fixture();
   try {
@@ -53,6 +84,28 @@ test("read-only track 後の同じ依頼 ID の書き込み予約は拒否し、
     const target = await f.store.resolveControlTarget(input);
     assert.equal(target.generation, tracked.record.generation, "拒否後も元の read-only 所有世代を保持する");
     assert.equal(target.controlDirectory, tracked.record.controlDirectory);
+  } finally { await rm(f.base, { recursive: true, force: true }); }
+});
+
+test("owner updates reject mismatched request, work identity, and generation without changing records", async () => {
+  const f = await fixture();
+  try {
+    const write = { requestId: "owner-a", project: f.project, cwd: f.project, skill: "kiro-implement", taskId: "4.5-owner" };
+    const reserved = (await f.store.reserve(write)).record;
+    await f.store.reserve({ ...write, requestId: "owner-b" });
+    const read = { requestId: "owner-read", project: f.project, cwd: f.project, skill: "kiro-review", taskId: "4.5-read" };
+    const tracked = (await f.store.track(read)).record;
+    const owner = (request, generation) => ({ requestId: request.requestId, project: request.project, cwd: request.cwd, skill: request.skill, taskId: request.taskId, generation, now: 10 });
+    assert.equal(await f.store.recordOwner({ ...owner({ ...write, requestId: "outsider" }, reserved.generation), pid: 123 }), false);
+    assert.equal(await f.store.recordOwner({ ...owner({ ...read, taskId: "other-task" }, tracked.generation), pid: 123 }), false);
+    assert.equal(await f.store.recordOwner({ ...owner(read, "0".repeat(32)), pid: 123 }), false);
+    assert.equal(await f.store.heartbeat({ ...owner({ ...write, requestId: "outsider" }, reserved.generation), now: 20 }), false);
+    assert.equal(await f.store.heartbeat({ ...owner({ ...read, skill: "kiro-implement" }, tracked.generation), now: 20 }), false);
+    assert.equal(await f.store.recordTerminal({ ...owner({ ...write, requestId: "outsider" }, reserved.generation), status: "succeeded", summary: "誤", now: 30 }), false);
+    assert.equal(await f.store.recordTerminal({ ...owner({ ...read, taskId: "other-task" }, tracked.generation), status: "succeeded", summary: "誤", now: 30 }), false);
+    assert.equal(await f.store.recordOwner({ ...owner({ ...write, requestId: "owner-b" }, reserved.generation), pid: 123 }), true);
+    assert.equal(await f.store.heartbeat({ ...owner(read, tracked.generation), now: 20 }), true);
+    assert.equal(await f.store.recordTerminal({ ...owner(read, tracked.generation), status: "succeeded", summary: "正", now: 30 }), true);
   } finally { await rm(f.base, { recursive: true, force: true }); }
 });
 
