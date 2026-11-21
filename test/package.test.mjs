@@ -47,6 +47,9 @@ test('npm package contains only the intended runtime files', (t) => {
   for (const file of [...libraryFiles, ...catalog.files.map(({ path: filePath }) => filePath)]) {
     assert.ok(files.has(file), `${file} が同梱されていません`);
   }
+  for (const file of ['.agent-hooks/cc-sdd-bootstrap/delegation-registry.mjs', '.agent-hooks/cc-sdd-bootstrap/delegation-mcp.mjs']) {
+    assert.ok(files.has(file), `${file} が同梱されていません`);
+  }
 
   assert.ok(!files.has('.agent-hooks/cc-sdd-bootstrap/installed.json'), '配置の記録が同梱されています');
   for (const file of files) {

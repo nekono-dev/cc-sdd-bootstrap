@@ -26,8 +26,8 @@ const fakeRun = (table) => {
   return { run, calls };
 };
 
-const claudeDetail = ({ status = "✓ Connected", scope = "Project config (shared via .mcp.json)", args = "server.mjs", env = "TOKEN=secret" } = {}) =>
-  [`worker:`, `  Scope: ${scope}`, `  Status: ${status}`, `  Type: stdio`, `  Command: node`, `  Args: ${args}`, `  Environment:`, `    ${env}`].join("\n");
+const claudeDetail = ({ status = "✓ Connected", scope = "Project config (shared via .mcp.json)", command = "node", args = "server.mjs", env = "TOKEN=secret" } = {}) =>
+  [`worker:`, `  Scope: ${scope}`, `  Status: ${status}`, `  Type: stdio`, `  Command: ${command}`, `  Args: ${args}`, `  Environment:`, `    ${env}`].join("\n");
 
 test("承認・信頼済みの同一登録だけを解決し、秘密値を診断に含めない", () => {
   const e = entry();
@@ -45,6 +45,14 @@ test("eligible の分類・再解決結果に秘密値を含まない transportF
   assert.equal(classified.transportFingerprint, fingerprintTransport(e.transport));
   assert.equal(resolved.transportFingerprint, fingerprintTransport(e.transport));
   assert.equal(JSON.stringify(resolved).includes("secret"), false);
+});
+
+test("Claude の承認済み user 登録は検証可能な接続指紋を持つ", async () => {
+  const fake = fakeRun({ "claude mcp list": "worker: x\n", "claude mcp get worker": claudeDetail({ scope: "User config (available in all your projects)" }) });
+  const result = (await listRegistrations("claude", { cwd: "/repo", run: fake.run }))[0];
+  assert.equal(result.scope, "user");
+  assert.equal(result.status, "eligible");
+  assert.equal(result.transportFingerprint, fingerprintTransport({ type: "stdio", command: "node", args: ["server.mjs"], env: { TOKEN: "secret" } }));
 });
 
 test("系統は確認済みで一致するときだけ登録を解決する", () => {
@@ -134,6 +142,16 @@ test("Claude: 承認待ちは pending、接続確認済みのプロジェクト�
   const again = await listRegistrations("claude", { cwd: "/repo", run: ok.run });
   const resolved = resolveRegistration(listed, { family: "claude", scope: "project", registrationName: "worker", registrationId: again[0].registrationId }, { verifiedFamily: "claude" });
   assert.equal(resolved.status, "eligible");
+});
+
+test("管理対象 Codex MCP の実際の引用 Args 表示を登録解決し、能力確認へ接続できる", async () => {
+  const args = '-c "repo_root=\\\"$(git rev-parse --show-toplevel)\\\" && exec node \\\"$repo_root/.agent-hooks/cc-sdd-bootstrap/codex-agent-mcp.mjs\\\""';
+  const fake = fakeRun({ "claude mcp list": "cc-sdd-codex: sh -c\n", "claude mcp get cc-sdd-codex": claudeDetail({ command: "sh", args }) });
+  const [listed] = await listRegistrations("claude", { cwd: "/repo", run: fake.run });
+  assert.equal(listed.status, "eligible");
+  assert.equal(listed.transportFingerprint, fingerprintTransport({ type: "stdio", command: "sh", args: ["-c", 'repo_root="$(git rev-parse --show-toplevel)" && exec node "$repo_root/.agent-hooks/cc-sdd-bootstrap/codex-agent-mcp.mjs"'], env: { TOKEN: "secret" } }));
+  const saved = { family: "codex", scope: "project", registrationName: "cc-sdd-codex", registrationId: listed.registrationId };
+  assert.equal(resolveRegistration(listed, saved, { verifiedFamily: "codex" }).status, "eligible");
 });
 
 test("Claude: 接続状態が変わっても同一登録と扱い、引数が変われば差し替えとして拒否する", async () => {
@@ -578,4 +596,10 @@ test("Codex: 設定元の実体（file / dotCodexFolder）が無い設定元は 
     const [result] = await listRegistrations("codex", { cwd: "/repo", run, appServer: fakeAppServer(codexResult({ origins, layers: [userLayer, projectLayer(null)] })) });
     assert.equal(result.status, "unknown");
   }
+});
+
+test("空の args と env は未指定と同じ transport 指紋になる", () => {
+  const fromClaude = { type: "stdio", command: "node" };
+  const fromProjectConfig = { type: "stdio", command: "node", args: [], env: {} };
+  assert.equal(fingerprintTransport(fromProjectConfig), fingerprintTransport(fromClaude));
 });

@@ -97,6 +97,7 @@ test("アンインストールでは記録した登録だけを削除し、他�
   assert.equal(uninstall.blocks.length, 0);
 });
 
+
 test("無効化時に登録書き込みが失敗しても、再計画で管理登録を削除できる", () => {
   const installed = makePlan(input());
   const managed = registrationFrom(installed);

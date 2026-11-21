@@ -363,6 +363,18 @@ test("接続時に承認済み登録を再解決し、stdio の指紋一致を�
   }
 });
 
+test("再解決結果に接続指紋が欠落または不正なら起動前に拒否する", async () => {
+  for (const fingerprint of [undefined, "invalid"]) {
+    let spawned = false;
+    const resolve = async (registration) => ({ ...registration, ...(fingerprint === undefined ? {} : { transportFingerprint: fingerprint }) });
+    await assert.rejects(mcp.connectStdioRegistration({ registration: piRegistration(),
+      saved: { family: "pi", scope: "project", registrationName: "pi-agent", registrationId: "registry-id" },
+      verifiedFamily: "pi", readTransport: async () => transport, resolveRegistration: resolve,
+      spawnProcess: () => { spawned = true; return fakeServer().child; } }), /接続情報/);
+    assert.equal(spawned, false, "拒否時は MCP プロセスを起動しない");
+  }
+});
+
 test("未対応または欠落した initialize protocolVersion はツール照会前に拒否して子を解放する", async () => {
   for (const protocolVersion of ["2025-11-25", null]) {
     const fake = fakeServer({ protocolVersion });

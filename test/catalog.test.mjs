@@ -100,6 +100,13 @@ test("files はセッション導入とサブエージェントポリシーで�
       [`${DEPLOY_DIR}/install-rules.mjs`, "common", false],
       [`${DEPLOY_DIR}/config-schema.mjs`, "common", false],
       [`${DEPLOY_DIR}/install-gate.mjs`, "common", false],
+      [`${DEPLOY_DIR}/delegation-registry.mjs`, "common", false],
+      [`${DEPLOY_DIR}/delegation-mcp.mjs`, "common", false],
+      [`${DEPLOY_DIR}/delegation-select.mjs`, "common", false],
+      [`${DEPLOY_DIR}/delegation-job-store.mjs`, "common", false],
+      [`${DEPLOY_DIR}/delegation-job-worker.mjs`, "common", false],
+      [`${DEPLOY_DIR}/delegation-job-control.mjs`, "common", false],
+      [`${DEPLOY_DIR}/codex-agent-mcp.mjs`, "common", false],
       ...["native-agent-definitions.mjs", "role-policy.mjs", "native-agent-gate.mjs", "kiro-delegation-context.mjs", "claude-native-agent-adapter.mjs", "claude-observation-store.mjs", "codex-native-agent-adapter.mjs", "subagent-model-policy-hook.mjs"].map((name) => [`${DEPLOY_DIR}/${name}`, "common", false]),
     ],
   );

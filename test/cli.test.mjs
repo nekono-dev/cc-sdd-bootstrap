@@ -263,8 +263,16 @@ test("init に全ての指定を正しい型で渡せる", () => {
     operation: "init",
     given: { "ccSdd.version": "3.2.0", "ccSdd.lang": "en", "codex.enabled": true, models: { impl: "opus" } },
     force: true,
+    delegationOrder: [],
   });
 });
+
+test("委任順序の指定は明示形式だけを受け付ける", () => {
+  assert.deepEqual(parse(["update", "--delegation-order", "pi:local=id-1,id-2"]).delegationOrder, ["pi:local=id-1,id-2"]);
+  assert.equal(parse(["update", "--delegation-order", "pi:local=id-1,id-1"]).kind, "usage-error");
+  assert.deepEqual(parse(["update", "--delegation-order", "pi:local="]).delegationOrder, ["pi:local="]);
+});
+
 
 test("真偽は yes/no/true/false を受け付ける", () => {
   for (const [v, exp] of [["yes", true], ["no", false], ["true", true], ["False", false]]) {
@@ -599,6 +607,48 @@ test("旧設定の無指定更新は両方を補い、導入対象と委任設�
   assert.notEqual(invalid.code, 0);
   assert.match(invalid.stderr, /clients/);
   assert.deepEqual(read(configPath), saved);
+});
+
+test("登録探査から能力確認・選択・設定再読込までを CLI 統合で通す", async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "cc-sdd-delegation-integration-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  fs.mkdirSync(path.join(root, ".git"));
+  const stdout = sink(), stderr = sink();
+  const row = { host: "claude", name: "agent", scope: "project", registrationId: "reg-1", status: "eligible" };
+  const code = await runCli(["init", "--clients", "claude"], { cwd: root, packageRoot: path.resolve("."), interactive: false, stdout, stderr,
+    listRegistrations: async () => [row],
+    verifyRegistration: async () => ({ kind: "agent", harness: "pi", tier: "local", models: [{ id: "m1" }] }),
+    delegationSelection: [{ host: "claude", tier: "local", order: ["reg-1"] }],
+  });
+  assert.equal(code, 0, stderr.text());
+  for (const file of ["codex-agent-mcp.mjs", "delegation-select.mjs", "delegation-job-worker.mjs", "delegation-job-control.mjs", "delegation-job-store.mjs"]) {
+    assert.ok(fs.existsSync(path.join(root, ".agent-hooks/cc-sdd-bootstrap", file)), file);
+  }
+  const saved = JSON.parse(fs.readFileSync(path.join(root, ".cc-sdd-bootstrap.json"), "utf8"));
+  assert.deepEqual(saved.delegation.claude.local, [{ family: "pi", scope: "project", registrationName: "agent", registrationId: "reg-1", models: {} }]);
+  assert.match(stdout.text(), /agent/);
+});
+
+test("管理対象 Codex MCP の削除更新は委任候補の追加予定と表示しない", async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "cc-sdd-delegation-removal-status-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  fs.mkdirSync(path.join(root, ".git"));
+  const invoke = async (args) => {
+    const stdout = sink(), stderr = sink();
+    const code = await runCli(args, { cwd: root, packageRoot: path.resolve("."), interactive: false, stdout, stderr,
+      listRegistrations: async () => [], verifyRegistration: async () => null });
+    return { code, stdout: stdout.text(), stderr: stderr.text() };
+  };
+  assert.equal((await invoke(["init", "--clients", "claude", "--codex", "yes"])).code, 0);
+  assert.ok(fs.existsSync(path.join(root, ".mcp.json")), "管理対象 Codex MCP 登録が作成される");
+  const settingsPath = path.join(root, ".cc-sdd-bootstrap.json");
+  const settings = JSON.parse(fs.readFileSync(settingsPath, "utf8"));
+  settings.codex.enabled = false;
+  fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2) + "\n");
+  const updated = await invoke(["update"]);
+  assert.equal(updated.code, 0, updated.stderr);
+  assert.doesNotMatch(updated.stdout, /cc-sdd-codex.*追加予定|追加予定.*cc-sdd-codex/);
+  assert.match(updated.stdout, /cc-sdd-codex \(削除予定\)/);
 });
 
 test("Codex 導入の成功と変更なしで信頼設定・フック承認と上書き指示を案内する", async (t) => {

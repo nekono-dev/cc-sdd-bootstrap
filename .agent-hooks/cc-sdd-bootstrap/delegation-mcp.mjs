@@ -43,7 +43,8 @@ export async function connectStdioRegistration({ registration, saved, verifiedFa
     const current = await resolveRegistration(registration, saved, verifiedFamily);
     if (!isObject(current) || current.status !== "eligible") throw fail("登録が承認済みではありません");
     transport = validateRegistration(current, saved, verifiedFamily, await readTransport(current));
-    if (typeof current.transportFingerprint !== "string" || fingerprintTransport(transport) !== current.transportFingerprint) throw fail("接続情報が承認済み登録と一致しません");
+    if (typeof current.transportFingerprint !== "string" || !/^[a-f0-9]{64}$/.test(current.transportFingerprint) ||
+        fingerprintTransport(transport) !== current.transportFingerprint) throw fail("接続情報が承認済み登録と一致しません");
   }
   catch (error) { if (error instanceof Error) throw error; throw fail("登録情報を読み直せません"); }
   let child;

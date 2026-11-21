@@ -23,7 +23,14 @@
     ".agent-hooks/cc-sdd-bootstrap/claude-native-agent-adapter.mjs",
     ".agent-hooks/cc-sdd-bootstrap/claude-observation-store.mjs",
     ".agent-hooks/cc-sdd-bootstrap/codex-native-agent-adapter.mjs",
-    ".agent-hooks/cc-sdd-bootstrap/subagent-model-policy-hook.mjs"
+    ".agent-hooks/cc-sdd-bootstrap/subagent-model-policy-hook.mjs",
+    ".agent-hooks/cc-sdd-bootstrap/delegation-registry.mjs",
+    ".agent-hooks/cc-sdd-bootstrap/delegation-mcp.mjs",
+    ".agent-hooks/cc-sdd-bootstrap/delegation-select.mjs",
+    ".agent-hooks/cc-sdd-bootstrap/delegation-job-store.mjs",
+    ".agent-hooks/cc-sdd-bootstrap/delegation-job-worker.mjs",
+    ".agent-hooks/cc-sdd-bootstrap/delegation-job-control.mjs",
+    ".agent-hooks/cc-sdd-bootstrap/codex-agent-mcp.mjs"
   ],
   "scripts": {
     "test": "node --test \"test/**/*.test.mjs\""

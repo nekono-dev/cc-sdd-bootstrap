@@ -50,6 +50,11 @@ function canonical(value) {
 export function fingerprintTransport(transport) {
   if (!transport || typeof transport !== "object" || Array.isArray(transport) || typeof transport.type !== "string") return null;
   const safe = { ...transport };
+  // cwd は起動先であり、登録 transport 自体の承認指紋には含めない。
+  delete safe.cwd;
+  // Claude の詳細表示とホスト設定では空の任意項目の表現が異なる。
+  if (Array.isArray(safe.args) && safe.args.length === 0) delete safe.args;
+  if (safe.env && typeof safe.env === "object" && !Array.isArray(safe.env) && Object.keys(safe.env).length === 0) delete safe.env;
   if (safe.env && typeof safe.env === "object" && !Array.isArray(safe.env)) {
     safe.env = Object.keys(safe.env).sort();
   }
@@ -163,6 +168,49 @@ function unknownEntry(host, error) {
 // Claude の Status 行で接続済みと読める表記（実機の表記に合わせる）。
 const CLAUDE_CONNECTED = /^(?:✓\s*)?Connected$/i;
 
+/** Claude の詳細表示を曖昧さのない stdio transport に変換する。 */
+function parseClaudeTransport(text) {
+  const lines = text.split(/\r?\n/);
+  const command = lines.find((line) => /^\s*Command:/i.test(line))?.replace(/^\s*Command:/i, "").trim();
+  const argsText = lines.find((line) => /^\s*Args:/i.test(line))?.replace(/^\s*Args:/i, "").trim() ?? "";
+  if (!command || /\s/.test(command)) return null;
+  // `claude mcp get` は Args を表示用に引用する。シェルは実行せず、引用符と
+  // バックスラッシュだけを解釈する限定 tokenizer で argv に戻す。
+  const args = [];
+  let token = "", quote = null, escaped = false, started = false;
+  for (const char of argsText) {
+    if (escaped) { token += char; escaped = false; started = true; continue; }
+    if (char === "\\" && quote !== "'") { escaped = true; started = true; continue; }
+    if (quote) {
+      if (char === quote) quote = null;
+      else token += char;
+      started = true;
+      continue;
+    }
+    if (char === "'" || char === '"') { quote = char; started = true; continue; }
+    if (/\s/.test(char)) {
+      if (started) { args.push(token); token = ""; started = false; }
+      continue;
+    }
+    token += char; started = true;
+  }
+  if (escaped || quote) return null;
+  if (started) args.push(token);
+  const env = {};
+  let inEnvironment = false;
+  for (const line of lines) {
+    if (/^\s*Environment:\s*$/i.test(line)) { inEnvironment = true; continue; }
+    if (inEnvironment && /^\s{2,}\S/.test(line)) {
+      const match = line.trim().match(/^([A-Za-z_][A-Za-z0-9_]*)\s*(?:=|:)\s*(.*)$/);
+      if (!match || Object.hasOwn(env, match[1])) return null;
+      env[match[1]] = match[2];
+      continue;
+    }
+    inEnvironment = false;
+  }
+  return { type: "stdio", command, ...(args.length ? { args } : {}), ...(Object.keys(env).length ? { env } : {}) };
+}
+
 /** `claude mcp get` の結果を読む。接続時にホストから登録を読み直すため、環境変数値の差し替えは識別値では検出しない。 */
 function parseClaudeDetail(host, name, text, realCwd) {
   const lines = text.split(/\r?\n/);
@@ -193,12 +241,14 @@ function parseClaudeDetail(host, name, text, realCwd) {
   }).join("\n");
   if (malformedEnvironment) return unknownEntry(host, REASON.identity);
   const identityText = JSON.stringify({ detail: identityLines, environmentNames: environmentNames.sort(), cwd: realCwd });
+  const transport = parseClaudeTransport(text);
   return {
     host, name, family: null, scope,
     enabled: !disabled,
     approved: disabled ? null : pending ? false : connected ? true : null,
     trusted: connected ? true : null,
     transportType: typeLine.match(/Type:\s*(\S+)/i)?.[1] ?? null,
+    transportFingerprint: transport ? fingerprintTransport(transport) : null,
     registrationId: createHash("sha256").update(identityText).digest("hex"),
   };
 }
@@ -442,4 +492,42 @@ export async function listRegistrations(host, {
   } catch {
     return [withStatus(toObservation({ host, error: REASON.readFailed }), "unknown", REASON.readFailed)];
   }
+}
+
+/** Claude のプロジェクト登録から承認済み stdio transport を読み直す。 */
+export async function readTransport(registration, options = {}) {
+  if (!options || typeof options !== "object" || Array.isArray(options) || Object.keys(options).some((key) => key !== "cwd") ||
+      options.cwd !== undefined && (typeof options.cwd !== "string" || !options.cwd.trim()) ||
+      !registration || typeof registration !== "object" || Array.isArray(registration) ||
+      Object.keys(registration).some((key) => !["host", "name", "scope", "registrationId", "status", "transportFingerprint", "cwd"].includes(key)) ||
+      registration.cwd !== undefined && (typeof registration.cwd !== "string" || !registration.cwd.trim()) ||
+      registration.transportFingerprint !== undefined && (typeof registration.transportFingerprint !== "string" || !registration.transportFingerprint.trim()) ||
+      !["claude", "codex"].includes(registration.host) || !["project", "user"].includes(registration.scope) || typeof registration.name !== "string" || !registration.name.trim() || registration.status !== "eligible") return null;
+  const cwd = options.cwd ?? process.cwd();
+  if (registration.host === "codex") {
+    try {
+      const observed = await requestCodexConfig({ cwd });
+      const transport = observed.config?.mcp_servers?.[registration.name];
+      if (!transport || typeof transport !== "object" || Array.isArray(transport) || typeof transport.command !== "string" || !transport.command.trim() ||
+          transport.args !== undefined && (!Array.isArray(transport.args) || !transport.args.every((item) => typeof item === "string")) ||
+          transport.env !== undefined && (!transport.env || typeof transport.env !== "object" || Array.isArray(transport.env) || !Object.values(transport.env).every((item) => typeof item === "string"))) return null;
+      return { type: "stdio", command: transport.command, ...(transport.args === undefined ? {} : { args: transport.args }), ...(transport.env === undefined ? {} : { env: transport.env }), cwd };
+    } catch { return null; }
+  }
+  if (registration.scope === "user") {
+    try {
+      const detail = await runReadOnlyCli("claude", ["mcp", "get", registration.name], cwd);
+      return parseClaudeTransport(detail);
+    } catch { return null; }
+  }
+  if (registration.scope !== "project") return null;
+  try {
+    const { readFile } = await import("node:fs/promises");
+    const config = JSON.parse(await readFile(resolve(cwd, ".mcp.json"), "utf8"));
+    const value = config?.mcpServers?.[registration.name];
+    if (!value || typeof value !== "object" || Array.isArray(value) || typeof value.command !== "string" || !value.command.trim() ||
+        value.args !== undefined && (!Array.isArray(value.args) || !value.args.every((item) => typeof item === "string")) ||
+        value.env !== undefined && (!value.env || typeof value.env !== "object" || Array.isArray(value.env) || !Object.values(value.env).every((item) => typeof item === "string"))) return null;
+    return { type: "stdio", command: value.command, ...(value.args === undefined ? {} : { args: value.args }), ...(value.env === undefined ? {} : { env: value.env }), cwd };
+  } catch { return null; }
 }
