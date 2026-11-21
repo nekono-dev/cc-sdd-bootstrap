@@ -251,7 +251,7 @@ test("Codex 起動応答は許可リストで共通結果へ変換する", async
     } });
   const start = () => adapter.start({ cwd: "/repo", instruction: "work", model: "gpt", access: "read-only", effort: "high" });
   assert.deepEqual(await start(), { kind: "unknown", reason: "Codex 起動結果を確認できません" });
-  assert.deepEqual(await start(), { kind: "not-started", reason: "Codex 起動前に拒否されました" });
+  assert.deepEqual(await start(), { kind: "unknown", reason: "Codex 起動結果を確認できません" });
   assert.deepEqual(await start(), { kind: "unknown", reason: "Codex 起動結果を確認できません" });
   const unknown = await start();
   assert.equal(unknown.kind, "unknown");
@@ -286,6 +286,27 @@ test("Codex 起動応答で空 jobId を拒否し、unknown の jobId も共通�
   const started = await adapter.start({ cwd: "/repo", instruction: "work", model: "gpt", access: "read-only", effort: "high" });
   assert.equal(started.kind, "started");
   assert.deepEqual(await adapter.start({ cwd: "/repo", instruction: "work", model: "gpt", access: "read-only", effort: "high" }), { kind: "unknown", reason: "uncertain", job: { ...started.job } });
+});
+
+test("実 Codex adapter は矛盾した not-started 応答を unknown として jobId を保持する", async () => {
+  const tools = [
+    tool("codex_capabilities", [], {}), tool("codex_models", [], {}),
+    tool("codex_start", ["cwd", "model", "effort", "access", "instruction"], { cwd: string, model: string, effort: { type: "string", enum: ["medium", "high", "off"] }, access: { type: "string", enum: ["read-only", "workspace-write"] }, instruction: string }),
+    tool("codex_status", ["jobId"], { jobId: string }), tool("codex_stop", ["jobId"], { jobId: string }),
+  ];
+  const connection = { serverInfo: { name: "cc-sdd-codex" }, tools: new Map(tools.map((entry) => [entry.name, entry])), async request(_method, { name }) {
+    if (name === "codex_capabilities") return { structuredContent: { kind: "agent", harness: "codex", tier: "cloud", models: [{ id: "gpt", accepted: [{ access: "read-only", effort: "high" }] }] } };
+    if (name === "codex_models") return { structuredContent: { models: ["gpt"] } };
+    if (name === "codex_start") return { structuredContent: { kind: "not-started", reason: "拒否", jobId: "j", status: "running" } };
+    return { structuredContent: { status: "running", jobId: "j" } };
+  } };
+  const adapter = await mcp.createCodexAdapter(connection);
+  const result = await adapter.start({ cwd: "/repo", instruction: "work", model: "gpt", access: "read-only", effort: "high" });
+  assert.equal(result.kind, "unknown", `矛盾した not-started は unknown: 実際=${JSON.stringify(result)}`);
+  assert.equal(result.reason, "拒否");
+  assert.equal(result.job?.jobId, "j", "有効な jobId を保持する");
+  assert.equal(result.job?.serverId, "mcp:cc-sdd-codex");
+  assert.equal(typeof result.job?.connectionId, "string");
 });
 
 test("stdio 以外・起動スキーマ不一致は接続候補にしない", async () => {

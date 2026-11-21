@@ -28,6 +28,68 @@ test("same work resend under another request ID attaches exclusively to original
   } finally { await rm(f.base, { recursive: true, force: true }); }
 });
 
+test("候補不在時に予約を解放すると同じ作業を再予約できる", async () => {
+  const f = await fixture();
+  try {
+    const input = { requestId: "req-release", project: f.project, cwd: f.project, skill: "kiro-implement", taskId: "4.3" };
+    assert.equal((await f.store.reserve(input)).kind, "created");
+    assert.equal(await f.store.release(input), true);
+    assert.equal((await f.store.reserve({ ...input, requestId: "req-retry" })).kind, "created");
+  } finally { await rm(f.base, { recursive: true, force: true }); }
+});
+
+test("並行再送 A→B の後に A を解放すると B が予約を引き継いで起動できる", async () => {
+  const f = await fixture();
+  try {
+    const base = { project: f.project, cwd: f.project, skill: "kiro-implement", taskId: "4.3-race" };
+    assert.equal((await f.store.reserve({ ...base, requestId: "race-a" })).kind, "created");
+    assert.equal((await f.store.reserve({ ...base, requestId: "race-b" })).kind, "existing");
+    assert.equal(await f.store.release({ ...base, requestId: "race-a" }), true);
+    const next = await f.store.reserve({ ...base, requestId: "race-b" });
+    assert.equal(next.kind, "created", "解放された予約は代表の再送依頼が引き継ぐ");
+    assert.deepEqual(next.record.requestIds, ["race-b"]);
+    assert.equal((await f.store.reserve({ ...base, requestId: "race-c" })).kind, "existing", "B 実行中の C は保留される");
+  } finally { await rm(f.base, { recursive: true, force: true }); }
+});
+
+test("非代表 B の解放は A の reserved 状態を維持し、A 再送は existing になる", async () => {
+  const f = await fixture();
+  try {
+    const base = { project: f.project, cwd: f.project, skill: "kiro-implement", taskId: "4.3-nonrepresentative-release" };
+    assert.equal((await f.store.reserve({ ...base, requestId: "A" })).kind, "created");
+    assert.equal((await f.store.reserve({ ...base, requestId: "B" })).kind, "existing");
+    assert.equal(await f.store.release({ ...base, requestId: "B" }), true);
+    const retryA = await f.store.reserve({ ...base, requestId: "A" });
+    assert.equal(retryA.kind, "existing", "B 解放後も A の予約を維持する");
+    assert.equal(retryA.record.requestId, "A");
+    assert.deepEqual(retryA.record.requestIds, ["A"]);
+  } finally { await rm(f.base, { recursive: true, force: true }); }
+});
+
+test("A 解放後の B 解放は予約引き継ぎに横取りされず記録を削除する", async () => {
+  const f = await fixture();
+  try {
+    const base = { project: f.project, cwd: f.project, skill: "kiro-implement", taskId: "4.3-release-handoff" };
+    assert.equal((await f.store.reserve({ ...base, requestId: "handoff-a" })).kind, "created");
+    assert.equal((await f.store.reserve({ ...base, requestId: "handoff-b" })).kind, "existing");
+    assert.equal(await f.store.release({ ...base, requestId: "handoff-a" }), true);
+    assert.equal(await f.store.release({ ...base, requestId: "handoff-b" }), true);
+    assert.equal((await f.store.reserve({ ...base, requestId: "handoff-c" })).kind, "created");
+  } finally { await rm(f.base, { recursive: true, force: true }); }
+});
+
+test("available 状態で markUnknown は予約引き継ぎに横取りされない", async () => {
+  const f = await fixture();
+  try {
+    const base = { project: f.project, cwd: f.project, skill: "kiro-implement", taskId: "4.3-unknown-handoff" };
+    assert.equal((await f.store.reserve({ ...base, requestId: "unknown-a" })).kind, "created");
+    assert.equal((await f.store.reserve({ ...base, requestId: "unknown-b" })).kind, "existing");
+    assert.equal(await f.store.release({ ...base, requestId: "unknown-a" }), true);
+    assert.equal(await f.store.markUnknown({ ...base, requestId: "unknown-b" }), true);
+    assert.equal((await f.store.reserve({ ...base, requestId: "unknown-c" })).kind, "blocked");
+  } finally { await rm(f.base, { recursive: true, force: true }); }
+});
+
 test("request IDs inherited from Object.prototype are reserved, reused, and isolated by own keys", async () => {
   const f = await fixture();
   try {

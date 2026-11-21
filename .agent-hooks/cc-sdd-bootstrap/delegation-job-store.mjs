@@ -18,7 +18,7 @@ export function createDelegationJobStore(options) {
       options.writableRoots.some((path) => typeof path !== "string" || !isAbsolute(path)) ||
       (options.resolveWorktreeRoot !== undefined && typeof options.resolveWorktreeRoot !== "function")) {
     const blocked = async () => ({ kind: "blocked", reason: "実行時領域と書き込み可能な作業範囲が必要です" });
-    return Object.freeze({ reserve: blocked, markUnknown: async () => false });
+    return Object.freeze({ reserve: blocked, release: async () => false, markUnknown: async () => false });
   }
   const root = resolve(options.root);
   const writableRoots = options.writableRoots.map((path) => resolve(path));
@@ -65,7 +65,7 @@ export function createDelegationJobStore(options) {
           typeof record.taskId !== "string" || !TASK.test(record.taskId) ||
           typeof record.requestId !== "string" || !REQUEST.test(record.requestId) || !Array.isArray(record.requestIds) || !record.requestIds.length ||
           record.requestIds.some((id) => typeof id !== "string" || !REQUEST.test(id)) ||
-          !["reserved", "unknown"].includes(record.status) || typeof record.generation !== "string" || !/^[a-f0-9]{32}$/.test(record.generation)) return false;
+          !["reserved", "available", "unknown"].includes(record.status) || typeof record.generation !== "string" || !/^[a-f0-9]{32}$/.test(record.generation)) return false;
       if (new Set(record.requestIds).size !== record.requestIds.length || record.requestIds.some((id) =>
         !Object.hasOwn(value.requests, id) || value.requests[id] !== key)) return false;
       const expected = createHash("sha256").update(`${record.project}\0${record.skill}\0${record.taskId}`).digest("hex");
@@ -142,6 +142,11 @@ export function createDelegationJobStore(options) {
 
   async function reserve(input) {
     return withLedger(input, (current, workKey, existing, project) => {
+      if (existing?.status === "available" && existing.requestId === input.requestId) {
+        const record = { ...existing, status: "reserved" };
+        const records = Object.assign(Object.create(null), current.records, { [workKey]: record });
+        return { next: { ...current, records }, value: { kind: "created", record } };
+      }
       if (existing) {
         const requestIds = existing.requestIds.includes(input.requestId) ? existing.requestIds : [...existing.requestIds, input.requestId];
         const requests = Object.assign(Object.create(null), current.requests, { [input.requestId]: workKey });
@@ -175,7 +180,22 @@ export function createDelegationJobStore(options) {
     return result === true;
   }
 
-  return Object.freeze({ reserve, markUnknown });
+  async function release(input) {
+    const result = await withLedger(input, (current, workKey, existing) => {
+      if (!existing || !["reserved", "available"].includes(existing.status) || !existing.requestIds.includes(input.requestId)) return { next: null, value: false };
+      const requestIds = existing.requestIds.filter((id) => id !== input.requestId);
+      const requests = Object.assign(Object.create(null), current.requests);
+      delete requests[input.requestId];
+      const records = Object.assign(Object.create(null), current.records);
+      if (!requestIds.length) delete records[workKey];
+      else if (existing.requestId === input.requestId) records[workKey] = { ...existing, requestId: requestIds[0], requestIds, status: "available" };
+      else records[workKey] = { ...existing, requestIds };
+      return { next: { ...current, records, requests }, value: true };
+    });
+    return result === true;
+  }
+
+  return Object.freeze({ reserve, release, markUnknown });
 }
 
 function inside(parent, child) {

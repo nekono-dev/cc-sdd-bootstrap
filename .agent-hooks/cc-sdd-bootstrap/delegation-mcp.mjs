@@ -386,7 +386,16 @@ export async function createCodexAdapter(connection) {
         const result = await call("codex_start", { cwd, instruction, model, access, effort });
         const v = result?.result ?? result;
         if (!isObject(v)) return { kind: "unknown", reason: "Codex 起動結果を確認できません" };
-        if (v.kind === "not-started") return { kind: "not-started", reason: typeof v.reason === "string" ? v.reason : "Codex 起動前に拒否されました" };
+        if (v.kind === "not-started") {
+          const reason = typeof v.reason === "string" && v.reason.length > 0 ? v.reason : "Codex 起動結果を確認できません";
+          if (Object.keys(v).length === 2 && Object.hasOwn(v, "kind") && Object.hasOwn(v, "reason") && typeof v.reason === "string" && v.reason.length > 0)
+            return { kind: "not-started", reason };
+          return {
+            kind: "unknown",
+            reason,
+            ...(validJobId(v.jobId, "codex_status") && validJobId(v.jobId, "codex_stop") ? { job: { ...jobIdentity, jobId: v.jobId } } : {}),
+          };
+        }
         if (v.kind === "unknown") return {
           kind: "unknown",
           reason: typeof v.reason === "string" ? v.reason : "Codex 起動結果を確認できません",
