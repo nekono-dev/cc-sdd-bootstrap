@@ -48,7 +48,7 @@ test("MCP はカタログを能力とモデル一覧として公開し、利用�
   input.end();
   await serving;
   const results = response.trim().split("\n").map((line) => JSON.parse(line));
-  assert.deepEqual(results[0].result.tools.map((tool) => tool.name), ["codex_capabilities", "codex_models"]);
+  assert.deepEqual(results[0].result.tools.map((tool) => tool.name), ["codex_capabilities", "codex_models", "codex_start", "codex_status", "codex_stop"]);
   assert.equal(results[1].result.structuredContent.models[0].id, "model-a");
   assert.deepEqual(results[2].result.structuredContent, { models: ["model-a"] });
   assert.equal(catalogCalls, 2);
@@ -126,4 +126,251 @@ test("起動受付判定は未知キーと不正な入力型を例外なく拒�
   for (const input of [null, [], "bad"]) {
     assert.doesNotThrow(() => assert.equal(codex.isAccepted(capabilities, input), false));
   }
+});
+
+test("codex_start は検査済み設定を直接起動し、指示本文を stdin のみに渡して状態・停止を返す", async () => {
+  const { EventEmitter } = await import("node:events");
+  const { mkdtemp, mkdir, rm } = await import("node:fs/promises");
+  const { tmpdir } = await import("node:os");
+  const { join } = await import("node:path");
+  const root = await mkdtemp(join(tmpdir(), "codex-job-"));
+  const cwd = join(root, "work"); await mkdir(cwd);
+  const input = new PassThrough(); const output = new PassThrough(); let response = "";
+  output.on("data", (chunk) => { response += chunk; });
+  const spawns = [];
+  const spawnProcess = (command, args, options) => {
+    const child = new EventEmitter(); child.stdout = new PassThrough(); child.stdin = new PassThrough(); child.stderr = new PassThrough();
+    child.pid = 4321; child.exitCode = null; child.signalCode = null;
+    let stdin = ""; child.stdin.on("data", (chunk) => { stdin += chunk.toString(); });
+    child.terminate = () => { child.exitCode = 0; child.emit("exit", 0, null); };
+    child.kill = (signal) => { child.lastSignal = signal; if (signal === "SIGKILL") child.terminate(); return true; };
+    queueMicrotask(() => child.emit("spawn"));
+    spawns.push({ command, args, options, child, get stdin() { return stdin; } }); return child;
+  };
+  const serving = codex.serve({ input, output, listModels: async () => [{ model: "model-a", supportedReasoningEfforts: [{ reasoningEffort: "medium" }] }], spawnProcess, killProcess: (pid, signal) => { if (signal === 0) { if (spawns[0]?.child.exitCode !== null) throw Object.assign(new Error("gone"), { code: "ESRCH" }); return true; } spawns[0]?.child.kill(signal); }, allowedRoots: [root], stopGraceMs: 5 });
+  const call = (id, name, args) => input.write(`${JSON.stringify({ jsonrpc: "2.0", id, method: "tools/call", params: { name, arguments: args } })}\n`);
+  call(1, "codex_start", { cwd, model: "model-a", effort: "medium", access: "read-only", instruction: "private instruction" });
+  while (!response.includes('"id":1')) await new Promise((resolve) => setTimeout(resolve, 2));
+  const started = JSON.parse(response.trim().split("\n")[0]).result.structuredContent;
+  assert.equal(started.kind, "started"); assert.ok(started.jobId);
+  assert.equal(spawns[0].command, "codex"); assert.deepEqual(spawns[0].args, ["-a", "never", "exec", "--sandbox", "read-only", "--model", "model-a", "--config", "model_reasoning_effort=\"medium\"", "--cd", cwd, "-"]);
+  assert.equal(spawns[0].options.shell, false); assert.equal(spawns[0].options.detached, true);
+  assert.equal(spawns[0].stdin, "private instruction"); assert.ok(!response.includes("private instruction"));
+  call(2, "codex_status", { jobId: started.jobId });
+  while (!response.includes('"id":2')) await new Promise((resolve) => setTimeout(resolve, 2));
+  assert.equal(JSON.parse(response.trim().split("\n")[1]).result.structuredContent.status, "running");
+  call(3, "codex_stop", { jobId: started.jobId });
+  while (!response.includes('"id":3')) await new Promise((resolve) => setTimeout(resolve, 2));
+  while (JSON.parse(response.trim().split("\n")[2]).result.structuredContent.status !== "stopped") await new Promise((resolve) => setTimeout(resolve, 2));
+  input.end(); await serving; await rm(root, { recursive: true, force: true });
+});
+
+test("未対応設定・範囲外や不正引数は spawn 前に拒否し、停止確認前は stopped にしない", async () => {
+  const { mkdtemp, mkdir, symlink, rm } = await import("node:fs/promises");
+  const { tmpdir } = await import("node:os"); const { join } = await import("node:path");
+  const root = await mkdtemp(join(tmpdir(), "codex-job-check-")); const outside = await mkdtemp(join(tmpdir(), "codex-job-out-"));
+  const cwd = join(root, "work"); await mkdir(cwd); await symlink(outside, join(root, "escape"));
+  const input = new PassThrough(); const output = new PassThrough(); let response = ""; output.on("data", (chunk) => { response += chunk; });
+  let spawnCount = 0; const spawnProcess = () => { spawnCount += 1; throw new Error("unexpected"); };
+  const serving = codex.serve({ input, output, listModels: async () => [{ model: "model-a", supportedReasoningEfforts: [{ reasoningEffort: "medium" }] }], spawnProcess, allowedRoots: [root] });
+  const send = (id, name, args) => input.write(`${JSON.stringify({ jsonrpc: "2.0", id, method: "tools/call", params: { name, arguments: args } })}\n`);
+  send(1, "codex_start", { cwd, model: "model-a", effort: "off", access: "read-only", instruction: "x" });
+  send(2, "codex_start", { cwd: outside, model: "model-a", effort: "medium", access: "read-only", instruction: "x" });
+  send(3, "codex_start", { cwd: join(root, "escape"), model: "model-a", effort: "medium", access: "read-only", instruction: "x" });
+  send(4, "codex_start", { cwd, model: "model-a", effort: "medium", access: "workspace-write", instruction: "x", extra: true });
+  while (!response.includes('"id":4')) await new Promise((resolve) => setTimeout(resolve, 2));
+  const messages = response.trim().split("\n").map((line) => JSON.parse(line));
+  const results = messages.slice(0, 3).map((message) => message.result.structuredContent);
+  assert.equal(spawnCount, 0); assert.ok(results.every((result) => result.kind === "not-started"));
+  assert.equal(messages[3].error.code, -32602);
+  input.end(); await serving; await rm(root, { recursive: true, force: true }); await rm(outside, { recursive: true, force: true });
+});
+
+test("停止応答は子プロセスの終了確認前に stopped を返さず、spawn 後の追跡不能は unknown とする", async () => {
+  const { EventEmitter } = await import("node:events");
+  const { mkdtemp, mkdir, rm } = await import("node:fs/promises"); const { tmpdir } = await import("node:os"); const { join } = await import("node:path");
+  const root = await mkdtemp(join(tmpdir(), "codex-job-pending-")); const cwd = join(root, "work"); await mkdir(cwd);
+  const input = new PassThrough(); const output = new PassThrough(); let response = ""; output.on("data", (chunk) => { response += chunk; });
+  let child;
+  const spawnProcess = () => { child = new EventEmitter(); child.stdout = new PassThrough(); child.stdin = new PassThrough(); child.pid = 987654; child.kill = () => true; queueMicrotask(() => child.emit("spawn")); return child; };
+  const serving = codex.serve({ input, output, listModels: async () => [{ model: "model-a", supportedReasoningEfforts: [{ reasoningEffort: "medium" }] }], spawnProcess, killProcess: (pid, signal) => { if (signal === 0) return true; }, allowedRoots: [root], stopGraceMs: 30 });
+  const send = (id, name, args) => input.write(`${JSON.stringify({ jsonrpc: "2.0", id, method: "tools/call", params: { name, arguments: args } })}\n`);
+  send(1, "codex_start", { cwd, model: "model-a", effort: "medium", access: "read-only", instruction: "x" });
+  while (!response.includes('"id":1')) await new Promise((resolve) => setTimeout(resolve, 2));
+  const jobId = JSON.parse(response.trim().split("\n")[0]).result.structuredContent.jobId;
+  send(2, "codex_stop", { jobId }); while (!response.includes('"id":2')) await new Promise((resolve) => setTimeout(resolve, 2));
+  assert.equal(JSON.parse(response.trim().split("\n")[1]).result.structuredContent.status, "running");
+  child.emit("error", new Error("lost"));
+  send(3, "codex_status", { jobId }); while (!response.includes('"id":3')) await new Promise((resolve) => setTimeout(resolve, 2));
+  assert.equal(JSON.parse(response.trim().split("\n")[2]).result.structuredContent.status, "unknown");
+  input.end(); await serving; await rm(root, { recursive: true, force: true });
+});
+
+test("spawn 前の非同期失敗は not-started、stdin の非同期失敗は unknown として追跡する", async () => {
+  const { EventEmitter } = await import("node:events");
+  const { mkdtemp, mkdir, rm } = await import("node:fs/promises"); const { tmpdir } = await import("node:os"); const { join } = await import("node:path");
+  const root = await mkdtemp(join(tmpdir(), "codex-job-errors-")); const cwd = join(root, "work"); await mkdir(cwd);
+  const input = new PassThrough(); const output = new PassThrough(); let response = ""; output.on("data", (chunk) => { response += chunk; });
+  let child; let calls = 0;
+  const spawnProcess = () => {
+    calls += 1; child = new EventEmitter(); child.stdout = new PassThrough(); child.stdin = new PassThrough(); child.pid = 1234;
+    if (calls === 1) queueMicrotask(() => child.emit("error", Object.assign(new Error("missing"), { code: "ENOENT" })));
+    else {
+      child.stdin.end = () => { queueMicrotask(() => child.stdin.emit("error", new Error("EPIPE"))); };
+      queueMicrotask(() => child.emit("spawn"));
+    }
+    return child;
+  };
+  const serving = codex.serve({ input, output, listModels: async () => [{ model: "model-a", supportedReasoningEfforts: [{ reasoningEffort: "medium" }] }], spawnProcess, allowedRoots: [root] });
+  const send = (id) => input.write(`${JSON.stringify({ jsonrpc: "2.0", id, method: "tools/call", params: { name: "codex_start", arguments: { cwd, model: "model-a", effort: "medium", access: "read-only", instruction: "x" } } })}\n`);
+  send(1); while (!response.includes('"id":1')) await new Promise((resolve) => setTimeout(resolve, 2));
+  const first = JSON.parse(response.trim().split("\n")[0]).result.structuredContent; assert.equal(first.kind, "not-started");
+  send(2); while (!response.includes('"id":2')) await new Promise((resolve) => setTimeout(resolve, 2));
+  const second = JSON.parse(response.trim().split("\n")[1]).result.structuredContent; assert.equal(second.kind, "started"); assert.ok(second.jobId);
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  input.write(`${JSON.stringify({ jsonrpc: "2.0", id: 3, method: "tools/call", params: { name: "codex_status", arguments: { jobId: second.jobId } } })}\n`);
+  while (!response.includes('"id":3')) await new Promise((resolve) => setTimeout(resolve, 2));
+  const status = JSON.parse(response.trim().split("\n")[2]).result.structuredContent; assert.equal(status.status, "unknown"); assert.match(status.reason, /送信できたか確認できません/);
+  input.end(); await serving; await rm(root, { recursive: true, force: true });
+});
+
+test("unknown 中の停止も終了確認までシグナルを送り続ける", async () => {
+  const { EventEmitter } = await import("node:events");
+  const { mkdtemp, mkdir, rm } = await import("node:fs/promises"); const { tmpdir } = await import("node:os"); const { join } = await import("node:path");
+  const root = await mkdtemp(join(tmpdir(), "codex-stop-unknown-")); const cwd = join(root, "work"); await mkdir(cwd);
+  const input = new PassThrough(); const output = new PassThrough(); let response = ""; output.on("data", (chunk) => { response += chunk; });
+  let child; let signals = []; let groupAlive = true;
+  const spawnProcess = () => {
+    child = new EventEmitter(); child.stdout = new PassThrough(); child.stdin = new PassThrough(); child.pid = 12345; child.on("exit", () => { groupAlive = false; });
+    child.kill = (signal) => { signals.push(signal); return true; };
+    child.stdin.end = () => { queueMicrotask(() => child.stdin.emit("error", new Error("EPIPE"))); };
+    queueMicrotask(() => child.emit("spawn")); return child;
+  };
+  const serving = codex.serve({ input, output, listModels: async () => [{ model: "model-a", supportedReasoningEfforts: [{ reasoningEffort: "medium" }] }], spawnProcess, killProcess: (pid, signal) => { if (signal === 0) { if (!groupAlive) throw Object.assign(new Error("gone"), { code: "ESRCH" }); return true; } child.kill(signal); }, allowedRoots: [root], stopGraceMs: 20 });
+  const send = (id, name, args) => input.write(`${JSON.stringify({ jsonrpc: "2.0", id, method: "tools/call", params: { name, arguments: args } })}\n`);
+  send(1, "codex_start", { cwd, model: "model-a", effort: "medium", access: "read-only", instruction: "x" });
+  while (!response.includes('"id":1')) await new Promise((resolve) => setTimeout(resolve, 2));
+  const jobId = JSON.parse(response.trim().split("\n")[0]).result.structuredContent.jobId;
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  send(2, "codex_stop", { jobId }); while (!response.includes('"id":2')) await new Promise((resolve) => setTimeout(resolve, 2));
+  assert.ok(signals.includes("SIGTERM"), "unknown ジョブにも SIGTERM を送る");
+  assert.equal(JSON.parse(response.trim().split("\n")[1]).result.structuredContent.status, "unknown", "終了確認前は stopped にしない");
+  child.emit("exit", null, "SIGTERM");
+  send(3, "codex_status", { jobId }); while (!response.includes('"id":3')) await new Promise((resolve) => setTimeout(resolve, 2));
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  send(4, "codex_status", { jobId }); while (!response.includes('"id":4')) await new Promise((resolve) => setTimeout(resolve, 2));
+  assert.equal(JSON.parse(response.trim().split("\n")[3]).result.structuredContent.status, "stopped");
+  input.end(); await serving; await rm(root, { recursive: true, force: true });
+});
+
+test("停止処理中に stdin が失敗しても猶予後に SIGKILL を送り終了を待つ", async () => {
+  const { EventEmitter } = await import("node:events");
+  const { mkdtemp, mkdir, rm } = await import("node:fs/promises"); const { tmpdir } = await import("node:os"); const { join } = await import("node:path");
+  const root = await mkdtemp(join(tmpdir(), "codex-stop-kill-")); const cwd = join(root, "work"); await mkdir(cwd);
+  const input = new PassThrough(); const output = new PassThrough(); let response = ""; output.on("data", (chunk) => { response += chunk; });
+  let child; const signals = []; let resolveKill; let groupAlive = true;
+  const killed = new Promise((resolve) => { resolveKill = resolve; });
+  const spawnProcess = () => {
+    child = new EventEmitter(); child.stdout = new PassThrough(); child.stdin = new PassThrough(); child.pid = 12346; child.on("exit", () => { groupAlive = false; });
+    child.kill = (signal) => { signals.push(signal); if (signal === "SIGKILL") resolveKill(); return true; };
+    child.stdin.end = () => {};
+    queueMicrotask(() => child.emit("spawn")); return child;
+  };
+  const serving = codex.serve({ input, output, listModels: async () => [{ model: "model-a", supportedReasoningEfforts: [{ reasoningEffort: "medium" }] }], spawnProcess, killProcess: (pid, signal) => { if (signal === 0) { if (!groupAlive) throw Object.assign(new Error("gone"), { code: "ESRCH" }); return true; } child.kill(signal); }, allowedRoots: [root], stopGraceMs: 20 });
+  const send = (id, name, args) => input.write(`${JSON.stringify({ jsonrpc: "2.0", id, method: "tools/call", params: { name, arguments: args } })}\n`);
+  send(1, "codex_start", { cwd, model: "model-a", effort: "medium", access: "read-only", instruction: "x" });
+  while (!response.includes('"id":1')) await new Promise((resolve) => setTimeout(resolve, 2));
+  const jobId = JSON.parse(response.trim().split("\n")[0]).result.structuredContent.jobId;
+  send(2, "codex_stop", { jobId });
+  while (!signals.includes("SIGTERM")) await new Promise((resolve) => setTimeout(resolve, 2));
+  child.stdin.emit("error", new Error("EPIPE"));
+  await killed;
+  assert.ok(signals.includes("SIGKILL"), "stdin エラー後も SIGKILL まで停止を続ける");
+  assert.ok(!response.includes('"id":2'), "終了確認までは停止応答を返さない");
+  child.emit("exit", null, "SIGKILL");
+  while (!response.includes('"id":2')) await new Promise((resolve) => setTimeout(resolve, 2));
+  assert.equal(JSON.parse(response.trim().split("\n")[1]).result.structuredContent.status, "stopped");
+  input.end(); await serving; await rm(root, { recursive: true, force: true });
+});
+
+test("exit 後の遅延 error と stdin error は終端状態を上書きせず停止も終端結果を返す", async () => {
+  const { EventEmitter } = await import("node:events");
+  const { mkdtemp, mkdir, rm } = await import("node:fs/promises"); const { tmpdir } = await import("node:os"); const { join } = await import("node:path");
+  const root = await mkdtemp(join(tmpdir(), "codex-exit-errors-")); const cwd = join(root, "work"); await mkdir(cwd);
+  const input = new PassThrough(); const output = new PassThrough(); let response = ""; output.on("data", (chunk) => { response += chunk; });
+  let child;
+  const spawnProcess = () => {
+    child = new EventEmitter(); child.stdout = new PassThrough(); child.stdin = new PassThrough(); child.pid = 98765;
+    child.kill = () => true; queueMicrotask(() => child.emit("spawn")); return child;
+  };
+  const serving = codex.serve({ input, output, listModels: async () => [{ model: "model-a", supportedReasoningEfforts: [{ reasoningEffort: "medium" }] }], spawnProcess, allowedRoots: [root] });
+  const send = (id, name, args) => input.write(`${JSON.stringify({ jsonrpc: "2.0", id, method: "tools/call", params: { name, arguments: args } })}\n`);
+  send(1, "codex_start", { cwd, model: "model-a", effort: "medium", access: "read-only", instruction: "x" });
+  while (!response.includes('"id":1')) await new Promise((resolve) => setTimeout(resolve, 2));
+  const jobId = JSON.parse(response.trim().split("\n")[0]).result.structuredContent.jobId;
+  child.emit("exit", 0, null);
+  child.emit("error", new Error("late process error"));
+  child.stdin.emit("error", new Error("late stdin error"));
+  send(2, "codex_status", { jobId });
+  while (!response.includes('"id":2')) await new Promise((resolve) => setTimeout(resolve, 2));
+  assert.equal(JSON.parse(response.trim().split("\n")[1]).result.structuredContent.status, "succeeded");
+  send(3, "codex_stop", { jobId });
+  while (!response.includes('"id":3')) await new Promise((resolve) => setTimeout(resolve, 2));
+  assert.equal(JSON.parse(response.trim().split("\n")[2]).result.structuredContent.status, "succeeded");
+  input.end(); await serving; await rm(root, { recursive: true, force: true });
+});
+
+test("既定の許可範囲は起動時の cwd でなく配置物から決まる", async () => {
+  const { mkdtemp, mkdir, rm } = await import("node:fs/promises"); const { tmpdir } = await import("node:os"); const { join } = await import("node:path");
+  const root = await mkdtemp(join(tmpdir(), "codex-default-root-")); const cwd = process.cwd();
+  const work = join(root, "work"); await mkdir(work);
+  const input = new PassThrough(); const output = new PassThrough(); let response = ""; output.on("data", (chunk) => { response += chunk; });
+  let spawnCount = 0;
+  const old = process.cwd(); process.chdir(root);
+  const serving = codex.serve({ input, output, listModels: async () => [{ model: "model-a", supportedReasoningEfforts: [{ reasoningEffort: "medium" }] }], spawnProcess: () => { spawnCount += 1; throw new Error("unexpected"); } });
+  process.chdir(old);
+  input.write(`${JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "codex_start", arguments: { cwd: work, model: "model-a", effort: "medium", access: "read-only", instruction: "x" } } })}\n`);
+  while (!response.includes('"id":1')) await new Promise((resolve) => setTimeout(resolve, 2));
+  assert.equal(JSON.parse(response.trim()).result.structuredContent.kind, "not-started"); assert.equal(spawnCount, 0);
+  input.end(); await serving; await rm(root, { recursive: true, force: true });
+});
+
+test("停止はプロセス本体の exit 後もグループ消滅まで待ち、猶予後にグループへ SIGKILL を送る", async () => {
+  const { EventEmitter } = await import("node:events");
+  const { mkdtemp, mkdir, rm } = await import("node:fs/promises");
+  const { tmpdir } = await import("node:os");
+  const { join } = await import("node:path");
+  const root = await mkdtemp(join(tmpdir(), "codex-stop-descendant-"));
+  const cwd = join(root, "work"); await mkdir(cwd);
+  const input = new PassThrough(); const output = new PassThrough(); let response = ""; output.on("data", (chunk) => { response += chunk; });
+  const signals = []; let groupAlive = true; let child;
+  const killProcess = (pid, signal) => {
+    signals.push([pid, signal]);
+    if (signal === 0) { if (groupAlive) return true; throw Object.assign(new Error("gone"), { code: "ESRCH" }); }
+    if (signal === "SIGKILL") groupAlive = false;
+    return true;
+  };
+  const spawnProcess = () => {
+    child = new EventEmitter();
+    child.stdout = new PassThrough(); child.stdin = new PassThrough(); child.pid = 4_000_000_000;
+    child.kill = () => true; child.stdin.end = () => {}; queueMicrotask(() => child.emit("spawn")); return child;
+  };
+  const serving = codex.serve({ input, output, listModels: async () => [{ model: "model-a", supportedReasoningEfforts: [{ reasoningEffort: "medium" }] }], spawnProcess, killProcess, allowedRoots: [root], stopGraceMs: 15 });
+  const send = (id, name, args) => input.write(`${JSON.stringify({ jsonrpc: "2.0", id, method: "tools/call", params: { name, arguments: args } })}\n`);
+  send(1, "codex_start", { cwd, model: "model-a", effort: "medium", access: "read-only", instruction: "x" });
+  while (!response.includes('"id":1')) await new Promise((resolve) => setTimeout(resolve, 2));
+  const jobId = JSON.parse(response.trim().split("\n")[0]).result.structuredContent.jobId;
+  send(2, "codex_stop", { jobId });
+  await new Promise((resolve) => setTimeout(resolve, 30));
+  const termWasInjected = signals.some(([, signal]) => signal === "SIGTERM");
+  child.emit("exit", null, "SIGTERM");
+  await new Promise((resolve) => setTimeout(resolve, 30));
+  assert.ok(termWasInjected, "停止シグナルは注入した kill 経由で送る");
+  assert.notEqual(JSON.parse(response.trim().split("\n")[1]).result.structuredContent.status, "stopped", "子孫が残る間は停止済みにしない");
+  assert.ok(signals.some(([, signal]) => signal === "SIGKILL"), "猶予後に SIGKILL を送る");
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  send(3, "codex_status", { jobId }); while (!response.includes('"id":3')) await new Promise((resolve) => setTimeout(resolve, 2));
+  assert.equal(JSON.parse(response.trim().split("\n")[2]).result.structuredContent.status, "stopped");
+  assert.ok(signals.every(([pid]) => pid === -4_000_000_000), "テストの偽 kill だけを使う");
+  input.end(); await serving; await rm(root, { recursive: true, force: true });
 });

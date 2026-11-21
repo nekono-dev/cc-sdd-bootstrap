@@ -1,10 +1,15 @@
 import { spawn } from "node:child_process";
 import { createInterface } from "node:readline";
 import { fileURLToPath } from "node:url";
+import { randomUUID } from "node:crypto";
+import { realpath } from "node:fs/promises";
+import { dirname, relative, resolve, sep } from "node:path";
 
 const ACCEPTED_EFFORTS = new Set(["medium", "high"]);
 const ACCEPTED_ACCESS = new Set(["read-only", "workspace-write"]);
 const PROTOCOL_VERSION = "2025-06-18";
+const MAX_OUTPUT = 16_384;
+const jobs = new Map();
 
 function isRecord(value) {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -112,10 +117,119 @@ export function listCodexModels({ spawnProcess = spawn, timeoutMs = 12_000 } = {
 const toolDefinitions = [
   { name: "codex_capabilities", description: "Codex の実行能力と受け付けるモデル・権限・推論量を返す", inputSchema: { type: "object", properties: {}, required: [], additionalProperties: false } },
   { name: "codex_models", description: "Codex が受け付けるモデル ID を返す", inputSchema: { type: "object", properties: {}, required: [], additionalProperties: false } },
+  { name: "codex_start", description: "検証済みの設定で Codex ジョブを開始する", inputSchema: { type: "object", properties: { cwd: { type: "string" }, model: { type: "string" }, effort: { type: "string", enum: ["medium", "high", "off"] }, access: { type: "string", enum: ["read-only", "workspace-write"] }, instruction: { type: "string" } }, required: ["cwd", "model", "effort", "access", "instruction"], additionalProperties: false } },
+  { name: "codex_status", description: "Codex ジョブの状態と出力末尾を取得する", inputSchema: { type: "object", properties: { jobId: { type: "string" } }, required: ["jobId"], additionalProperties: false } },
+  { name: "codex_stop", description: "Codex ジョブの停止を要求する", inputSchema: { type: "object", properties: { jobId: { type: "string" } }, required: ["jobId"], additionalProperties: false } },
 ];
 
+function validArguments(name, args) {
+  if (!isRecord(args)) return false;
+  if (name === "codex_capabilities" || name === "codex_models") return Object.keys(args).length === 0;
+  const keys = name === "codex_start" ? ["cwd", "model", "effort", "access", "instruction"] : ["jobId"];
+  return Object.keys(args).every((key) => keys.includes(key)) && keys.every((key) => typeof args[key] === "string") &&
+    (name !== "codex_start" || (args.cwd.length > 0 && args.model.length > 0 && args.instruction.length > 0)) &&
+    (name === "codex_start" || args.jobId.length > 0);
+}
+
+async function startJob(args, { listModels, spawnProcess, allowedRoots, stopGraceMs }) {
+  try {
+    const capabilities = await loadCapabilities({ listModels });
+    if (!isAccepted(capabilities, { model: args.model, effort: args.effort, access: args.access })) return { kind: "not-started", reason: "指定されたモデル・推論量・権限の組み合わせは受け付けられません" };
+    if (!ACCEPTED_EFFORTS.has(args.effort)) return { kind: "not-started", reason: "Codex は指定された推論量を受け付けません" };
+    const roots = await Promise.all(allowedRoots.map((root) => realpath(root)));
+    const directory = await realpath(args.cwd);
+    if (!roots.some((root) => { const path = relative(root, directory); return path === "" || (path !== ".." && !path.startsWith(`..${sep}`) && !path.startsWith(sep)); })) return { kind: "not-started", reason: "作業先が許可範囲外です" };
+    const jobId = randomUUID();
+    const cliArgs = ["-a", "never", "exec", "--sandbox", args.access, "--model", args.model, "--config", `model_reasoning_effort=\"${args.effort}\"`, "--cd", directory, "-"];
+    let child;
+    try {
+      child = spawnProcess("codex", cliArgs, { cwd: directory, stdio: ["pipe", "pipe", "ignore"], shell: false, detached: true, windowsHide: true });
+    } catch (error) {
+      return { kind: "not-started", reason: error?.code === "ENOENT" ? "Codex CLI が見つかりません" : "Codex CLI を起動できません" };
+    }
+    const job = { child, status: "running", output: "", stopPromise: null, exitObserved: false };
+    jobs.set(jobId, job);
+    child.stdout?.on("data", (chunk) => { job.output = (job.output + chunk.toString()).slice(-MAX_OUTPUT); });
+    let spawned = false;
+    child.on("spawn", () => { spawned = true; });
+    child.on("error", () => {
+      if (job.exitObserved) return;
+      job.status = "unknown";
+      if (!spawned) job.spawnError = true;
+    });
+    child.on("exit", (code, signal) => { job.exitObserved = true; job.status = job.stopRequested ? "unknown" : code === 0 ? "succeeded" : code === null ? "unknown" : "failed"; job.exitCode = code; job.signal = signal; });
+    child.stdin?.on("error", () => {
+      if (job.exitObserved) return;
+      job.status = "unknown";
+      job.error = "Codex 起動後に指示を送信できたか確認できません";
+    });
+    const spawnResult = await new Promise((resolveSpawn) => {
+      const onSpawn = () => { cleanup(); resolveSpawn("spawned"); };
+      const onError = (error) => { cleanup(); resolveSpawn(error); };
+      const cleanup = () => { child.off("spawn", onSpawn); child.off("error", onError); };
+      child.once("spawn", onSpawn);
+      child.once("error", onError);
+    });
+    if (spawnResult !== "spawned") {
+      jobs.delete(jobId);
+      return { kind: "not-started", reason: spawnResult?.code === "ENOENT" ? "Codex CLI が見つかりません" : "Codex CLI を起動できません" };
+    }
+    try {
+      child.stdin.end(args.instruction);
+      return { kind: "started", jobId, status: "running" };
+    } catch {
+      job.status = "unknown";
+      job.error = "Codex 起動後に指示を送信できたか確認できません";
+      return { kind: "unknown", reason: "Codex 起動後に指示を送信できたか確認できません", jobId };
+    }
+  } catch (error) {
+    return { kind: "not-started", reason: error?.code === "ENOENT" ? "作業先または許可範囲が存在しません" : "起動条件を検証できません" };
+  }
+}
+
+function jobStatus(jobId) {
+  const job = jobs.get(jobId);
+  return job ? { jobId, status: job.status, output: job.output, ...(job.error ? { reason: job.error } : {}) } : { jobId, status: "unknown", reason: "ジョブを追跡できません" };
+}
+
+function processGroupGone(job, killProcess) {
+  if (!Number.isInteger(job.child.pid)) return false;
+  try {
+    killProcess(-job.child.pid, 0);
+    return false;
+  } catch (error) {
+    return error?.code === "ESRCH";
+  }
+}
+
+async function stopJob(jobId, stopGraceMs, killProcess) {
+  const job = jobs.get(jobId);
+  if (!job) return { jobId, status: "unknown", reason: "ジョブを追跡できません" };
+  if (job.exitObserved && !job.stopRequested) return jobStatus(jobId);
+  if (!job.stopPromise) job.stopPromise = new Promise((resolve) => {
+    job.stopRequested = true;
+    try { killProcess(-job.child.pid, "SIGTERM"); } catch { /* 既に消滅したグループ */ }
+    const timer = setTimeout(() => {
+      try { killProcess(-job.child.pid, "SIGKILL"); } catch { /* 既に消滅したグループ */ }
+    }, stopGraceMs);
+    timer.unref?.();
+    const check = setInterval(() => {
+      if (job.exitObserved && processGroupGone(job, killProcess)) {
+        clearTimeout(timer);
+        clearInterval(check);
+        job.status = "stopped";
+        resolve();
+      }
+    }, 10);
+    check.unref?.();
+  });
+  // 停止の完了を待ち続けず、確認前は停止済みと返さない。
+  await Promise.race([job.stopPromise, new Promise((resolve) => setTimeout(resolve, 25))]);
+  return jobStatus(jobId);
+}
+
 /** Codex MCP の最小 JSON-RPC サーバー。 */
-export async function serve({ input = process.stdin, output = process.stdout, listModels = listCodexModels } = {}) {
+export async function serve({ input = process.stdin, output = process.stdout, listModels = listCodexModels, spawnProcess = spawn, killProcess = process.kill.bind(process), allowedRoots = [resolve(dirname(fileURLToPath(import.meta.url)), "../..")], stopGraceMs = 1_000 } = {}) {
   const send = (message) => output.write(`${JSON.stringify(message)}\n`);
   const lines = createInterface({ input });
   for await (const line of lines) {
@@ -129,17 +243,23 @@ export async function serve({ input = process.stdin, output = process.stdout, li
       respond({ tools: toolDefinitions });
     } else if (request.method === "tools/call") {
       const name = request.params?.name;
-      if (name !== "codex_capabilities" && name !== "codex_models") {
+      if (!toolDefinitions.some((tool) => tool.name === name)) {
         if (Object.hasOwn(request, "id")) send({ jsonrpc: "2.0", id: request.id, error: { code: -32602, message: "未対応のツールです" } });
         continue;
       }
       const args = request.params?.arguments;
-      if (!isRecord(args) || Object.keys(args).length !== 0) {
+      if (!validArguments(name, args)) {
         if (Object.hasOwn(request, "id")) send({ jsonrpc: "2.0", id: request.id, error: { code: -32602, message: "ツール引数がスキーマに適合しません" } });
         continue;
       }
-      const capability = await getCapabilities({ listModels });
-      const result = capability.kind === "unavailable" ? capability : name === "codex_models" ? { models: capability.models.map((item) => item.id) } : capability;
+      let result;
+      if (name === "codex_start") result = await startJob(args, { listModels, spawnProcess, allowedRoots, stopGraceMs });
+      else if (name === "codex_status") result = jobStatus(args.jobId);
+      else if (name === "codex_stop") result = await stopJob(args.jobId, stopGraceMs, killProcess);
+      else {
+        const capability = await getCapabilities({ listModels });
+        result = capability.kind === "unavailable" ? capability : name === "codex_models" ? { models: capability.models.map((item) => item.id) } : capability;
+      }
       respond({ structuredContent: result, content: [{ type: "text", text: JSON.stringify(result) }] });
     }
   }
