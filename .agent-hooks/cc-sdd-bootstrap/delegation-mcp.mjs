@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { createHash, randomUUID } from "node:crypto";
 import { fingerprintTransport } from "./delegation-registry.mjs";
 
 // MCP 接続と、確認済み Pi サーバーの公開契約を扱う。
@@ -137,6 +138,8 @@ export async function connectStdioRegistration({ registration, saved, verifiedFa
     }
     return {
       serverInfo: initialized.serverInfo,
+      serverId: createHash("sha256").update(JSON.stringify([registration.host, registration.scope, registration.name, registration.registrationId])).digest("hex"),
+      connectionId: randomUUID(),
       tools,
       request,
       notify,
@@ -261,6 +264,7 @@ export async function createPiAdapter(connection) {
     const result = await connection.request("tools/call", { name, arguments: arguments_ });
     return parseToolResult(result);
   };
+  const jobIdentity = { serverId: connection.serverId ?? `mcp:${connection.serverInfo.name}`, connectionId: connection.connectionId ?? randomUUID() };
   return {
     async capabilities() {
       const value = await call("pi_capabilities", {});
@@ -279,27 +283,29 @@ export async function createPiAdapter(connection) {
       if (!Array.isArray(value) || !value.every((model) => typeof model === "string" && model.length > 0)) throw fail("Pi の受付モデル一覧を確認できません");
       return value;
     },
-    async start({ cwd, instruction, model, access, effort, session_id } = {}) {
+    async start(args = {}) {
+      if (!isObject(args) || Object.keys(args).some((key) => !["cwd", "instruction", "model", "access", "effort", "session_id"].includes(key))) return { kind: "not-started", reason: "Pi 起動条件が不正です" };
+      const { cwd, instruction, model, access, effort, session_id } = args;
       if (![cwd, instruction, model].every((value) => typeof value === "string" && value.length > 0) ||
           !["read-only", "workspace-write"].includes(access) || !["off", "medium", "high"].includes(effort) ||
-          session_id !== undefined && typeof session_id !== "string") throw fail("Pi 起動条件が不正です");
+          session_id !== undefined && typeof session_id !== "string") return { kind: "not-started", reason: "Pi 起動条件が不正です" };
       const advertised = await this.capabilities();
       if (!advertised.models.some((entry) => entry.id === model && entry.accepted.some((item) => item.access === access && item.effort === effort))) {
-        throw fail("Pi が公開していないモデル・権限・推論量の組み合わせです");
+        return { kind: "not-started", reason: "Pi が公開していないモデル・権限・推論量の組み合わせです" };
       }
       const acceptedModels = await this.models();
-      if (!acceptedModels.includes(model)) throw fail("Pi の受付モデル一覧にありません");
+      if (!acceptedModels.includes(model)) return { kind: "not-started", reason: "Pi の受付モデル一覧にありません" };
       const startSchema = connection.tools.get("pi_start").inputSchema;
       if ([...advertised.models.map((entry) => entry.id), ...acceptedModels].some((id) => !schemaAccepts(startSchema, "model", id))) {
-        throw fail("Pi の受付モデルが公開スキーマの制約に適合しません");
+        return { kind: "not-started", reason: "Pi の受付モデルが公開スキーマの制約に適合しません" };
       }
       if (![cwd, instruction, model, access, effort].every((value, index) => schemaAccepts(startSchema, ["cwd", "instruction", "model", "access", "thinking"][index], value)) ||
           session_id !== undefined && !schemaAccepts(startSchema, "session_id", session_id)) {
-        throw fail("Pi 起動値が公開スキーマの制約に適合しません");
+        return { kind: "not-started", reason: "Pi 起動値が公開スキーマの制約に適合しません" };
       }
       const value = await call("pi_start", { cwd, instruction, model, access, thinking: effort, ...(session_id === undefined ? {} : { session_id }) });
-      if (!isObject(value) || typeof value.job_id !== "string" || !value.job_id) throw fail("Pi 起動結果にジョブ識別子がありません");
-      return value;
+      if (!isObject(value) || typeof value.job_id !== "string" || !value.job_id) return { kind: "unknown", reason: "Pi 起動結果にジョブ識別子がありません" };
+      return { kind: "started", job: { ...jobIdentity, jobId: value.job_id } };
     },
     async status(jobId) {
       if (typeof jobId !== "string" || !jobId) throw fail("Pi ジョブ識別子が不正です");
@@ -311,5 +317,86 @@ export async function createPiAdapter(connection) {
       if (!schemaAccepts(connection.tools.get("pi_cancel").inputSchema, "job_id", jobId)) throw fail("Pi 停止値が公開スキーマの制約に適合しません");
       return call("pi_cancel", { job_id: jobId });
     },
+  };
+}
+
+// Codex の公開操作を委任ランナー共通の能力・起動契約へ変換する。
+export async function createCodexAdapter(connection) {
+  const failSchema = () => fail("Codex 公開スキーマを確認できません");
+  if (!connection || connection.serverInfo?.name !== "cc-sdd-codex" || !(connection.tools instanceof Map)) throw failSchema();
+  const expected = {
+    codex_capabilities: [], codex_models: [],
+    codex_start: ["cwd", "model", "effort", "access", "instruction"],
+    codex_status: ["jobId"], codex_stop: ["jobId"],
+  };
+  for (const [name, requiredFields] of Object.entries(expected)) {
+    const schema = connection.tools.get(name)?.inputSchema;
+    if (!isObject(schema) || schema.type !== "object" || !isObject(schema.properties) ||
+        schema.additionalProperties !== false || Object.keys(schema).some((key) => !["type", "properties", "required", "additionalProperties", "title", "description", "$schema"].includes(key)) ||
+        Object.keys(schema.properties).some((key) => ![...requiredFields, ...(name === "codex_start" ? [] : [])].includes(key)) ||
+        !Array.isArray(schema.required) || schema.required.length !== requiredFields.length || requiredFields.some((field) => !schema.required.includes(field)) ||
+        requiredFields.some((field) => schema.properties[field]?.type !== "string") ||
+        requiredFields.some((field) => !codexPropertySupported(schema.properties[field])) ||
+        ["codex_status", "codex_stop"].includes(name) && Object.hasOwn(schema.properties.jobId, "enum") ||
+        name === "codex_start" && (!Array.isArray(schema.properties.effort.enum) || !["medium", "high", "off"].every((v) => schema.properties.effort.enum.includes(v)) || !Array.isArray(schema.properties.access.enum) || !["read-only", "workspace-write"].every((v) => schema.properties.access.enum.includes(v)))) throw failSchema();
+  }
+  function codexPropertySupported(property) {
+    if (!isObject(property)) return false;
+    const allowed = new Set(["type", "enum", "title", "description", "default"]);
+    if (Object.keys(property).some((key) => !allowed.has(key))) return false;
+    if (property.enum !== undefined && (!Array.isArray(property.enum) || property.enum.some((value) => typeof value !== "string"))) return false;
+    return true;
+  }
+  const accepts = (toolName, args) => Object.entries(args).every(([key, value]) => {
+    const property = connection.tools.get(toolName).inputSchema.properties[key];
+    return property?.type === "string" && (property.enum === undefined || property.enum.includes(value));
+  });
+  const validJobId = (jobId, toolName) => typeof jobId === "string" && jobId.length > 0 && accepts(toolName, { jobId });
+  const jobIdentity = { serverId: connection.serverId ?? `mcp:${connection.serverInfo.name}`, connectionId: connection.connectionId ?? randomUUID() };
+  const call = async (name, args) => {
+    const result = await connection.request("tools/call", { name, arguments: args });
+    if (!isObject(result) || result.isError === true || result.error) throw fail("Codex MCP 操作が失敗しました");
+    if (Object.hasOwn(result, "structuredContent")) return result.structuredContent;
+    const text = result.content?.find((part) => isObject(part) && part.type === "text")?.text;
+    if (typeof text !== "string") throw fail("Codex MCP 応答に結果がありません");
+    try { return JSON.parse(text); } catch { throw fail("Codex MCP 応答が不正です"); }
+  };
+  return {
+    async capabilities() {
+      const value = await call("codex_capabilities", {});
+      const c = value?.result ?? value;
+      if (!isObject(c) || c.kind !== "agent" || c.harness !== "codex" || c.tier !== "cloud" || !Array.isArray(c.models) ||
+          !c.models.every((m) => isObject(m) && typeof m.id === "string" && m.id && Array.isArray(m.accepted) && m.accepted.every((x) => isObject(x) && ["read-only", "workspace-write"].includes(x.access) && ["medium", "high"].includes(x.effort)))) throw fail("Codex 能力応答を確認できません");
+      return { kind: c.kind, harness: c.harness, tier: c.tier, models: c.models };
+    },
+    async models() { const value = await call("codex_models", {}); const models = value?.result ?? value; if (!isObject(models) || !Array.isArray(models.models) || !models.models.every((x) => typeof x === "string" && x)) throw fail("Codex 受付モデル一覧を確認できません"); return models.models; },
+    async start(args = {}) {
+      if (!isObject(args) || Object.keys(args).some((key) => !["cwd", "instruction", "model", "access", "effort"].includes(key))) return { kind: "not-started", reason: "Codex 起動条件が不正です" };
+      const { cwd, instruction, model, access, effort } = args;
+      if (![cwd, instruction, model].every((x) => typeof x === "string" && x) || !["read-only", "workspace-write"].includes(access) || !["medium", "high"].includes(effort)) return { kind: "not-started", reason: "Codex 起動条件が不正です" };
+      let cap, models;
+      try {
+        [cap, models] = await Promise.all([this.capabilities(), this.models()]);
+        if (!models.includes(model) || !cap.models.some((m) => m.id === model && m.accepted.some((x) => x.access === access && x.effort === effort))) return { kind: "not-started", reason: "Codex が公開していないモデル・権限・推論量の組み合わせです" };
+      } catch (error) { return { kind: "not-started", reason: error.message || "Codex 起動前の受付可否を確認できません" }; }
+      const startArgs = { cwd, instruction, model, access, effort };
+      if (!accepts("codex_start", startArgs) || models.some((id) => !accepts("codex_start", { ...startArgs, model: id })) ||
+          cap.models.some((entry) => !accepts("codex_start", { ...startArgs, model: entry.id }))) return { kind: "not-started", reason: "Codex 起動値が公開スキーマの制約に適合しません" };
+      try {
+        const result = await call("codex_start", { cwd, instruction, model, access, effort });
+        const v = result?.result ?? result;
+        if (!isObject(v)) return { kind: "unknown", reason: "Codex 起動結果を確認できません" };
+        if (v.kind === "not-started") return { kind: "not-started", reason: typeof v.reason === "string" ? v.reason : "Codex 起動前に拒否されました" };
+        if (v.kind === "unknown") return {
+          kind: "unknown",
+          reason: typeof v.reason === "string" ? v.reason : "Codex 起動結果を確認できません",
+          ...(validJobId(v.jobId, "codex_status") && validJobId(v.jobId, "codex_stop") ? { job: { ...jobIdentity, jobId: v.jobId } } : {}),
+        };
+        if (v.kind === "started" && validJobId(v.jobId, "codex_status") && validJobId(v.jobId, "codex_stop")) return { kind: "started", job: { ...jobIdentity, jobId: v.jobId } };
+        return { kind: "unknown", reason: "Codex 起動結果を確認できません" };
+      } catch { return { kind: "unknown", reason: "Codex 起動後の MCP 応答を確認できません" }; }
+    },
+    status(jobId) { if (!validJobId(jobId, "codex_status")) throw fail("Codex 状態照会値が公開スキーマの制約に適合しません"); return call("codex_status", { jobId }); },
+    stop(jobId) { if (!validJobId(jobId, "codex_stop")) throw fail("Codex 停止値が公開スキーマの制約に適合しません"); return call("codex_stop", { jobId }); },
   };
 }
