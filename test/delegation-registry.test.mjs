@@ -33,8 +33,18 @@ test("承認・信頼済みの同一登録だけを解決し、秘密値を診�
   const e = entry();
   const result = resolveRegistration(e, identity(e), { verifiedFamily: "pi" });
   assert.equal(result.status, "eligible");
+  assert.equal(result.transportFingerprint, fingerprintTransport(e.transport));
   assert.equal(JSON.stringify(result).includes("secret"), false);
   assert.equal(JSON.stringify(result).includes("server.mjs"), false);
+});
+
+test("eligible の分類・再解決結果に秘密値を含まない transportFingerprint を付ける", () => {
+  const e = entry();
+  const classified = registry.classifyRegistration(e);
+  const resolved = resolveRegistration(e, identity(e), { verifiedFamily: "pi" });
+  assert.equal(classified.transportFingerprint, fingerprintTransport(e.transport));
+  assert.equal(resolved.transportFingerprint, fingerprintTransport(e.transport));
+  assert.equal(JSON.stringify(resolved).includes("secret"), false);
 });
 
 test("系統は確認済みで一致するときだけ登録を解決する", () => {

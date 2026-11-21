@@ -68,6 +68,7 @@ function toObservation(source) {
     approved: source.approved ?? null,
     trusted: source.trusted ?? null,
     transportType,
+    transportFingerprint: source.transport ? fingerprintTransport(source.transport) : source.transportFingerprint ?? null,
     registrationId: source.registrationId ?? fingerprintTransport(source.transport),
     error: source.error ? (Object.values(REASON).includes(source.error) ? source.error : REASON.readFailed) : null,
   };
@@ -75,8 +76,8 @@ function toObservation(source) {
 
 /** 判定結果。元の判定入力も残し、結果を再度解決に渡しても同じ判定になるようにする。 */
 function withStatus(observation, status, reason) {
-  const { host, name, family, scope, enabled, approved, trusted, transportType, registrationId, error } = observation;
-  return { host, name, family, scope, enabled, approved, trusted, transportType, registrationId, error, status, reason };
+  const { host, name, family, scope, enabled, approved, trusted, transportType, transportFingerprint, registrationId, error } = observation;
+  return { host, name, family, scope, enabled, approved, trusted, transportType, transportFingerprint, registrationId, error, status, reason };
 }
 
 /** 識別情報を照合せずに、有効・承認待ち・無効・不明を判定する。 */
