@@ -36,6 +36,42 @@ export function isClientSelection(value) {
   return CLIENT_CHOICES.some((choice) => choice === value);
 }
 
+const isRecord = (value) => typeof value === "object" && value !== null && !Array.isArray(value);
+const SAFE_NAME = /^[a-z0-9][a-z0-9-]*$/;
+const IDENTIFIER_FIELDS = ["family", "scope", "registrationName", "registrationId"];
+
+/** 委任候補の設定を検査する。登録 ID は形式を解釈せず、不透明な文字列として扱う。 */
+export function validateDelegation(value) {
+  if (!isRecord(value)) return "ホスト名ごとの委任設定（オブジェクト）で指定してください";
+  const seen = new Set();
+  for (const [host, tiers] of Object.entries(value)) {
+    if (!SAFE_NAME.test(host)) return `ホスト名 ${host} は英小文字・数字・ハイフンで指定してください`;
+    if (!isRecord(tiers) || Object.keys(tiers).some((key) => key !== "local" && key !== "cloud")) return `${host} は local と cloud の設定で指定してください`;
+    for (const tier of ["local", "cloud"]) {
+      if (!Object.hasOwn(tiers, tier)) continue;
+      if (!Array.isArray(tiers[tier])) return `${host}.${tier} は候補の配列で指定してください`;
+      for (const [index, candidate] of tiers[tier].entries()) {
+        const label = `${host}.${tier}[${index}]`;
+        if (!isRecord(candidate) || IDENTIFIER_FIELDS.some((key) => typeof candidate[key] !== "string" || candidate[key].trim() === "") || !isRecord(candidate.models)) return `${label} は family・scope・registrationName・registrationId と models が必要です`;
+        if (Object.keys(candidate).some((key) => ![...IDENTIFIER_FIELDS, "models"].includes(key))) return `${label} に未対応の項目があります`;
+        const identity = JSON.stringify(IDENTIFIER_FIELDS.map((key) => candidate[key]));
+        if (seen.has(`${host}\0${identity}`)) return `${label} は同じホスト内で登録識別情報が重複しています`;
+        seen.add(`${host}\0${identity}`);
+        for (const [role, model] of Object.entries(candidate.models)) {
+          if (!SAFE_NAME.test(role) || !isRecord(model) || Object.keys(model).length !== 1) return `${label}.models.${role} は fixed または compatibleIds のどちらか一方で指定してください`;
+          if (Object.hasOwn(model, "fixed")) {
+            if (typeof model.fixed !== "string" || model.fixed.trim() === "") return `${label}.models.${role}.fixed は空でない文字列で指定してください`;
+          } else if (Object.hasOwn(model, "compatibleIds")) {
+            if (!Array.isArray(model.compatibleIds) || model.compatibleIds.some((id) => typeof id !== "string" || id.trim() === "")) return `${label}.models.${role}.compatibleIds は空でない文字列の配列で指定してください`;
+            if (new Set(model.compatibleIds).size !== model.compatibleIds.length) return `${label}.models.${role}.compatibleIds に重複があります`;
+          } else return `${label}.models.${role} は fixed または compatibleIds が必要です`;
+        }
+      }
+    }
+  }
+  return null;
+}
+
 const VERSION_RE = /^\d+\.\d+\.\d+(-.+)?$/;
 const LANG_RE = /^[a-z]{2}(-[A-Z]{2})?$/;
 const subagentFields = [

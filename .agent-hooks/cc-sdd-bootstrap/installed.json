@@ -17,7 +17,7 @@
     },
     ".agent-hooks/cc-sdd-bootstrap/config-schema.mjs": {
       "kind": "common",
-      "sha256": "3b19e4674dc7df2d89ca99bccc279110a8344fee7552effac5a39f02396c1430"
+      "sha256": "83210f0da2931f74ee96418a759a4c9e938fa322c0dba673e9ac0822f232a0fd"
     },
     ".agent-hooks/cc-sdd-bootstrap/install-cc-sdd.mjs": {
       "kind": "common",
@@ -29,7 +29,7 @@
     },
     ".agent-hooks/cc-sdd-bootstrap/install-rules.mjs": {
       "kind": "common",
-      "sha256": "44ecf3c73e746223cba368b13efafb4ec09afb26acf656b81a4d3d9282ba46b1"
+      "sha256": "d78911582505aac0562fbc1b2c8dbfb0d752e6b82fead2e4279bcf2d0b4c5fbb"
     },
     ".agent-hooks/cc-sdd-bootstrap/kiro-delegation-context.mjs": {
       "kind": "common",

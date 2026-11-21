@@ -1,4 +1,4 @@
-import { configFields, formatProblem } from "./config-schema.mjs";
+import { configFields, formatProblem, validateDelegation } from "./config-schema.mjs";
 
 export const CONFIG_FILE = ".cc-sdd-bootstrap.json";
 export const UPDATE_COMMAND = "npx github:nekono-dev/cc-sdd-bootstrap update";
@@ -50,6 +50,10 @@ export function readInstallConfig(text) {
   const lang = own(ccSdd, "lang");
   const keepRaw = own(ccSdd, "keepTemplates");
   const keepTemplates = keepRaw === undefined ? false : keepRaw;
+  if (parsed.delegation !== undefined) {
+    const problem = validateDelegation(parsed.delegation);
+    if (problem) return fail(`${CONFIG_FILE} の delegation: ${problem}`);
+  }
 
   const checks = [
     { path: "ccSdd.version", val: version },
@@ -67,7 +71,7 @@ export function readInstallConfig(text) {
     }
   }
 
-  return { ok: true, config: { version, lang, keepTemplates } };
+  return { ok: true, config: { version, lang, keepTemplates, ...(parsed.delegation === undefined ? {} : { delegation: parsed.delegation }), ...(parsed.codex === undefined ? {} : { codex: parsed.codex }) } };
 }
 
 /** buildState: 設定と導入したファイルの指紋から、導入状態の記録を組み立てる */
