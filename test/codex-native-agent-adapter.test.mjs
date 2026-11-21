@@ -128,6 +128,30 @@ test("Codex validates real sandbox objects, exact cwd, aliases, and permission c
   assert.equal(designEvidence.access, "read-only");
 });
 
+test("Codex workspace-write proof rejects approval escalation and write roots containing private evidence", async (t) => {
+  const f = await fixture(t);
+  const manufactureSettings = { subagents: { codexModels: { manufacture: "gpt-6.1-sol" } } };
+  const manufacture = resolveNative(manufactureSettings, "codex", "manufacture").value;
+  const def = generateNativeAgentDefinitions(manufactureSettings, "codex").find(x => x.relativePath.endsWith(`${manufacture.agentName}.toml`));
+  await writeFile(join(f.dir, def.relativePath), def.content);
+  const policy = manufacture;
+  const entries = [
+    { path: { type: "special", value: { kind: "root" } }, access: "read" },
+    { path: { type: "path", value: f.dir }, access: "write" },
+  ];
+  const turn = { type: "turn_context", payload: { turn_id: "turn-1", cwd: f.dir, model: "gpt-6-luna", sandbox_policy: { type: "workspace-write", writable_roots: [f.dir] }, approval_policy: "never", permission_profile: { type: "managed", file_system: { type: "restricted", entries }, network: "restricted" } } };
+  await writeFile(f.transcriptPath, JSON.stringify(turn) + "\n");
+  const launch = { toolName: "collaborationspawn_agent", agentName: manufacture.agentName, toolInput: { agent_type: manufacture.agentName, fork_turns: "none" } };
+  const hostEvent = { trusted: true, source: "host", turnId: "turn-1", model: "gpt-6-luna", transcriptPath: f.transcriptPath, toolName: launch.toolName, toolInput: launch.toolInput };
+  const adapter = createCodexNativeAgentAdapter({ runtimeRoot: join(f.dir, "private-runtime"), tempRoot: tmpdir() });
+  await assert.rejects(adapter.collectEvidence({ context: f.context, policy, settings: manufactureSettings, launch, hostEvent }), /approval|承認|隔離|書き込み/i);
+  turn.payload.approval_policy = "never";
+  turn.payload.permission_profile.file_system.entries.push({ path: { type: "special", value: { kind: "slash_tmp" } }, access: "write" });
+  turn.payload.sandbox_policy.exclude_slash_tmp = false;
+  await writeFile(f.transcriptPath, JSON.stringify(turn) + "\n");
+  await assert.rejects(adapter.collectEvidence({ context: f.context, policy, settings: manufactureSettings, launch, hostEvent }), /承認|隔離|書き込み|transcript/i);
+});
+
 test("Codex workspace-write evidence permits managed manufacture and design only inside project roots", async (t) => {
   const f = await fixture(t);
   const host = { trusted: true, source: "host", turnId: "turn-1", model: "gpt-6-luna", transcriptPath: f.transcriptPath };

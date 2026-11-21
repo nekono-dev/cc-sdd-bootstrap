@@ -34,7 +34,7 @@ function makeFixturePackage() {
   fs.mkdirSync(fixtureFiles, { recursive: true });
   fs.writeFileSync(path.join(fixtureFiles, "fixture-claude.txt"), "Claude fixture payload\n");
   fs.writeFileSync(path.join(fixtureFiles, "fixture-codex.txt"), "Codex fixture payload\n");
-  fs.appendFileSync(path.join(root, "lib/catalog.mjs"), `\n\n// E2E client fixtures.\ncatalog.files.push(\n  { path: \`.agent-hooks/cc-sdd-bootstrap/fixture-claude.txt\`, kind: "common", executable: false, client: "claude" },\n  { path: \`.agent-hooks/cc-sdd-bootstrap/fixture-codex.txt\`, kind: "common", executable: false, client: "codex" },\n);\ncatalog.codexHooks.push({ event: "SessionStart", command: codexHookCommand("install-cc-sdd.mjs", "session-start") });\ncatalog.gitignore.push({ line: ".agents/skills/kiro-*/", client: "codex" });\ncatalog.agentsSections.push({ id: "e2e-codex-fixture", body: "## Codex fixture section" });\n`);
+  fs.appendFileSync(path.join(root, "lib/catalog.mjs"), `\n\n// E2E client fixtures.\ncatalog.files.push(\n  { path: \`.agent-hooks/cc-sdd-bootstrap/fixture-claude.txt\`, kind: "common", executable: false, client: "claude" },\n  { path: \`.agent-hooks/cc-sdd-bootstrap/fixture-codex.txt\`, kind: "common", executable: false, client: "codex" },\n);\ncatalog.codexHooks.push({ event: "SessionStart", command: codexHookCommand("install-cc-sdd.mjs", "session-start") });\ncatalog.hooks.push({ event: "PreToolUse", matcher: "kiro-gate", command: 'node \\\"$CLAUDE_PROJECT_DIR/.agent-hooks/cc-sdd-bootstrap/install-gate.mjs\\\" pre-tool-use', timeout: 10 });\ncatalog.gitignore.push({ line: ".agents/skills/kiro-*/", client: "codex" });\ncatalog.agentsSections.push({ id: "e2e-codex-fixture", body: "## Codex fixture section" });\n`);
   return root;
 }
 
@@ -362,13 +362,29 @@ test("初期の配置物を含む導入先の update は古い入口を新しい
   assert.equal(updated.status, 0, updated.outputText);
   assert.equal(fs.existsSync(path.join(root, oldPath)), false);
   const result = JSON.parse(fs.readFileSync(settingsPath, "utf8"));
-  const owned = (result.hooks.SessionStart ?? []).flatMap((item) => item.hooks ?? []).filter((hook) => hook.command.includes(".agent-hooks/cc-sdd-bootstrap/"));
-  assert.equal(owned.length, 1);
-  assert.equal(owned[0].command, catalog.hooks.find((hook) => hook.event === "SessionStart").command);
-  for (const [event, groups] of Object.entries(result.hooks)) {
-    const count = groups.flatMap((item) => item.hooks ?? []).filter((hook) => hook.command.includes(".agent-hooks/cc-sdd-bootstrap/")).length;
-    assert.equal(count, 1, event);
+  const sessionHooks = (result.hooks.SessionStart ?? []).flatMap((item) => item.hooks ?? []);
+  const originalHook = catalog.hooks.find((hook) => hook.event === "SessionStart");
+  assert.equal(sessionHooks.filter((hook) => hook.command === originalHook.command).length, 1);
+  for (const hook of catalog.hooks.filter((item) => item.command.includes("subagent-model-policy-hook.mjs"))) {
+    const groups = result.hooks[hook.event] ?? [];
+    assert.equal(groups.flatMap((item) => item.hooks ?? []).filter((entry) => entry.command === hook.command).length, 1, hook.command);
   }
+  assert.ok(result.hooks.SessionStart.flatMap((item) => item.hooks ?? []).some((hook) => hook.command === catalog.hooks[0].command));
+});
+
+test("kiro-gate と利用者 matcher は反復更新後もポリシーフックと共存する", () => {
+  const root = makeRepo();
+  assert.equal(runFixture(root, ["init"]).status, 0);
+  const settingsPath = path.join(root, ".claude/settings.json");
+  const settings = JSON.parse(fs.readFileSync(settingsPath, "utf8"));
+  settings.hooks.PreToolUse.push({ matcher: "UserCustom", hooks: [{ type: "command", command: "echo user matcher" }] });
+  fs.writeFileSync(settingsPath, `${JSON.stringify(settings, null, 2)}\n`);
+  assert.equal(runFixture(root, ["update"]).status, 0);
+  assert.equal(runFixture(root, ["update"]).status, 0);
+  const groups = JSON.parse(fs.readFileSync(settingsPath, "utf8")).hooks.PreToolUse;
+  assert.ok(groups.some((group) => group.matcher === "kiro-gate" && group.hooks.some((hook) => hook.command.includes("install-gate.mjs"))));
+  assert.ok(groups.some((group) => group.matcher === "UserCustom" && group.hooks.some((hook) => hook.command === "echo user matcher")));
+  assert.ok(groups.some((group) => group.matcher === "Bash|Agent" && group.hooks.some((hook) => hook.command.includes("subagent-model-policy-hook.mjs"))));
 });
 
 test("記録後に書き換えた古い導入スクリプトがある update は --force を案内する", () => {

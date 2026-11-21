@@ -1,12 +1,15 @@
-import { readFile, realpath } from "node:fs/promises";
-import { join } from "node:path";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
+import { lstat, readFile, realpath } from "node:fs/promises";
+import { join, relative, isAbsolute } from "node:path";
 import { verifyNativeAgentDefinition } from "./native-agent-definitions.mjs";
 
+const exec = promisify(execFile);
 const ROLE_NAMES = Object.freeze({ manufacture: "cc_sdd_manufacture", review: "cc_sdd_review", design: "cc_sdd_design", research: "cc_sdd_research", debug: "cc_sdd_debug" });
 const TOOLS = new Set(["spawn_agent", "collaborationspawn_agent"]);
 
 /** Codex の信頼済みフックと現在ターン transcript から起動証拠を組み立てる。 */
-export function createCodexNativeAgentAdapter() {
+export function createCodexNativeAgentAdapter(isolation = null) {
   function resolvePolicyModel(modelId) { return typeof modelId === "string" && modelId.trim() === modelId && modelId ? modelId : null; }
 
   function normalizeLaunch({ toolName, toolInput }) {
@@ -45,14 +48,42 @@ export function createCodexNativeAgentAdapter() {
     if (turn.model !== hook.model) throw new Error("現在ターンのモデル証拠が矛盾しています");
     let projectPath, cwdPath;
     try { [projectPath, cwdPath] = await Promise.all([realpath(context.project), realpath(turn.cwd)]); } catch { throw new Error("現在ターンの作業先を確認できません"); }
-    if (projectPath !== cwdPath) throw new Error("現在ターンの作業先がプロジェクトと一致しません");
+    if (projectPath !== cwdPath) {
+      try {
+        const { stdout } = await exec("git", ["-C", cwdPath, "rev-parse", "--show-toplevel"]);
+        cwdPath = await realpath(stdout.trimEnd());
+      } catch { throw new Error("現在ターンの作業先を確認できません"); }
+      if (projectPath !== cwdPath) throw new Error("現在ターンの作業先がプロジェクトと一致しません");
+    }
     const access = policy.access;
     if (!verifyPermission(turn, context.project, access)) throw new Error("Codex の実効権限を確認できません");
+    if (access === "workspace-write" && isolation) await verifyPrivateWriteProof({ isolation, context, hook, turn });
     return { role: policy.role, client: "codex", agentName: launch.agentName, definitionVerified: true,
       parentModelId: turn.model, childModelId: policy.modelId, effort: policy.effort, access, historyInherited: false };
   }
   return Object.freeze({ normalizeLaunch, collectEvidence, resolvePolicyModel, requiresCodexHookProof: true });
 }
+
+async function verifyPrivateWriteProof({ isolation, context, hook, turn }) {
+  if (turn.approval_policy !== "never") throw new Error("workspace-write の承認ポリシーを確認できません");
+  if (!safeString(isolation.runtimeRoot) || !safeString(isolation.tempRoot)) throw new Error("隔離設定を確認できません");
+  let runtimeRoot, project, transcript, tempRoot;
+  try { [runtimeRoot, project, transcript, tempRoot] = await Promise.all([realpath(isolation.runtimeRoot), realpath(context.project), realpath(hook.transcriptPath), realpath(isolation.tempRoot)]); }
+  catch { throw new Error("隔離領域またはホスト transcript を確認できません"); }
+  const info = await lstat(runtimeRoot).catch(() => null);
+  if (!info?.isDirectory() || info.isSymbolicLink() || info.uid !== process.getuid?.() || (info.mode & 0o077) !== 0) throw new Error("私有 runtimeRoot を確認できません");
+  const writeRoots = [];
+  for (const entry of turn.permission_profile.file_system.entries) {
+    if (entry?.access !== "write") continue;
+    const path = entry.path;
+    if (path?.type === "path") writeRoots.push(await realpath(path.value));
+    else if (path?.type === "special" && path.value?.kind === "slash_tmp") writeRoots.push(await realpath("/tmp"));
+    else if (path?.type === "special" && path.value?.kind === "tmpdir") writeRoots.push(tempRoot);
+  }
+  if (!writeRoots.some(root => root === project)) throw new Error("プロジェクト書き込み範囲を確認できません");
+  if (writeRoots.some(root => contains(root, runtimeRoot) || contains(root, transcript))) throw new Error("書き込み可能範囲に私有証拠が含まれています");
+}
+function contains(root, target) { const rel = relative(root, target); return rel === "" || (!isAbsolute(rel) && rel !== ".." && !rel.startsWith(`..${process.platform === "win32" ? "\\" : "/"}`)); }
 
 async function readTranscript(path) {
   if (!safeString(path) || !path.startsWith("/")) throw new Error("transcript path");

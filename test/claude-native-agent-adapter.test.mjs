@@ -104,6 +104,19 @@ test("default sonnet alias is normalized, and only a matching complete switch pa
   assert.equal(override.childModelId, "claude-haiku-4-5-20251001"); assert.equal(override.effort, "high");
 });
 
+test("deployed Claude adapter refuses workspace-write without host private-write proof", async (t) => {
+  const base = await mkdtemp(join(tmpdir(), "claude-write-proof-")); t.after(() => rm(base, { recursive: true, force: true }));
+  const store = createClaudeObservationStore({ root: join(base, "store") });
+  const adapter = createClaudeNativeAgentAdapter({ store, requirePrivateWriteProof: true, aliases: { haiku: "claude-haiku-4-5-20251001" } });
+  const session = { project: base, sessionId: "s" };
+  const settings = { subagents: { claudeModels: { manufacture: "haiku" } } };
+  const policy = { role: "manufacture", client: "claude", agentName: "cc-sdd-manufacture", modelId: "haiku", effort: "medium", access: "workspace-write" };
+  const definition = generateNativeAgentDefinitions(settings, "claude").find(item => item.relativePath.endsWith("cc-sdd-manufacture.md"));
+  await mkdir(join(base, ".claude/agents"), { recursive: true }); await writeFile(join(base, definition.relativePath), definition.content);
+  await adapter.observe({ ...session, event: "SessionStart", model: "haiku" });
+  await assert.rejects(adapter.collectEvidence({ context: session, policy, settings, launch: { agentName: policy.agentName }, hostEvent: null }), /書き込み|write|証拠/i);
+});
+
 test("実 Claude adapter で事前発行から起動まで許可し、切替後と上書きを再判定する", async (t) => {
   const base = await mkdtemp(join(tmpdir(), "claude-context-")); t.after(() => rm(base, { recursive: true, force: true }));
   const project = join(base, "project"), writable = join(base, "write"), skills = join(base, "skills"), runtime = join(base, "runtime");

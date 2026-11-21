@@ -5,7 +5,7 @@ import { verifyNativeAgentDefinition } from "./native-agent-definitions.mjs";
 const CANONICAL = /^claude-[a-z0-9-]+$/;
 
 /** Claude Code の実イベント、管理定義、隔離ストアから起動証拠を組み立てる。 */
-export function createClaudeNativeAgentAdapter({ store, aliases = {} } = {}) {
+export function createClaudeNativeAgentAdapter({ store, aliases = {}, requirePrivateWriteProof = false } = {}) {
   if (!store || typeof store.keyFor !== "function" || typeof store.read !== "function" || typeof store.transact !== "function") throw new TypeError("原子的な Claude 観測ストアが必要です");
   const normalize = (value) => typeof value === "string" && (CANONICAL.test(value) ? value : (Object.hasOwn(aliases, value) && CANONICAL.test(aliases[value] ?? "") ? aliases[value] : null));
   const observationKey = (input) => store.keyFor({ project: input?.project ?? input?.cwd, sessionId: input?.sessionId });
@@ -56,6 +56,7 @@ export function createClaudeNativeAgentAdapter({ store, aliases = {} } = {}) {
     if (hostEvent !== null && (!hostEvent || typeof hostEvent.toolUseId !== "string" || !hostEvent.toolUseId ||
         (hostEvent.session_id && hostEvent.session_id !== context.sessionId) || hostEvent.toolInput?.subagent_type !== launch.agentName ||
         (hostEvent.toolInput?.model !== undefined && normalize(hostEvent.toolInput.model) !== normalize(launch.requestedModel)))) throw new Error("起動時指定");
+    if (requirePrivateWriteProof && policy.access === "workspace-write") throw new Error("Claude の workspace-write に必要なホスト権限証拠がありません");
     const requestedModel = launch.requestedModel;
     const childModelId = requestedModel === undefined ? normalize(policy.modelId) : normalize(requestedModel);
     const effort = launch.requestedEffort ?? policy.effort;

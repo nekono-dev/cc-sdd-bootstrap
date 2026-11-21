@@ -92,7 +92,7 @@ test("files の道筋は DEPLOY_DIR の下にあり、.. を含まず、パッ�
   }
 });
 
-test("files はセッション導入の 4 本で、全て実行権限なし", () => {
+test("files はセッション導入とサブエージェントポリシーで、全て実行権限なし", () => {
   assert.deepEqual(
     catalog.files.map((f) => [f.path, f.kind, f.executable]),
     [
@@ -100,15 +100,16 @@ test("files はセッション導入の 4 本で、全て実行権限なし", ()
       [`${DEPLOY_DIR}/install-rules.mjs`, "common", false],
       [`${DEPLOY_DIR}/config-schema.mjs`, "common", false],
       [`${DEPLOY_DIR}/install-gate.mjs`, "common", false],
+      ...["native-agent-definitions.mjs", "role-policy.mjs", "native-agent-gate.mjs", "kiro-delegation-context.mjs", "claude-native-agent-adapter.mjs", "claude-observation-store.mjs", "codex-native-agent-adapter.mjs", "subagent-model-policy-hook.mjs"].map((name) => [`${DEPLOY_DIR}/${name}`, "common", false]),
     ],
   );
 });
 
-test("hooks の command は全て一式の見分けの文字列を含み、設計の 2 つである", () => {
+test("hooks は旧セッション登録と全ての管理ポリシーフックを含む", () => {
   for (const h of catalog.hooks) {
     assert.ok(h.command.includes(OWNED_MARKER), h.command);
   }
-  assert.deepEqual(catalog.hooks, [
+  assert.deepEqual(catalog.hooks.slice(0, 2), [
     {
       event: "SessionStart",
       command: `node "$CLAUDE_PROJECT_DIR${OWNED_MARKER}install-cc-sdd.mjs" session-start`,
@@ -120,6 +121,11 @@ test("hooks の command は全て一式の見分けの文字列を含み、設�
       timeout: 10,
     },
   ]);
+  assert.deepEqual(catalog.hooks.slice(2).map(({ event, matcher }) => [event, matcher]), [
+    ["SessionStart", undefined], ["UserPromptSubmit", undefined], ["PreToolUse", "Bash|Agent"],
+    ["PostToolUse", "Read"], ["PreModelSwitch", undefined], ["PostModelSwitch", undefined], ["Stop", undefined],
+  ]);
+  assert.ok(catalog.hooks.slice(2).every((hook) => hook.command.includes("subagent-model-policy-hook.mjs")));
 });
 
 test("Codex の登録と指示を Claude Code の項目から独立して定義できる", () => {
@@ -178,7 +184,7 @@ const GUIDE_IMPORT = "@.kiro/settings/cc-sdd-guide.md";
 test("claudeSections の id は重複しない", () => {
   const ids = catalog.claudeSections.map((s) => s.id);
   assert.equal(new Set(ids).size, ids.length);
-  assert.deepEqual(ids, ["cc-sdd-session-install", "cc-sdd-guide"]);
+  assert.deepEqual(ids, ["cc-sdd-session-install", "cc-sdd-guide", "cc-sdd-native-agent-policy"]);
   assert.ok(ids.includes("cc-sdd-guide"));
 });
 

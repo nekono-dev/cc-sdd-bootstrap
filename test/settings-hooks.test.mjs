@@ -14,6 +14,7 @@ test("text が null なら新しいファイルの中身を作る（6.1）", () 
   const j = JSON.parse(r.text);
   assert.deepEqual(j.hooks.SessionStart, [
     { hooks: [{ type: "command", command: hooks[0].command, timeout: 600 }] },
+    { hooks: [{ type: "command", command: hooks[2].command, timeout: 10 }] },
   ]);
   assert.equal(j.hooks.UserPromptSubmit[0].hooks[0].command, hooks[1].command);
   assert.ok(r.text.endsWith("}\n"));
@@ -44,8 +45,10 @@ test("利用者のフック・permissions・プラグインを残し、鍵の順
   assert.deepEqual(Object.keys(j), ["permissions", "hooks", "enabledPlugins", "extraKnownMarketplaces"]);
   assert.deepEqual(j.permissions, src.permissions);
   assert.deepEqual(j.enabledPlugins, src.enabledPlugins);
-  assert.deepEqual(j.hooks.Stop, src.hooks.Stop);
-  assert.equal(j.hooks.SessionStart.length, 2);
+  assert.equal(j.hooks.Stop.length, 2);
+  assert.deepEqual(j.hooks.Stop[0], src.hooks.Stop[0]);
+  assert.equal(j.hooks.Stop[1].hooks[0].command, hooks.find((h) => h.event === "Stop").command);
+  assert.equal(j.hooks.SessionStart.length, 3);
   assert.equal(j.hooks.SessionStart[0].hooks[0].command, "echo user");
   assert.equal(j.hooks.SessionStart[1].hooks[0].command, hooks[0].command);
 });
@@ -61,11 +64,12 @@ test("前の版の一式のフックを置き換え、重複させない（6.3�
     },
   };
   const j = JSON.parse(merge(JSON.stringify(src)).text);
-  assert.equal(j.hooks.PreToolUse, undefined);
-  assert.equal(j.hooks.SessionStart.length, 2);
+  assert.equal(j.hooks.PreToolUse.length, 1);
+  assert.equal(j.hooks.PreToolUse[0].hooks[0].command, hooks.find((h) => h.event === "PreToolUse").command);
+  assert.equal(j.hooks.SessionStart.length, 3);
   assert.equal(j.hooks.SessionStart[0].hooks[0].command, "echo user");
   assert.equal(j.hooks.SessionStart[1].hooks[0].command, hooks[0].command);
-  assert.equal(JSON.stringify(j).split(OWNED_MARKER).length - 1, 2);
+  assert.equal(JSON.stringify(j).split(OWNED_MARKER).length - 1, hooks.length);
 });
 
 test("Codex は正確な管理サフィックスがある登録だけを置き換える（6.6, 6.7, 6.8, 6.9, 9.2）", () => {

@@ -3,6 +3,18 @@
   "bootstrapVersion": "0.1.0",
   "clients": "both",
   "files": {
+    ".agent-hooks/cc-sdd-bootstrap/claude-native-agent-adapter.mjs": {
+      "kind": "common",
+      "sha256": "6c5a440f90b95a2eaaabc0aa86563c56b98e49db8cb72160cc975a29b6645905"
+    },
+    ".agent-hooks/cc-sdd-bootstrap/claude-observation-store.mjs": {
+      "kind": "common",
+      "sha256": "411fc0e0a7e783fbd1f963238a1115c49bdbb7bb0ca04cb5c0d7818407d1a6b2"
+    },
+    ".agent-hooks/cc-sdd-bootstrap/codex-native-agent-adapter.mjs": {
+      "kind": "common",
+      "sha256": "88684d9fd7fa418164983902b997a74dbb49cc463626b9d394855d0643f9044b"
+    },
     ".agent-hooks/cc-sdd-bootstrap/config-schema.mjs": {
       "kind": "common",
       "sha256": "3b19e4674dc7df2d89ca99bccc279110a8344fee7552effac5a39f02396c1430"
@@ -18,6 +30,26 @@
     ".agent-hooks/cc-sdd-bootstrap/install-rules.mjs": {
       "kind": "common",
       "sha256": "44ecf3c73e746223cba368b13efafb4ec09afb26acf656b81a4d3d9282ba46b1"
+    },
+    ".agent-hooks/cc-sdd-bootstrap/kiro-delegation-context.mjs": {
+      "kind": "common",
+      "sha256": "adb18807f30f0f5843f553069ac6ff2ed6ae32747a70fbcd29545986cd7fe71c"
+    },
+    ".agent-hooks/cc-sdd-bootstrap/native-agent-definitions.mjs": {
+      "kind": "common",
+      "sha256": "15228b3cbf8884a0b14de07d3d214d4f93c2ef513b42850f6e71772343c4675b"
+    },
+    ".agent-hooks/cc-sdd-bootstrap/native-agent-gate.mjs": {
+      "kind": "common",
+      "sha256": "48e508b2ecc5c3c03bc917a718521400f765904d42898ae76270cd35be6a1ecd"
+    },
+    ".agent-hooks/cc-sdd-bootstrap/role-policy.mjs": {
+      "kind": "common",
+      "sha256": "382a96f3bf9a091e958f8cca03d081d6ddbfeae8b582f15816c64bd787e48a0c"
+    },
+    ".agent-hooks/cc-sdd-bootstrap/subagent-model-policy-hook.mjs": {
+      "kind": "common",
+      "sha256": "d68b6f4fdc0660134f9fcbbd06ae4837e5526807fa90fabec5c5938510b1f0b7"
     },
     ".claude/agents/cc-sdd-debug.md": {
       "kind": "common",

@@ -1,0 +1,38 @@
+{
+  "hooks": {
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "repo_root=\"$(git rev-parse --show-toplevel)\" && node \"$repo_root/.agent-hooks/cc-sdd-bootstrap/subagent-model-policy-hook.mjs\" codex user-prompt-submit # cc-sdd-bootstrap:managed",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Bash|shell|spawn_agent|collaborationspawn_agent",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "repo_root=\"$(git rev-parse --show-toplevel)\" && node \"$repo_root/.agent-hooks/cc-sdd-bootstrap/subagent-model-policy-hook.mjs\" codex pre-tool-use # cc-sdd-bootstrap:managed",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "repo_root=\"$(git rev-parse --show-toplevel)\" && node \"$repo_root/.agent-hooks/cc-sdd-bootstrap/subagent-model-policy-hook.mjs\" codex stop # cc-sdd-bootstrap:managed",
+            "timeout": 10
+          }
+        ]
+      }
+    ]
+  }
+}

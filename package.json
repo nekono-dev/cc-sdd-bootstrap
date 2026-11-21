@@ -17,7 +17,13 @@
     ".agent-hooks/cc-sdd-bootstrap/config-schema.mjs",
     ".agent-hooks/cc-sdd-bootstrap/native-agent-definitions.mjs",
     ".agent-hooks/cc-sdd-bootstrap/role-policy.mjs",
-    ".agent-hooks/cc-sdd-bootstrap/install-gate.mjs"
+    ".agent-hooks/cc-sdd-bootstrap/install-gate.mjs",
+    ".agent-hooks/cc-sdd-bootstrap/native-agent-gate.mjs",
+    ".agent-hooks/cc-sdd-bootstrap/kiro-delegation-context.mjs",
+    ".agent-hooks/cc-sdd-bootstrap/claude-native-agent-adapter.mjs",
+    ".agent-hooks/cc-sdd-bootstrap/claude-observation-store.mjs",
+    ".agent-hooks/cc-sdd-bootstrap/codex-native-agent-adapter.mjs",
+    ".agent-hooks/cc-sdd-bootstrap/subagent-model-policy-hook.mjs"
   ],
   "scripts": {
     "test": "node --test \"test/**/*.test.mjs\""

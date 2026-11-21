@@ -20,6 +20,15 @@
             "timeout": 600
           }
         ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"$CLAUDE_PROJECT_DIR/.agent-hooks/cc-sdd-bootstrap/subagent-model-policy-hook.mjs\" claude session-start",
+            "timeout": 10
+          }
+        ]
       }
     ],
     "UserPromptSubmit": [
@@ -28,6 +37,72 @@
           {
             "type": "command",
             "command": "node \"$CLAUDE_PROJECT_DIR/.agent-hooks/cc-sdd-bootstrap/install-gate.mjs\" user-prompt-submit",
+            "timeout": 10
+          }
+        ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"$CLAUDE_PROJECT_DIR/.agent-hooks/cc-sdd-bootstrap/subagent-model-policy-hook.mjs\" claude user-prompt-submit",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Bash|Agent",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"$CLAUDE_PROJECT_DIR/.agent-hooks/cc-sdd-bootstrap/subagent-model-policy-hook.mjs\" claude pre-tool-use",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Read",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"$CLAUDE_PROJECT_DIR/.agent-hooks/cc-sdd-bootstrap/subagent-model-policy-hook.mjs\" claude post-tool-use",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "PreModelSwitch": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"$CLAUDE_PROJECT_DIR/.agent-hooks/cc-sdd-bootstrap/subagent-model-policy-hook.mjs\" claude pre-model-switch",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "PostModelSwitch": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"$CLAUDE_PROJECT_DIR/.agent-hooks/cc-sdd-bootstrap/subagent-model-policy-hook.mjs\" claude post-model-switch",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"$CLAUDE_PROJECT_DIR/.agent-hooks/cc-sdd-bootstrap/subagent-model-policy-hook.mjs\" claude stop",
             "timeout": 10
           }
         ]
