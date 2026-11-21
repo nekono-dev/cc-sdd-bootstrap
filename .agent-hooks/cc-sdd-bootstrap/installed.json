@@ -49,7 +49,7 @@
     },
     ".agent-hooks/cc-sdd-bootstrap/subagent-model-policy-hook.mjs": {
       "kind": "common",
-      "sha256": "d68b6f4fdc0660134f9fcbbd06ae4837e5526807fa90fabec5c5938510b1f0b7"
+      "sha256": "d4404aae5f12be445b73d3a2abd8f081224ba788c6d37b77b9f330c40560ce7b"
     },
     ".claude/agents/cc-sdd-debug.md": {
       "kind": "common",

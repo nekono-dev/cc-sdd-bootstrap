@@ -30,11 +30,14 @@ function nativeTool(client, name) {
 
 /** ホストのフック入力を内部イベントに変換する。信頼属性は常にこの入口が付与する。 */
 export function normalizeHostEvent(client, eventName, input) {
-  if (!record(input) || !["claude", "codex"].includes(client)) return null;
-  const common = { trusted: true, source: "host", cwd: input.cwd, sessionId: input.session_id,
+  if (!record(input) || !valid(input.cwd) || !valid(input.session_id) || !["claude", "codex"].includes(client)) return null;
+  if (client === "codex" && Object.hasOwn(input, "agent_id") && !valid(input.agent_id)) return null;
+  const sessionId = client === "codex" && valid(input.agent_id)
+    ? `codex-agent:${Buffer.from(JSON.stringify([input.session_id, input.agent_id])).toString("base64url")}`
+    : input.session_id;
+  const common = { trusted: true, source: "host", cwd: input.cwd, sessionId,
     ...(valid(input.turn_id) ? { turnId: input.turn_id } : {}),
     ...(valid(input.prompt_id) ? { promptId: input.prompt_id } : {}) };
-  if (!valid(common.cwd) || !valid(common.sessionId)) return null;
   if (eventName === "UserPromptSubmit") {
     if (client === "codex" && !valid(common.turnId)) return null;
     return { ...common, prompt: typeof input.prompt === "string" ? input.prompt : "" };

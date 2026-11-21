@@ -19,6 +19,44 @@ test("Codex は turn_id 欠落を拒否し、未知のイベントは処理し�
   assert.equal(normalizeHostEvent("codex", "Unexpected", {}), null);
 });
 
+test("Codex の子エージェント状態と終了イベントは同じホスト session_id の親から分離する", async () => {
+  const { mkdir, mkdtemp, rm, writeFile } = await import("node:fs/promises");
+  const { tmpdir } = await import("node:os");
+  const { join } = await import("node:path");
+  const { createKiroDelegationContext } = await import("../.agent-hooks/cc-sdd-bootstrap/kiro-delegation-context.mjs");
+  const base = await mkdtemp(join(tmpdir(), "cc-sdd-codex-agent-scope-"));
+  try {
+    const cwd = join(base, "project");
+    await mkdir(join(cwd, ".agents/skills/kiro-impl"), { recursive: true });
+    await writeFile(join(cwd, ".agents/skills/kiro-impl/SKILL.md"), "# Test\n");
+    const rawSessionId = "shared-host-session";
+    const parent = createKiroDelegationContext({ runtimeRoot: join(base, "runtime"), writableRoots: [cwd], skillsRoot: join(cwd, ".agents/skills"), client: "codex" });
+    const input = { cwd, session_id: rawSessionId, turn_id: "parent-turn", prompt: "/kiro-impl" };
+    await routeHostEvent({ client: "codex", eventName: "UserPromptSubmit", input, context: parent });
+    assert.equal((await parent.current({ cwd, sessionId: rawSessionId })).active, true);
+
+    const childInput = { ...input, turn_id: "child-turn", agent_id: "agent-child-7", prompt: "child work" };
+    await routeHostEvent({ client: "codex", eventName: "UserPromptSubmit", input: childInput, context: parent });
+    const childPrompt = normalizeHostEvent("codex", "UserPromptSubmit", childInput);
+    assert.notEqual(childPrompt.sessionId, rawSessionId);
+    assert.equal((await parent.current({ cwd, sessionId: rawSessionId })).active, true);
+    assert.equal((await parent.current({ cwd, sessionId: childPrompt.sessionId })).active, false);
+
+    const childLaunch = normalizeHostEvent("codex", "PreToolUse", { ...childInput, tool_name: "spawn_agent", tool_use_id: "launch-1", tool_input: {} });
+    assert.equal(childLaunch.sessionId, childPrompt.sessionId);
+    await routeHostEvent({ client: "codex", eventName: "TurnEnd", input: { ...childInput, hook_event_name: "TurnEnd" }, context: parent });
+    assert.equal((await parent.current({ cwd, sessionId: rawSessionId })).active, true);
+    assert.equal((await parent.current({ cwd, sessionId: childPrompt.sessionId })).ended, true);
+
+    assert.equal(normalizeHostEvent("codex", "UserPromptSubmit", { ...childInput, agent_id: " " }), null);
+    assert.equal(normalizeHostEvent("codex", "UserPromptSubmit", { ...childInput, agent_id: 7 }), null);
+    assert.equal(normalizeHostEvent("codex", "UserPromptSubmit", { ...childInput, session_id: undefined }), null);
+    assert.equal(normalizeHostEvent("claude", "UserPromptSubmit", { cwd, session_id: rawSessionId, agent_id: "agent-child-7", prompt_id: "claude-prompt" }).sessionId, rawSessionId);
+  } finally {
+    await rm(base, { recursive: true, force: true });
+  }
+});
+
 test("Claude SessionStart は実際の observe 契約にモデルと正規プロジェクトを渡す", async () => {
   let observed;
   const result = await routeHostEvent({ client: "claude", eventName: "SessionStart",
