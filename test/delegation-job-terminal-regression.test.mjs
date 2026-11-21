@@ -221,7 +221,7 @@ test("実 worker は送信後不明の書き込みを別依頼 ID でも再起�
     const baseRequest = { project, cwd: project, role: "manufacture", instruction: "編集", skill: "kiro-implement", taskId: "4.5", access: "workspace-write" };
     assert.equal((await makeWorker().start({ ...baseRequest, requestId: "write.unknown:1" })).kind, "pending");
     const retry = await makeWorker().start({ ...baseRequest, requestId: "write.unknown:2" });
-    assert.equal(retry.kind, "unavailable");
+    assert.equal(retry.kind, "blocked");
     assert.match(retry.reasons.join(" "), /終了を確認できません/);
     assert.equal(starts, 1, "不明な先行書き込みの後に候補を起動しない");
   } finally { await rm(base, { recursive: true, force: true }); }

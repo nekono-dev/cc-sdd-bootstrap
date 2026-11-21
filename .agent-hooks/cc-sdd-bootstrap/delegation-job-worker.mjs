@@ -1,6 +1,6 @@
 import { selectDelegate } from "./delegation-select.mjs";
 import { connectStdioRegistration, createCodexAdapter, createPiAdapter } from "./delegation-mcp.mjs";
-import { resolveRegistration } from "./delegation-registry.mjs";
+import { listRegistrations, readTransport, resolveRegistration } from "./delegation-registry.mjs";
 import { createDelegationJobStore } from "./delegation-job-store.mjs";
 import { createHash, randomUUID } from "node:crypto";
 import { serveControl } from "./delegation-job-control.mjs";
@@ -80,6 +80,74 @@ function classifyStart(value) {
   return { kind: "unknown", reason: "起動応答の形式が不正です", ...(safeJobId(value?.job) ? { job: value.job } : {}) };
 }
 
+const RESOLVE_KEYS = new Set(["host", "scope", "name", "registrationId", "status"]);
+
+/**
+ * 承認済みの登録を、同じ作業先でホストから列挙し直して照合する本番の解決関数を作る。
+ * 名前と設定元が一致する観測を一つだけ選び、保存済みの識別情報と resolveRegistration で照合する。
+ * 観測が無い・一意に決まらない・列挙に失敗した場合は承認済みとしない（eligible 以外を返す）。
+ */
+export function createHostResolveRegistration(options) {
+  const unknown = (reason) => ({ status: "unknown", reason });
+  if (!object(options) || Object.keys(options).some((key) => !["cwd", "listRegistrations"].includes(key)) ||
+      !identity(options.cwd) || !isAbsolute(options.cwd) ||
+      options.listRegistrations !== undefined && typeof options.listRegistrations !== "function") {
+    return async () => unknown("登録の再解決の設定が不正です");
+  }
+  const cwd = resolve(options.cwd);
+  const list = options.listRegistrations ?? listRegistrations;
+  return async function resolveFromHost(registration, saved, extra) {
+    if (!object(registration) || !onlyKeys(registration, RESOLVE_KEYS) || !identity(registration.host) ||
+        !["project", "user"].includes(registration.scope) || !identity(registration.name) || !identity(registration.registrationId) ||
+        !object(extra) || !onlyKeys(extra, new Set(["verifiedFamily"]))) {
+      return unknown("登録の記述が不正です");
+    }
+    let observed;
+    try { observed = await list(registration.host, { cwd }); }
+    catch { return unknown("登録情報を取得できませんでした"); }
+    if (!Array.isArray(observed)) return unknown("登録情報の形式が不正です");
+    const matches = observed.filter((item) => object(item) && item.name === registration.name && item.scope === registration.scope);
+    if (matches.length === 0) return unknown("登録が見つかりません");
+    if (matches.length > 1) return unknown("同名の登録が複数あり、一意に決まりません");
+    return resolveRegistration(matches[0], saved, { verifiedFamily: extra.verifiedFamily });
+  };
+}
+
+/**
+ * 依頼の作業先に対応する一時プロセス用の worker を作る。
+ * 登録の再照合・接続情報の読み直し・記録の保存先をここで組み立てる。テストでは列挙・読み取り・子プロセスを差し替える。
+ */
+export function createProjectJobWorker(request, options = {}) {
+  const allowed = new Set(["runtime", "listRegistrations", "readTransport", "spawnProcess", "adapterFactory", "resolveWorktreeRoot"]);
+  if (!object(options) || Object.keys(options).some((key) => !allowed.has(key)) ||
+      options.runtime !== undefined && !identity(options.runtime) ||
+      options.listRegistrations !== undefined && typeof options.listRegistrations !== "function" ||
+      options.readTransport !== undefined && typeof options.readTransport !== "function" ||
+      options.spawnProcess !== undefined && typeof options.spawnProcess !== "function" ||
+      options.adapterFactory !== undefined && typeof options.adapterFactory !== "function" ||
+      options.resolveWorktreeRoot !== undefined && typeof options.resolveWorktreeRoot !== "function") return createJobWorker(null);
+  if (!object(request) || !identity(request.project) || !identity(request.cwd) || !isAbsolute(request.project) || !isAbsolute(request.cwd)) return createJobWorker(null);
+  const runtime = options.runtime ?? (process.env.XDG_RUNTIME_DIR || (typeof process.getuid === "function" ? `/run/user/${process.getuid()}` : ""));
+  if (!runtime || !resolve(runtime).startsWith("/")) return createJobWorker(null);
+  const project = resolve(request.project);
+  const projectKey = createHash("sha256").update(project).digest("hex").slice(0, 24);
+  const store = createDelegationJobStore({ root: join(resolve(runtime), "cc-sdd-bootstrap", projectKey), writableRoots: [project],
+    ...(options.resolveWorktreeRoot ? { resolveWorktreeRoot: options.resolveWorktreeRoot } : {}) });
+  const readAt = options.readTransport ?? readTransport;
+  // 承認済み登録の接続情報は、同じ作業先の登録元から読み直す（ホストの識別値で再照合される）。
+  const readRegistrationTransport = (registration) => readAt({
+    host: registration?.host, scope: registration?.scope, name: registration?.name, registrationId: registration?.registrationId,
+    status: registration?.status, transportFingerprint: registration?.transportFingerprint,
+  }, { cwd: project });
+  return createDefaultJobWorker({
+    store,
+    readTransport: readRegistrationTransport,
+    resolveRegistration: createHostResolveRegistration({ cwd: project, ...(options.listRegistrations ? { listRegistrations: options.listRegistrations } : {}) }),
+    ...(options.spawnProcess ? { spawnProcess: options.spawnProcess } : {}),
+    ...(options.adapterFactory ? { adapterFactory: options.adapterFactory } : {}),
+  });
+}
+
 /** 依頼ごとに接続を保持し、MCP の起動・照会・停止を直列化する。 */
 export function createJobWorker(deps) {
   if (!object(deps) || Object.keys(deps).some((key) => !["select", "connect", "store", "now", "operationTimeoutMs", "isAlive", "setInterval", "clearInterval", "heartbeatIntervalMs"].includes(key)) ||
@@ -152,14 +220,15 @@ export function createJobWorker(deps) {
     let reservationGeneration;
     if (!readOnly) {
       try { reservation = await deps.store.reserve({ requestId: request.requestId, project: request.project, cwd: request.cwd, skill: request.skill, taskId: request.taskId }); }
-      catch { return { kind: "unavailable", reasons: ["書き込み依頼を排他記録できません"] }; }
+      catch { return { kind: "blocked", reasons: ["書き込み依頼を排他記録できません"] }; }
       if (!object(reservation) || reservation.kind !== "created") {
         if (reservation?.kind === "existing" && reservation.status === "terminal") {
           const terminal = normalizeTerminalResult(reservation.result);
-          return terminal ? { kind: "terminal", result: terminal } : { kind: "unavailable", reasons: ["既存の終端記録を検証できません。同じ書き込み作業は再起動しません"] };
+          return terminal ? { kind: "terminal", result: terminal } : { kind: "blocked", reasons: ["既存の終端記録を検証できません。同じ書き込み作業は再起動しません"] };
         }
         if (reservation?.kind === "existing") return { kind: "pending", requestId: request.requestId, reason: "同じ作業の先行記録があります。終了を確認するまで別候補を起動できません" };
-        return { kind: "unavailable", reasons: [typeof reservation?.reason === "string" ? reservation.reason : "書き込み依頼を予約できません"] };
+        // 排他・記録の不整合は起動前の不成立ではない。別候補やネイティブへ進むと同じ作業を重ねて委任するため blocked で返す。
+        return { kind: "blocked", reasons: [typeof reservation?.reason === "string" ? reservation.reason : "書き込み依頼を予約できません"] };
       }
     }
     let selected;
@@ -374,7 +443,7 @@ export function createJobWorker(deps) {
 /** 本番依存を接続し、選択した登録から Pi / Codex adapter を組み立てる。 */
 export function createDefaultJobWorker(options) {
   if (!object(options) || Object.keys(options).some((key) => !["select", "store", "now", "connectOptions", "adapterFactory", "readTransport", "resolveRegistration", "spawnProcess", "isAlive"].includes(key)) ||
-      !object(options.store) || Object.keys(options.store).some((key) => !["reserve", "release", "markUnknown", "track", "releaseTrack", "resolveControlTarget", "recordOwner", "heartbeat", "recordTerminal", "inspectOwner"].includes(key)) ||
+      !object(options.store) || Object.keys(options.store).some((key) => !["reserve", "release", "markUnknown", "track", "releaseTrack", "resolveControlTarget", "recordOwner", "heartbeat", "recordTerminal", "inspectOwner", "inspectWork"].includes(key)) ||
       typeof options.store.reserve !== "function" || typeof options.store.markUnknown !== "function" || options.store.resolveControlTarget !== undefined && typeof options.store.resolveControlTarget !== "function" ||
       options.store.release !== undefined && typeof options.store.release !== "function" ||
       options.store.track !== undefined && typeof options.store.track !== "function" ||
@@ -526,13 +595,7 @@ export async function runWorkerProcess(options) {
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  const createWorker = (request) => {
-    if (!object(request) || !identity(request.project) || !identity(request.cwd) || !isAbsolute(request.project) || !isAbsolute(request.cwd)) return createJobWorker(null);
-    const runtime = process.env.XDG_RUNTIME_DIR || (typeof process.getuid === "function" ? `/run/user/${process.getuid()}` : "");
-    if (!runtime || !resolve(runtime).startsWith("/")) return createJobWorker(null);
-    const projectKey = createHash("sha256").update(resolve(request.project)).digest("hex").slice(0, 24);
-    const store = createDelegationJobStore({ root: join(resolve(runtime), "cc-sdd-bootstrap", projectKey), writableRoots: [resolve(request.project)] });
-    return createDefaultJobWorker({ store });
-  };
+  // 作業先ごとの worker。登録は同じ作業先でホストから列挙し直して照合する。
+  const createWorker = (request) => createProjectJobWorker(request);
   runWorkerProcess({ stdin: process.stdin, stdout: process.stdout, deps: { createWorker } }).catch(() => { process.exitCode = 1; });
 }

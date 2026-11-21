@@ -4,7 +4,9 @@ import { EventEmitter } from "node:events";
 import { PassThrough } from "node:stream";
 import { createJobWorker, createDefaultJobWorker } from "../.agent-hooks/cc-sdd-bootstrap/delegation-job-worker.mjs";
 import { createCodexAdapter } from "../.agent-hooks/cc-sdd-bootstrap/delegation-mcp.mjs";
-import { fingerprintTransport, resolveRegistration as resolveSavedRegistration } from "../.agent-hooks/cc-sdd-bootstrap/delegation-registry.mjs";
+import { classifyRegistration, fingerprintTransport, resolveRegistration as resolveSavedRegistration } from "../.agent-hooks/cc-sdd-bootstrap/delegation-registry.mjs";
+// 公開されていない関数を名前で呼んだときに、ファイル全体ではなく個別のテストだけが失敗するように名前空間で読む。
+import * as jobWorkerModule from "../.agent-hooks/cc-sdd-bootstrap/delegation-job-worker.mjs";
 import { serve as createCodexServer } from "../.agent-hooks/cc-sdd-bootstrap/codex-agent-mcp.mjs";
 
 const request = { requestId: "req-1", project: "/repo", cwd: "/repo", role: "review", instruction: "inspect", skill: "kiro-feature", taskId: "1.1", access: "workspace-write", model: "m", effort: "high" };
@@ -315,7 +317,7 @@ test("能力と受付モデルの未知フィールド・不正識別子は起�
 test("書き込み予約 blocked は接続も起動もしない", async () => {
   let connected = 0;
   const worker = createJobWorker({ select: async () => ({ kind: "mcp" }), connect: async () => { connected++; }, store: { reserve: async () => ({ kind: "blocked", reason: "競合" }), markUnknown: async () => true }, now: Date.now });
-  assert.equal((await worker.start(request)).kind, "unavailable");
+  assert.equal((await worker.start(request)).kind, "blocked", "排他で止まった書き込みは別候補へ進めない");
   assert.equal(connected, 0);
 });
 
@@ -541,4 +543,33 @@ test("不正な状態応答は status・stop とも unknown に留め、所有�
       assert.equal(hClosed, 0, "不正な停止応答で接続を閉じない");
     });
   }
+});
+
+test("本番の登録解決は、同じ作業先でホストの登録を列挙し直し、名前・設定元・識別子が一致した観測だけを承認済みとする", async () => {
+  const observation = classifyRegistration({ host: "codex", name: "local", family: null, scope: "project", enabled: true, approved: true, trusted: true, transportType: "stdio", registrationId: "reg-local", transport: { type: "stdio", command: "fake-local" } });
+  const saved = { family: "pi", scope: "project", registrationName: "local", registrationId: "reg-local" };
+  const registration = { host: "codex", scope: "project", name: "local", registrationId: "reg-local", status: "eligible" };
+  const listed = [];
+  const resolveFromHost = jobWorkerModule.createHostResolveRegistration({ cwd: "/repo", listRegistrations: async (host, options) => { listed.push([host, options.cwd]); return [observation]; } });
+  const current = await resolveFromHost(registration, saved, { verifiedFamily: "pi" });
+  assert.equal(current.status, "eligible", JSON.stringify(current));
+  assert.equal(current.transportFingerprint, observation.transportFingerprint, "指紋は観測の値を引き継ぐ");
+  assert.deepEqual(listed, [["codex", "/repo"]], "同じ作業先で列挙し直す");
+
+  const replaced = await resolveFromHost(registration, { ...saved, registrationId: "reg-other" }, { verifiedFamily: "pi" });
+  assert.notEqual(replaced.status, "eligible", "識別子が違う登録は承認済みにしない");
+  const absent = await jobWorkerModule.createHostResolveRegistration({ cwd: "/repo", listRegistrations: async () => [] })(registration, saved, { verifiedFamily: "pi" });
+  assert.notEqual(absent.status, "eligible", "一覧に無い登録は利用しない");
+  const failing = await jobWorkerModule.createHostResolveRegistration({ cwd: "/repo", listRegistrations: async () => { throw new Error("読み取り失敗"); } })(registration, saved, { verifiedFamily: "pi" });
+  assert.notEqual(failing.status, "eligible", "列挙に失敗したら利用しない");
+  const ambiguous = await jobWorkerModule.createHostResolveRegistration({ cwd: "/repo", listRegistrations: async () => [observation, observation] })(registration, saved, { verifiedFamily: "pi" });
+  assert.notEqual(ambiguous.status, "eligible", "同名の観測が複数あれば一意に決まらないため利用しない");
+  const wrongFamily = await resolveFromHost(registration, saved, { verifiedFamily: "codex" });
+  assert.notEqual(wrongFamily.status, "eligible", "確認済みの系統が保存値と違えば利用しない");
+  for (const input of [null, [], { host: "codex", extra: true }]) {
+    const rejected = await resolveFromHost(input, saved, { verifiedFamily: "pi" });
+    assert.notEqual(rejected?.status, "eligible", "不正な登録の記述は例外でなく拒否にする");
+  }
+  const extraKey = await resolveFromHost(registration, saved, { verifiedFamily: "pi", extra: true });
+  assert.notEqual(extraKey.status, "eligible", "未知の入力キーは拒否する");
 });

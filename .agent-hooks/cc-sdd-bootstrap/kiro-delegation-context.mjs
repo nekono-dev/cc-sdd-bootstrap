@@ -456,7 +456,7 @@ async function verifyStandaloneInstall(project, client, settings, agentName) {
     return fail("単独導入の設定・台帳・管理ファイルを安全に検証できません");
   }
 }
-async function readProjectSettings(project, client) {
+export async function readProjectSettings(project, client) {
   const root = resolve(project);
   const target = resolve(root, ".cc-sdd-bootstrap.json");
   if (!inside(target, root)) throw new Error("unsafe settings path");

@@ -127,7 +127,7 @@ async function prepareEntry(context, event, toolInput) {
   return { action: "rewrite", updatedInput: { ...toolInput, command: `node ${quoted} receipt ${receipt}` } };
 }
 
-async function runtimeFor(client, project) {
+export async function runtimeFor(client, project) {
   const userHome = await realpath(userInfo().homedir);
   const cache = join(userHome, ".cache");
   const runtimeRoot = join(cache, "cc-sdd-model-policy");

@@ -311,6 +311,19 @@ export function createDelegationJobStore(options) {
     });
   }
 
+  /**
+   * 同じ作業（project・skill・taskId）の記録を読み取り専用で確かめる。
+   * clear は新しく起動してよい、terminal は終了済みの結果、blocked は終了を確認できない（別候補へ進まない）。
+   */
+  async function inspectWork(input) {
+    return withLedger(input, (current, workKey, existing) => {
+      if (!existing || existing.status === "tracking" || (existing.status === "available" && existing.requestId === input.requestId))
+        return { next: null, value: { kind: "clear" } };
+      if (existing.status === "terminal") return { next: null, value: { kind: "terminal", result: existing.result } };
+      return { next: null, value: { kind: "blocked", reason: "終了を確認できません。確認または停止してから再実行してください" } };
+    });
+  }
+
   async function releaseTrack(input) {
     const result = await withLedger(input, (current) => {
       const control = Object.hasOwn(current.controls ?? {}, input.requestId) ? current.controls[input.requestId] : undefined;
@@ -323,7 +336,7 @@ export function createDelegationJobStore(options) {
     return result === true;
   }
 
-  return Object.freeze({ reserve, release, markUnknown, track, releaseTrack, resolveControlTarget, recordOwner, heartbeat, recordTerminal, inspectOwner });
+  return Object.freeze({ reserve, release, markUnknown, track, releaseTrack, resolveControlTarget, recordOwner, heartbeat, recordTerminal, inspectOwner, inspectWork });
 }
 
 function inside(parent, child) {
