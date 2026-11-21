@@ -5,7 +5,7 @@
   "files": {
     ".agent-hooks/cc-sdd-bootstrap/claude-native-agent-adapter.mjs": {
       "kind": "common",
-      "sha256": "6c5a440f90b95a2eaaabc0aa86563c56b98e49db8cb72160cc975a29b6645905"
+      "sha256": "7b9474002aa753d393d14e259748f59b89b67079b7bd8c2d3128c7df96a7e770"
     },
     ".agent-hooks/cc-sdd-bootstrap/claude-observation-store.mjs": {
       "kind": "common",

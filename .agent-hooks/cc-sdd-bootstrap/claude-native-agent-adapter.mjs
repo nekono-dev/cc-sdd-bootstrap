@@ -5,7 +5,7 @@ import { verifyNativeAgentDefinition } from "./native-agent-definitions.mjs";
 const CANONICAL = /^claude-[a-z0-9-]+$/;
 
 /** Claude Code の実イベント、管理定義、隔離ストアから起動証拠を組み立てる。 */
-export function createClaudeNativeAgentAdapter({ store, aliases = {}, requirePrivateWriteProof = false } = {}) {
+export function createClaudeNativeAgentAdapter({ store, aliases = {}, requirePrivateWriteProof = false, env = process.env } = {}) {
   if (!store || typeof store.keyFor !== "function" || typeof store.read !== "function" || typeof store.transact !== "function") throw new TypeError("原子的な Claude 観測ストアが必要です");
   const normalize = (value) => typeof value === "string" && (CANONICAL.test(value) ? value : (Object.hasOwn(aliases, value) && CANONICAL.test(aliases[value] ?? "") ? aliases[value] : null));
   const observationKey = (input) => store.keyFor({ project: input?.project ?? input?.cwd, sessionId: input?.sessionId });
@@ -67,9 +67,15 @@ export function createClaudeNativeAgentAdapter({ store, aliases = {}, requirePri
       if (!verifyNativeAgentDefinition(settings, "claude", `.claude/agents/${policy.agentName}.md`, content)) throw new Error("管理定義");
       const parent = await store.read(key);
       if (parent?.status !== "confirmed" || !CANONICAL.test(parent.modelId)) throw new Error("セッションモデル");
+      if (Object.hasOwn(env, "CLAUDE_CODE_EFFORT_LEVEL") && env.CLAUDE_CODE_EFFORT_LEVEL !== effort) throw new Error("環境推論量上書き");
+      const forceModel = env.CLAUDE_CODE_SUBAGENT_MODEL_FORCE;
+      if (forceModel !== undefined && forceModel !== "0") {
+        const forcedModel = env.CLAUDE_CODE_SUBAGENT_MODEL === undefined ? parent.modelId : normalize(env.CLAUDE_CODE_SUBAGENT_MODEL);
+        if (forceModel !== "1" || !forcedModel || forcedModel !== childModelId) throw new Error("環境モデル上書き");
+      }
       return { role: policy.role, client: "claude", agentName: launch.agentName, definitionVerified: true,
         parentModelId: parent.modelId, childModelId, effort, access: policy.access, historyInherited: false };
-    } catch (error) { if (error instanceof Error && ["起動時指定", "モデル・推論量", "管理定義", "セッションモデル"].includes(error.message)) throw error; throw new Error("管理定義"); }
+    } catch (error) { if (error instanceof Error && ["起動時指定", "モデル・推論量", "環境推論量上書き", "環境モデル上書き", "管理定義", "セッションモデル"].includes(error.message)) throw error; throw new Error("管理定義"); }
   }
 
   function normalizeLaunch({ toolName, toolInput }) {

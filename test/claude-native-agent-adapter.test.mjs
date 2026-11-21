@@ -40,6 +40,38 @@ test("unconfirmed aliases and mismatched calls fail closed", async (t) => {
   await assert.rejects(adapter.collectEvidence({ context: { project: "/p", sessionId: "s" }, policy: {}, settings: {}, launch: {}, hostEvent: { toolUseId: "t", toolInput: { subagent_type: "x" } } }));
 });
 
+test("Claude の実効環境上書きは一致時だけ許可し、発行と起動の両方で再確認する", async (t) => {
+  const base = await mkdtemp(join(tmpdir(), "claude-env-")); t.after(() => rm(base, { recursive: true, force: true }));
+  const session = { project: base, sessionId: "s" };
+  const settings = { subagents: { claudeModels: { review: "sonnet" } } };
+  const policy = { role: "review", client: "claude", agentName: "cc-sdd-review", modelId: "sonnet", effort: "medium", access: "read-only" };
+  const definition = generateNativeAgentDefinitions(settings, "claude").find((item) => item.relativePath.endsWith("cc-sdd-review.md"));
+  await mkdir(join(base, ".claude/agents"), { recursive: true }); await writeFile(join(base, definition.relativePath), definition.content);
+  const make = (env) => createClaudeNativeAgentAdapter({ store: createClaudeObservationStore({ root: join(base, "store") }), aliases: { sonnet: "claude-sonnet-4-5-20250929", haiku: "claude-haiku-4-5-20251001" }, env });
+  const evidence = (adapter, launch = { agentName: policy.agentName }) => adapter.collectEvidence({ context: session, policy, settings, launch, hostEvent: null });
+  const baseAdapter = make({});
+  await baseAdapter.observe({ ...session, event: "SessionStart", model: "haiku" });
+  assert.equal((await evidence(baseAdapter)).effort, "medium");
+  for (const env of [
+    { CLAUDE_CODE_EFFORT_LEVEL: "low" },
+    { CLAUDE_CODE_EFFORT_LEVEL: "" },
+    { CLAUDE_CODE_EFFORT_LEVEL: "unknown" },
+    { CLAUDE_CODE_SUBAGENT_MODEL_FORCE: "1", CLAUDE_CODE_SUBAGENT_MODEL: "haiku" },
+    { CLAUDE_CODE_SUBAGENT_MODEL_FORCE: "1" },
+    { CLAUDE_CODE_SUBAGENT_MODEL_FORCE: "1", CLAUDE_CODE_SUBAGENT_MODEL: "not-a-model" },
+    { CLAUDE_CODE_SUBAGENT_MODEL_FORCE: "true", CLAUDE_CODE_SUBAGENT_MODEL: "haiku" },
+  ]) {
+    const adapter = make(env); await adapter.observe({ ...session, event: "SessionStart", model: "haiku" });
+    await assert.rejects(evidence(adapter), /環境|モデル|推論量/);
+  }
+  const matching = make({ CLAUDE_CODE_EFFORT_LEVEL: "medium", CLAUDE_CODE_SUBAGENT_MODEL_FORCE: "1", CLAUDE_CODE_SUBAGENT_MODEL: "sonnet" });
+  await matching.observe({ ...session, event: "SessionStart", model: "haiku" });
+  assert.equal((await evidence(matching)).childModelId, "claude-sonnet-4-5-20250929");
+  const launchOverride = make({ CLAUDE_CODE_EFFORT_LEVEL: "medium" });
+  await launchOverride.observe({ ...session, event: "SessionStart", model: "haiku" });
+  await assert.rejects(evidence(launchOverride, { agentName: policy.agentName, requestedEffort: "high" }), /環境/);
+});
+
 test("failed switch invalidation and corrupt/partial observations never return stale authority", async (t) => {
   const base = await mkdtemp(join(tmpdir(), "claude-observe-")); t.after(() => rm(base, { recursive: true, force: true }));
   const store = createClaudeObservationStore({ root: join(base, "store") });
