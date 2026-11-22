@@ -4,8 +4,11 @@ import { mkdtemp, mkdir, rm, writeFile, readFile } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createKiroDelegationContext } from "../.agent-hooks/cc-sdd-bootstrap/kiro-delegation-context.mjs";
+import * as delegationContext from "../.agent-hooks/cc-sdd-bootstrap/kiro-delegation-context.mjs";
 import { generateNativeAgentDefinitions } from "../.agent-hooks/cc-sdd-bootstrap/native-agent-definitions.mjs";
+
+const { createKiroDelegationContext } = delegationContext;
+const effectiveExternalCandidates = delegationContext.effectiveExternalCandidates;
 
 async function fixture(client = "codex", options = {}) {
   const base = await mkdtemp(join(tmpdir(), "kiro-context-"));
@@ -236,8 +239,47 @@ test("単独発行は固定設定・管理配置台帳・生成定義を内部�
   assert.equal((await bound.issueStandaloneNative(request)).ok, false);
   await writeFile(join(f.project, definition.relativePath), definition.content);
   assert.equal((await bound.issueStandaloneNative(request)).ok, true);
+  const configPath = join(f.project, ".cc-sdd-bootstrap.json");
+  const candidate = { family: "claude", scope: "project", registrationName: "claude", registrationId: "approved-or-pending", models: {} };
+  await writeFile(configPath, JSON.stringify({ ...config, delegation: { codex: { cloud: [candidate] } } }));
+  const cloudResult = await bound.issueStandaloneNative({ ...request, requestId: "standalone-cloud", toolInput: { ...request.toolInput, prompt: "cloud check" } });
+  assert.equal(cloudResult.ok, false);
+  assert.match(cloudResult.error.reason, /外部の委任先が設定されているため、管理入口（delegate\.mjs start）を使ってください/);
+  for (const [requestId, invalidSettings] of [
+    ["standalone-unknown-top-level", { ...config, delegation: { codex: { cloud: [candidate] } }, unexpected: true }],
+    ["standalone-unknown-codex-key", { ...config, delegation: { codex: { cloud: [candidate] } }, codex: { enabled: false, unexpected: true } }],
+  ]) {
+    await writeFile(configPath, JSON.stringify(invalidSettings));
+    const invalidResult = await bound.issueStandaloneNative({ ...request, requestId, toolInput: { ...request.toolInput, prompt: requestId } });
+    assert.equal(invalidResult.ok, false, `${requestId}: 不正設定から単独発行してはならない`);
+  }
+  await writeFile(configPath, JSON.stringify({ ...config, delegation: { codex: { cloud: [] } } }));
   await writeFile(join(f.project, ".agent-hooks/cc-sdd-bootstrap/delegate.mjs"), "marker");
-  assert.equal((await bound.issueStandaloneNative({ ...request, requestId: "standalone-b" })).ok, false);
+  assert.equal((await bound.issueStandaloneNative({ ...request, requestId: "standalone-empty-cloud", toolInput: { ...request.toolInput, prompt: "empty cloud check" } })).ok, true);
+  await writeFile(configPath, JSON.stringify({ ...config, delegation: { codex: { cloud: "invalid" } } }));
+  assert.equal((await bound.issueStandaloneNative({ ...request, requestId: "standalone-invalid-config", toolInput: { ...request.toolInput, prompt: "invalid config check" } })).ok, false);
+  await rm(configPath);
+  await mkdir(configPath);
+  assert.equal((await bound.issueStandaloneNative({ ...request, requestId: "standalone-unreadable-config", toolInput: { ...request.toolInput, prompt: "unreadable config check" } })).ok, false);
+});
+
+test("単独発行候補は cloud を優先し、Codex の未設定引き継ぎから同系統と local を除く", () => {
+  assert.equal(typeof delegationContext.effectiveExternalCandidates, "function", "有効候補を設定から判定する関数が必要");
+  const cloud = { family: "claude", scope: "project", registrationName: "x", registrationId: "a", models: {} };
+  assert.deepEqual(effectiveExternalCandidates({ delegation: { claude: { cloud: [cloud] } }, codex: { enabled: true } }, "claude"), []);
+  assert.deepEqual(effectiveExternalCandidates({ delegation: { codex: { cloud: [cloud] } } }, "codex"), [{ family: "claude", scope: "project", registrationName: "x", registrationId: "a", models: {} }]);
+  assert.deepEqual(effectiveExternalCandidates({ delegation: { claude: { cloud: [] } }, codex: { enabled: true } }, "claude"), []);
+  assert.deepEqual(effectiveExternalCandidates({ codex: { enabled: true } }, "claude").map((item) => item.family), ["codex"]);
+  assert.deepEqual(effectiveExternalCandidates({ codex: { enabled: true } }, "codex"), []);
+  assert.deepEqual(effectiveExternalCandidates({ codex: { enabled: false } }, "claude"), []);
+  assert.deepEqual(effectiveExternalCandidates({ delegation: { codex: { cloud: [{ ...cloud, family: "codex" }] } } }, "codex"), []);
+  assert.deepEqual(effectiveExternalCandidates({ delegation: { claude: { local: [{ ...cloud, family: "local" }] } } }, "codex"), []);
+  assert.equal(effectiveExternalCandidates({ delegation: { claude: { cloud: "bad" } } }, "codex"), null);
+  assert.equal(effectiveExternalCandidates(null, "codex"), null);
+  assert.equal(effectiveExternalCandidates({ delegation: { claude: { cloud: [{ ...cloud, family: "" }] } } }, "codex"), null);
+  assert.equal(effectiveExternalCandidates({ delegation: { codex: { cloud: [cloud] } }, unexpected: true }, "codex"), null);
+  assert.equal(effectiveExternalCandidates({ codex: { enabled: true, unexpected: true } }, "claude"), null);
+  assert.equal(effectiveExternalCandidates({}, null), null);
 });
 
 test("全 writable roots を必要とし、祖先・子孫・同一領域とシンボリックリンクを拒否する", async (t) => {

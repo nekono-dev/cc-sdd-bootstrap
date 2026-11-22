@@ -3,7 +3,7 @@ import { mkdir, open, readFile, realpath, rename, rm, lstat, readdir } from "nod
 import { isAbsolute, join, relative, resolve, sep } from "node:path";
 import { resolveNative } from "./role-policy.mjs";
 import { decideNativeAgentGate } from "./native-agent-gate.mjs";
-import { configFields } from "./config-schema.mjs";
+import { configFields, validateDelegation } from "./config-schema.mjs";
 import { generateNativeAgentDefinitions } from "./native-agent-definitions.mjs";
 import { readInstallConfig } from "./install-rules.mjs";
 
@@ -294,6 +294,15 @@ export function createKiroDelegationContext(options) {
       const verdict = decideNativeAgentGate(gatePolicy, evidence);
       if (!verdict.allowed) { failure = gateFailure(verdict, result.value); failureAlternatives = verdict.alternatives ?? []; return null; }
       if (standalone) {
+        const candidates = effectiveExternalCandidates(settings, context.client);
+        if (candidates === null) {
+          failure = `${request.role} の委任設定を確認できません`;
+          return null;
+        }
+        if (candidates.length > 0) {
+          failure = "外部の委任先が設定されているため、管理入口（delegate.mjs start）を使ってください";
+          return null;
+        }
         const install = await verifyStandaloneInstall(context.project, context.client, settings, normalized.value.agentName);
         if (!install.ok) { failure = install.reason; return null; }
       }
@@ -361,6 +370,38 @@ const ROLE_IDS = new Set(["manufacture", "review", "design", "research", "debug"
 const DANGEROUS_KEYS = new Set(["__proto__", "constructor", "prototype"]);
 const ENTRY_TYPES = new Set(["enter", "preflight", "delegate-start", "delegate-control"]);
 function record(value) { return typeof value === "object" && value !== null && !Array.isArray(value); }
+
+/** 設定に保存された候補から、現在のホストとは別系統の外部候補を返す。不正設定は null。 */
+export function effectiveExternalCandidates(settings, client) {
+  try {
+    const allowedSettings = new Set(["format", "ccSdd", "clients", "codex", "models", "subagents", "delegation"]);
+    if (!record(settings) || Object.keys(settings).some((key) => !allowedSettings.has(key)) || !["claude", "codex"].includes(client)) return null;
+    if (Object.hasOwn(settings, "delegation") && validateDelegation(settings.delegation)) return null;
+    if (Object.hasOwn(settings, "codex") && (!record(settings.codex) || Object.keys(settings.codex).some((key) => key !== "enabled") || typeof settings.codex.enabled !== "boolean")) return null;
+    const configuredHost = settings.delegation?.[client];
+    let candidates;
+    if (record(configuredHost) && Object.hasOwn(configuredHost, "cloud")) {
+      if (!Array.isArray(configuredHost.cloud)) return null;
+      candidates = configuredHost.cloud;
+    } else {
+      candidates = settings.codex?.enabled === true
+        ? [{ family: "codex", scope: "managed", registrationName: "codex", registrationId: "managed", models: {} }]
+        : [];
+    }
+    const hostFamily = client === "claude" ? "claude" : "codex";
+    return candidates
+      .filter((candidate) => record(candidate) && typeof candidate.family === "string" && candidate.family.trim() !== "" && candidate.family !== hostFamily)
+      .map((candidate) => ({
+        family: candidate.family,
+        scope: candidate.scope,
+        registrationName: candidate.registrationName,
+        registrationId: candidate.registrationId,
+        models: Object.fromEntries(Object.entries(candidate.models).map(([role, model]) => [role, Object.hasOwn(model, "fixed")
+          ? { fixed: model.fixed }
+          : { compatibleIds: [...model.compatibleIds] }])),
+      }));
+  } catch { return null; }
+}
 
 function parseManagedEntry(command) {
   if (typeof command !== "string") return null;
@@ -553,21 +594,6 @@ async function verifyStandaloneInstall(project, client, settings, agentName) {
         const bytes = await safeRead(path);
         if (!bytes || createHash("sha256").update(bytes).digest("hex") !== entry.sha256) return fail(`現在のポリシー配置 ${path} が台帳と一致しません`);
       }
-    }
-    const marker = ".agent-hooks/cc-sdd-bootstrap/delegate.mjs";
-    if (Object.hasOwn(files, marker)) return fail("外部委任の配置を検出したため単独発行できません");
-    try {
-      const markerPath = resolve(root, marker);
-      for (const parent of [root, resolve(root, ".agent-hooks"), resolve(root, ".agent-hooks/cc-sdd-bootstrap")]) {
-        const info = await lstat(parent);
-        if (info.isSymbolicLink() || !info.isDirectory()) return fail("外部委任マーカーの親道筋を検証できません");
-      }
-      await lstat(markerPath);
-      return fail("外部委任の実体を検出したため単独発行できません");
-    } catch (error) {
-      if (error.code !== "ENOENT") return fail("外部委任マーカーを検証できません");
-      try { await lstat(resolve(root, ".agent-hooks/cc-sdd-bootstrap")); }
-      catch { return fail("外部委任マーカーの安全な親を確認できません"); }
     }
     const selected = generated.find((definition) => definition.relativePath.endsWith(`${agentName}.${client === "codex" ? "toml" : "md"}`));
     if (!selected) return fail(`${client} の予約された役割定義 ${agentName} を設定から確認できません`);
