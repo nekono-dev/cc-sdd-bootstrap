@@ -9,14 +9,15 @@ import { readInstallConfig } from "./install-rules.mjs";
 
 const SKILL = /^kiro-[a-z0-9][a-z0-9-]*$/;
 const TOOL_NAME = /^(Bash|shell)$/i;
-const ENTRY = /^node \.agent-hooks\/cc-sdd-bootstrap\/kiro-delegation-context\.mjs enter (kiro-[a-z0-9][a-z0-9-]*)$(?![\s\S])/;
+const CONTEXT_ENTRY = /^node \.agent-hooks\/cc-sdd-bootstrap\/kiro-delegation-context\.mjs (enter|preflight) (kiro-[a-z0-9][a-z0-9-]*)(?: ([A-Za-z0-9_-]{1,65536}))?$(?![\s\S])/;
 
 /**
  * ホストアダプターから検証済みの作業範囲とイベントを受け取り、ターン状態を管理する。
  * writableRoots は委任先が書き込み可能な全ての既存ルートで、実パス検証済みであること。
  */
 export function createKiroDelegationContext(options) {
-  if (!options || !isAbsolute(options.runtimeRoot) || !isAbsolute(options.skillsRoot) ||
+  if (!record(options) || Object.keys(options).some((key) => !["runtimeRoot", "skillsRoot", "writableRoots", "client", "nativeAdapter"].includes(key)) ||
+      !isAbsolute(options.runtimeRoot) || !isAbsolute(options.skillsRoot) ||
       !Array.isArray(options.writableRoots) || !options.writableRoots.length ||
       options.writableRoots.some((root) => typeof root !== "string" || !isAbsolute(root)) ||
       !["claude", "codex"].includes(options.client)) {
@@ -168,9 +169,10 @@ export function createKiroDelegationContext(options) {
 
   /** ホストの PreToolUse が固定コマンドと呼び出し ID を確認して参照を発行する。 */
   async function trustedPreToolUse(event) {
-    if (!isTrustedEvent(event) || !TOOL_NAME.test(event.toolName) || !validId(event.toolUseId)) return null;
-    const match = ENTRY.exec(event.command ?? "");
-    if (!match || !await canonicalSkill(match[1])) return null;
+    if (!record(event) || Object.keys(event).some((key) => !["trusted", "source", "cwd", "sessionId", "turnId", "promptId", "toolName", "toolUseId", "toolInput", "command", "model", "transcriptPath", "transcript_path"].includes(key)) ||
+        !isTrustedEvent(event) || !TOOL_NAME.test(event.toolName) || !validId(event.toolUseId)) return null;
+    const parsed = parseManagedEntry(event.command);
+    if (!parsed || !await canonicalSkill(parsed.skill)) return null;
     const loc = await location(event.cwd, event.sessionId);
     if (!loc || (options.client === "codex" && !validId(event.turnId))) return null;
     const hookProof = options.client === "codex" && nativeAdapter?.requiresCodexHookProof === true
@@ -183,11 +185,13 @@ export function createKiroDelegationContext(options) {
     const updated = await mutate(loc, (old) => {
       if (!old || old.ended || (event.turnId && old.turnId !== event.turnId) ||
           (event.promptId && old.promptId && old.promptId !== event.promptId) || old.usedToolUseIds.includes(event.toolUseId)) return null;
-      if (old.active && old.skill !== match[1]) return null;
-      if (old.skill && old.skill !== match[1]) return null;
+      if (parsed.entryType !== "delegate-control" && old.active && old.skill !== parsed.skill) return null;
+      if (parsed.entryType !== "delegate-control" && old.skill && old.skill !== parsed.skill) return null;
       reference = randomBytes(32).toString("base64url");
       const generation = old.generation;
-      const references = { ...old.references, [reference]: { toolUseId: event.toolUseId, generation, skill: match[1], command: event.command, ...(hookProof ? { hookProof } : {}) } };
+      const argsFingerprint = fingerprintEntryArguments(parsed.entryType, parsed.entryArguments);
+      if (!argsFingerprint) return null;
+      const references = { ...old.references, [reference]: { toolUseId: event.toolUseId, generation, skill: parsed.skill, entryType: parsed.entryType, argsFingerprint, ...(hookProof ? { hookProof } : {}) } };
       return { ...old, promptId: old.promptId ?? event.promptId ?? null,
         usedToolUseIds: [...old.usedToolUseIds, event.toolUseId], references };
     });
@@ -198,14 +202,33 @@ export function createKiroDelegationContext(options) {
 
   /** 固定入口の argv とプロセス cwd で参照を一度だけ消費する。 */
   async function handleEntryArgv(argv, processContext) {
-    if (!Array.isArray(argv) || argv.length !== 4 || argv[0] !== "enter" || !SKILL.test(argv[1]) || argv[2] !== "--reference" ||
-        !processContext || typeof processContext.cwd !== "string") return null;
-    const consumed = await consumeReference({ cwd: processContext.cwd, reference: argv[3], skill: argv[1] });
+    if (!Array.isArray(argv) || argv.length !== 4 || typeof argv[0] !== "string" || typeof argv[1] !== "string" ||
+        typeof argv[2] !== "string" || typeof argv[3] !== "string" || argv[0] !== "enter" || !SKILL.test(argv[1]) ||
+        argv[2] !== "--reference" || !validReference(argv[3]) ||
+        !record(processContext) || Object.keys(processContext).some((key) => !["cwd", "reference", "skill"].includes(key)) ||
+        typeof processContext.cwd !== "string" || !isAbsolute(processContext.cwd) ||
+        processContext.reference !== argv[3] || processContext.skill !== argv[1]) return null;
+    const consumed = await consumeReference({ cwd: processContext.cwd, reference: argv[3], entryType: "enter", skill: argv[1], entryArguments: { skill: argv[1] } });
     return consumed ? { client: consumed.client, sessionId: consumed.sessionId, turnId: consumed.turnId, skill: consumed.skill, toolUseId: consumed.toolUseId } : null;
   }
 
-  async function consumeReference({ cwd, reference, skill }) {
-    if (typeof reference !== "string" || !SKILL.test(skill)) return null;
+  async function consumeReference(input) {
+    if (!record(input) || Object.keys(input).some((key) => !["cwd", "reference", "skill", "entryType", "entryArguments"].includes(key))) return null;
+    const hasEntryType = Object.hasOwn(input, "entryType");
+    const hasEntryArguments = Object.hasOwn(input, "entryArguments");
+    const cwd = input.cwd;
+    const reference = input.reference;
+    const entryType = hasEntryType ? input.entryType : "enter";
+    if (typeof cwd !== "string" || !isAbsolute(cwd) || typeof reference !== "string" || !reference ||
+        typeof entryType !== "string" || !ENTRY_TYPES.has(entryType)) return null;
+    if (hasEntryArguments && !record(input.entryArguments)) return null;
+    const skill = Object.hasOwn(input, "skill") ? input.skill : input.entryArguments?.skill;
+    if (typeof skill !== "string" || !SKILL.test(skill)) return null;
+    const entryArguments = hasEntryArguments ? input.entryArguments : (entryType === "enter" ? { skill } : null);
+    if (!record(entryArguments) || entryArguments.skill !== skill) return null;
+    let argsFingerprint;
+    try { argsFingerprint = fingerprintEntryArguments(entryType, entryArguments); } catch { return null; }
+    if (!argsFingerprint) return null;
     const project = await realpath(cwd).catch(() => null);
     if (!project) return null;
     try { if (!await verifyRoots()) return null; } catch { return null; }
@@ -217,15 +240,16 @@ export function createKiroDelegationContext(options) {
         const loc = { project, dir, state: join(dir, "state.json"), lock: join(dir, "lock") };
         const state = await readState(loc);
         const item = state?.references?.[reference];
-        if (!item || state.project !== project || item.skill !== skill || item.command !== `node .agent-hooks/cc-sdd-bootstrap/kiro-delegation-context.mjs enter ${skill}`) continue;
+        if (!item || state.project !== project || item.skill !== skill || item.entryType !== entryType || item.argsFingerprint !== argsFingerprint) continue;
         let consumed;
         const next = await mutate(loc, (old) => {
           const current = old?.references?.[reference];
-          if (!old || old.ended || old.generation !== item.generation || !current || current.toolUseId !== item.toolUseId || current.skill !== skill || current.command !== item.command || (old.skill && old.skill !== skill)) return null;
-          consumed = { project: old.project, client: old.client, sessionId: old.sessionId, turnId: old.turnId, generation: old.generation, skill: old.skill ?? skill, toolUseId: item.toolUseId, ...(item.hookProof ? { hookProof: item.hookProof } : {}) };
+          if (!old || old.ended || old.generation !== item.generation || !current || current.toolUseId !== item.toolUseId || current.skill !== skill || current.entryType !== entryType || current.argsFingerprint !== argsFingerprint || (entryType !== "delegate-control" && old.skill && old.skill !== skill)) return null;
+          consumed = { project: old.project, client: old.client, sessionId: old.sessionId, turnId: old.turnId, generation: old.generation, skill, toolUseId: item.toolUseId, ...(entryType === "enter" ? {} : { entryType, argsFingerprint }), ...(item.hookProof ? { hookProof: item.hookProof } : {}) };
           const references = { ...old.references };
           delete references[reference];
-          return { ...old, active: true, skill: old.skill ?? skill, references };
+          const startsScope = entryType === "enter" || entryType === "preflight" || entryType === "delegate-start";
+          return { ...old, active: startsScope ? true : old.active, skill: startsScope ? (old.skill ?? skill) : old.skill, references };
         });
         if (next) return consumed;
       } catch { /* 別セッションや不正な記録は無視する */ }
@@ -233,8 +257,9 @@ export function createKiroDelegationContext(options) {
     return null;
   }
 
-  async function bindEntryReference({ cwd, reference, skill }) {
-    const consumed = await consumeReference({ cwd, reference, skill });
+  async function bindEntryReference(input) {
+    if (!record(input) || Object.keys(input).some((key) => !["cwd", "reference", "skill", "entryType", "entryArguments"].includes(key))) return null;
+    const consumed = await consumeReference(input);
     if (!consumed) return null;
     const bound = Object.freeze({
       issueStandaloneNative: (request) => issueNative(consumed, request, true),
@@ -334,9 +359,108 @@ export function createKiroDelegationContext(options) {
 
 const ROLE_IDS = new Set(["manufacture", "review", "design", "research", "debug"]);
 const DANGEROUS_KEYS = new Set(["__proto__", "constructor", "prototype"]);
+const ENTRY_TYPES = new Set(["enter", "preflight", "delegate-start", "delegate-control"]);
 function record(value) { return typeof value === "object" && value !== null && !Array.isArray(value); }
 
+function parseManagedEntry(command) {
+  if (typeof command !== "string") return null;
+  const context = CONTEXT_ENTRY.exec(command);
+  if (context) {
+    const [, operation, skill, payload] = context;
+    if ((operation === "enter") === Boolean(payload)) return null;
+    let entryArguments = { skill };
+    if (payload) {
+      let request;
+      try {
+        const bytes = Buffer.from(payload, "base64url");
+        if (bytes.toString("base64url") !== payload) return null;
+        request = JSON.parse(bytes.toString("utf8"));
+      } catch { return null; }
+      if (!record(request)) return null;
+      const requestKeys = ["requestId", "role", "readOnly", "toolName", "toolInput"];
+      if (Object.keys(request).some((key) => !requestKeys.includes(key)) ||
+          Object.keys(request).length < 4 || !validId(request.requestId) || !ROLE_IDS.has(request.role) ||
+          (request.readOnly !== undefined && typeof request.readOnly !== "boolean") || !validId(request.toolName) || !record(request.toolInput)) return null;
+      request = { requestId: request.requestId, role: request.role, readOnly: request.readOnly === true, toolName: request.toolName, toolInput: request.toolInput };
+      entryArguments = { skill, request };
+    }
+    return { entryType: operation, skill, entryArguments };
+  }
+  const prefix = "node .agent-hooks/cc-sdd-bootstrap/delegate.mjs ";
+  if (!command.startsWith(prefix)) return null;
+  const tokens = shellWords(command.slice(prefix.length));
+  if (!tokens || tokens.length < 1) return null;
+  const operation = tokens.shift();
+  if (operation !== "start" && operation !== "status" && operation !== "stop") return null;
+  const values = Object.create(null);
+  let readOnly = false;
+  for (let index = 0; index < tokens.length; index++) {
+    const option = tokens[index];
+    if (option === "--read-only" && operation === "start" && !readOnly) { readOnly = true; continue; }
+    const key = ({ "--skill": "skill", "--task-id": "taskId", "--request-id": "requestId", "--role": "role", "--work-dir": "workDir", "--instruction-file": "instructionFile" })[option];
+    if (!key || Object.hasOwn(values, key) || index + 1 >= tokens.length) return null;
+    values[key] = tokens[++index];
+  }
+  const required = operation === "start" ? ["skill", "taskId", "requestId", "role", "workDir", "instructionFile"] : ["skill", "taskId", "requestId", "workDir"];
+  if (Object.keys(values).length !== required.length || required.some((key) => !validId(values[key]))) return null;
+  if (!SKILL.test(values.skill) || (operation === "start" && !ROLE_IDS.has(values.role))) return null;
+  const entryType = operation === "start" ? "delegate-start" : "delegate-control";
+  const entryArguments = operation === "start"
+    ? { operation, skill: values.skill, taskId: values.taskId, requestId: values.requestId, role: values.role, workDir: values.workDir, instructionFile: values.instructionFile, readOnly }
+    : { operation, skill: values.skill, taskId: values.taskId, requestId: values.requestId, workDir: values.workDir };
+  return { entryType, skill: values.skill, entryArguments };
+}
+
+function shellWords(source) {
+  const words = [];
+  let index = 0;
+  while (index < source.length) {
+    while (source[index] === " ") index++;
+    if (index === source.length) break;
+    if (source[index] === "'") {
+      const end = source.indexOf("'", index + 1);
+      if (end < 0) return null;
+      const value = source.slice(index + 1, end);
+      if (!value || value.includes("'") || /[\r\n]/.test(value)) return null;
+      words.push(value);
+      index = end + 1;
+    } else {
+      const match = /^[A-Za-z0-9_./:@+-]+/.exec(source.slice(index));
+      if (!match) return null;
+      words.push(match[0]);
+      index += match[0].length;
+    }
+    if (index < source.length && source[index] !== " ") return null;
+  }
+  return words;
+}
+
+function fingerprintEntryArguments(entryType, args) {
+  if (!ENTRY_TYPES.has(entryType) || !record(args)) return null;
+  const fields = {
+    enter: ["skill"],
+    preflight: ["skill", "request"],
+    "delegate-start": ["operation", "skill", "taskId", "requestId", "role", "workDir", "instructionFile", "readOnly"],
+    "delegate-control": ["operation", "skill", "taskId", "requestId", "workDir"],
+  }[entryType];
+  if (Object.keys(args).length !== fields.length || Object.keys(args).some((key) => !fields.includes(key))) return null;
+  if (typeof args.skill !== "string" || !SKILL.test(args.skill)) return null;
+  if (entryType === "preflight") {
+    const request = args.request;
+    const allowed = ["requestId", "role", "readOnly", "toolName", "toolInput"];
+    if (!record(request) || Object.keys(request).length !== allowed.length || Object.keys(request).some((key) => !allowed.includes(key)) ||
+        !validId(request.requestId) || !ROLE_IDS.has(request.role) || typeof request.readOnly !== "boolean" || !validId(request.toolName) || !record(request.toolInput)) return null;
+  }
+  if (entryType === "delegate-start" || entryType === "delegate-control") {
+    const operation = entryType === "delegate-start" ? "start" : args.operation;
+    if (args.operation !== operation || !validId(args.taskId) || !validId(args.requestId) || !validId(args.workDir)) return null;
+    if (entryType === "delegate-start" && (!ROLE_IDS.has(args.role) || !validId(args.instructionFile) || typeof args.readOnly !== "boolean")) return null;
+  }
+  try { return createHash("sha256").update(canonicalJson({ entryType, args })).digest("hex"); } catch { return null; }
+}
+
 function validId(value) { return typeof value === "string" && value.length > 0 && value.length <= 512; }
+function validReference(value) { return typeof value === "string" && /^[A-Za-z0-9_-]{43}$/.test(value); }
 function canonicalJson(value, seen = new Set()) {
   if (value === null || typeof value === "string" || typeof value === "boolean") return JSON.stringify(value);
   if (typeof value === "number" && Number.isFinite(value)) return JSON.stringify(value);
