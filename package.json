@@ -30,7 +30,9 @@
     ".agent-hooks/cc-sdd-bootstrap/delegation-job-store.mjs",
     ".agent-hooks/cc-sdd-bootstrap/delegation-job-worker.mjs",
     ".agent-hooks/cc-sdd-bootstrap/delegation-job-control.mjs",
-    ".agent-hooks/cc-sdd-bootstrap/codex-agent-mcp.mjs"
+    ".agent-hooks/cc-sdd-bootstrap/codex-agent-mcp.mjs",
+    ".agent-hooks/cc-sdd-bootstrap/delegate.mjs",
+    ".agent-hooks/cc-sdd-bootstrap/delegation-mcp-gate.mjs"
   ],
   "scripts": {
     "test": "node --test \"test/**/*.test.mjs\""

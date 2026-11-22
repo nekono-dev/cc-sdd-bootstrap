@@ -107,6 +107,8 @@ test("files はセッション導入とサブエージェントポリシーで�
       [`${DEPLOY_DIR}/delegation-job-worker.mjs`, "common", false],
       [`${DEPLOY_DIR}/delegation-job-control.mjs`, "common", false],
       [`${DEPLOY_DIR}/codex-agent-mcp.mjs`, "common", false],
+      [`${DEPLOY_DIR}/delegate.mjs`, "common", false],
+      [`${DEPLOY_DIR}/delegation-mcp-gate.mjs`, "common", false],
       ...["native-agent-definitions.mjs", "role-policy.mjs", "native-agent-gate.mjs", "kiro-delegation-context.mjs", "claude-native-agent-adapter.mjs", "claude-observation-store.mjs", "codex-native-agent-adapter.mjs", "subagent-model-policy-hook.mjs"].map((name) => [`${DEPLOY_DIR}/${name}`, "common", false]),
     ],
   );
@@ -131,8 +133,10 @@ test("hooks は旧セッション登録と全ての管理ポリシーフック�
   assert.deepEqual(catalog.hooks.slice(2).map(({ event, matcher }) => [event, matcher]), [
     ["SessionStart", undefined], ["UserPromptSubmit", undefined], ["PreToolUse", "Bash|Agent"],
     ["PostToolUse", "Read"], ["PreModelSwitch", undefined], ["PostModelSwitch", undefined], ["Stop", undefined],
+    ["PreToolUse", "mcp__.*"],
   ]);
-  assert.ok(catalog.hooks.slice(2).every((hook) => hook.command.includes("subagent-model-policy-hook.mjs")));
+  assert.ok(catalog.hooks.slice(2, -1).every((hook) => hook.command.includes("subagent-model-policy-hook.mjs")));
+  assert.ok(catalog.hooks.at(-1).command.includes("delegation-mcp-gate.mjs"));
 });
 
 test("Codex の登録と指示を Claude Code の項目から独立して定義できる", () => {
@@ -191,7 +195,7 @@ const GUIDE_IMPORT = "@.kiro/settings/cc-sdd-guide.md";
 test("claudeSections の id は重複しない", () => {
   const ids = catalog.claudeSections.map((s) => s.id);
   assert.equal(new Set(ids).size, ids.length);
-  assert.deepEqual(ids, ["cc-sdd-session-install", "cc-sdd-guide", "cc-sdd-native-agent-policy"]);
+  assert.deepEqual(ids, ["cc-sdd-session-install", "cc-sdd-guide", "cc-sdd-native-agent-policy", "cc-sdd-delegation"]);
   assert.ok(ids.includes("cc-sdd-guide"));
 });
 

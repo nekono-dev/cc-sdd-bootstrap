@@ -64,8 +64,9 @@ test("前の版の一式のフックを置き換え、重複させない（6.3�
     },
   };
   const j = JSON.parse(merge(JSON.stringify(src)).text);
-  assert.equal(j.hooks.PreToolUse.length, 1);
-  assert.equal(j.hooks.PreToolUse[0].hooks[0].command, hooks.find((h) => h.event === "PreToolUse").command);
+  const preToolUse = hooks.filter((h) => h.event === "PreToolUse");
+  assert.equal(j.hooks.PreToolUse.length, preToolUse.length);
+  assert.deepEqual(j.hooks.PreToolUse.map((group) => group.hooks[0].command), preToolUse.map((h) => h.command));
   assert.equal(j.hooks.SessionStart.length, 3);
   assert.equal(j.hooks.SessionStart[0].hooks[0].command, "echo user");
   assert.equal(j.hooks.SessionStart[1].hooks[0].command, hooks[0].command);
