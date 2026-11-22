@@ -1,9 +1,9 @@
 {
   "feature_name": "codex-delegation",
   "created_at": "2026-11-20T13:10:01Z",
-  "updated_at": "2026-11-22T04:23:21Z",
+  "updated_at": "2026-11-22T14:05:52Z",
   "language": "ja",
-  "phase": "design-approved",
+  "phase": "tasks-generated",
   "approvals": {
     "requirements": {
       "generated": true,
@@ -15,8 +15,8 @@
     },
     "tasks": {
       "generated": true,
-      "approved": false
+      "approved": true
     }
   },
-  "ready_for_implementation": false
+  "ready_for_implementation": true
 }
