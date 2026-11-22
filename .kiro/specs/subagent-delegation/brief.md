@@ -1,0 +1,49 @@
+# Brief: subagent-delegation
+
+> 新設（2026-11-22、単純化の discovery）: 撤回した subagent-model-policy と codex-delegation を 1 つにまとめて作り直す。撤回の理由は `.kiro/steering/roadmap.md` の「単純化の決定（2026-11-22）」を参照する。
+
+## Problem
+cc-sdd の作業では、実装・レビュー・設計・調査・デバッグをサブエージェント（子のエージェント）に任せる。skyshare とこのリポジトリでは、次の決まりを文章（CLAUDE.md）で守っている。
+- 子は役割ごとに決めたモデルで起動し、指揮役（会話を進めるメインのエージェント）と同じモデルにしない。モデルの指定を省くと指揮役のモデルを引き継ぐことがある。
+- 子には別ベンダのエージェントを積極的に使う（Claude Code が指揮役なら Codex を `codex exec` で呼ぶ）。
+
+文章だけでは読み落としがあり、リポジトリごとに手で書き写している（大目的③）。一方、前の 2 つの spec（`dev/codex-support`、約 16,000 行）は、使い捨ての合言葉の発行・コマンドの書き換え・MCP（外部ツールの接続口）の探査・自作の Codex MCP・ジョブの記録と別プロセス制御など、厳密さのためのコードが大半になり、管理入口を通した起動の成功も確認できないまま止まった。
+
+## Current State
+- 手作業の運用は回っている: `codex -a never exec --sandbox <read-only|workspace-write> --model <モデル> --config 'model_reasoning_effort="medium"' --cd <ルート> - < <指示のファイル>`。実装は Luna（`gpt-6-luna`）・書き込み可、レビュー・調査・デバッグは Sol（`gpt-6.1-sol`）・読み取り専用。
+- `dev/codex-support` の PoC で確認済みの事実（`poc/subagent-model-policy/result.md`）: Claude Code の Agent の起動前フック（PreToolUse）で子の起動を拒否でき、理由が親に届く。Codex の子の起動（`spawn_agent`）もフックで拒否できる。Codex は履歴の引き継ぎを省くと親と同じモデルになる。Claude Code の指揮役のモデルは、初回の起動では値を得られない例があった。
+
+## Desired Outcome
+- **役割表**: 設定に「役割 → ベンダ・モデル・推論量・権限（読み取り専用／書き込み可）」の小さな表を置く。既定値は指揮役より賢いモデルにしない。
+- **ネイティブの子**: 役割表から Claude Code と Codex のエージェント定義を生成する。Agent（Codex は `spawn_agent`）の起動前フックで、モデルの未指定（引き継ぎ）と指揮役と同じモデルを拒否する。
+- **別ベンダの子**: 役割と指示のファイルを渡すと、役割表のモデル・推論量・権限で別ベンダの CLI を起動する薄い入口を置く（Claude Code が指揮役なら `codex exec`、Codex が指揮役なら `claude -p`）。指示のファイルの置き場所、結果を未確認として差分とテストで確かめる手順は、CLAUDE.md・AGENTS.md の管理区画の文章にする。
+- Claude Code のトークンを使い切ったときに、Codex を指揮役にして同じ運用を続けられる。
+
+## Approach
+機械化は「役割表」「定義の生成」「薄い拒否のフック」「薄い CLI の入口」の 4 つに絞り、残りは文章に任せる。cc-sdd のスキルが「Agent ツールでサブエージェントに任せる」と書く箇所の読み替えも文章で示す。
+
+## Scope
+- **In**: 役割表と既定値、両ベンダのエージェント定義の生成、子の起動前のモデルの拒否（未指定・指揮役と同じ）、別ベンダの CLI を起動する入口、委任の手順の文章。
+- **Out**: MCP の探査と候補の優先順、自作の MCP サーバー、ジョブの記録・状態確認・別プロセスからの停止、使い捨ての合言葉や引数の照合による入口の認証、委任先の自動切り替え、ローカルのモデル（Pi など）、指揮役が入口を通さずに CLI を直接呼ぶことの拒否。
+
+## Boundary Candidates
+- 役割表と定義の生成
+- 起動前のモデルの拒否（フック）
+- 別ベンダの起動の入口と手順の文章
+
+## Out of Boundary
+- 手順書の先読みの強制（kiro-gate）
+- cc-sdd 本体のスキルの改変
+
+## Upstream / Downstream
+- **Upstream**: installer-core（設定・配置・フックの登録・管理区画）
+- **Downstream**: なし
+
+## Existing Spec Touchpoints
+- **Extends**: なし（新設）。撤回した subagent-model-policy・codex-delegation の後継。
+- **Adjacent**: kiro-gate（同じツール起動前のフックで動く）
+
+## Constraints
+- 「厳密さのためにコードを増やさない」。判定できないときに止めるか通すかを、部品ごとに決めて明記する。
+- 設計前の PoC: Claude Code で指揮役のモデルをフックからどう得るか（得られないときの扱いを含む）、Codex の子の起動でモデルと推論量の指定をどう確かめるか、`claude -p` を子として起動するときのモデル・権限の指定。`dev/codex-support` の `poc/subagent-model-policy/` を出発点にしてよい。
+- 子の起動は書き込みの呼び出しを 1 つずつ行い、読み取りと重ねない（今の運用の決まり）。

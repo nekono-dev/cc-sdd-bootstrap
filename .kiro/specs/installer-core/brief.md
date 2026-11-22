@@ -1,45 +1,49 @@
 # Brief: installer-core
 
+> 改訂（2026-11-22、単純化の discovery）: 実装済み（develop に取り込み済み）だが、要件に戻して削る。理由と全体の方針は `.kiro/steering/roadmap.md` の「単純化の決定（2026-11-22）」を参照する。旧版の brief は git の履歴（`59174f6` 以前）にある。
+
 ## Problem
-cc-sdd の運用を始めるには、skyshare ではフックの登録・スクリプト・`.gitignore`・CLAUDE.md の追記を手で揃えた。新しいリポジトリでは同じ作業を繰り返すことになり、版の更新や不具合の修正もリポジトリごとに手で行う必要がある。
+cc-sdd の運用を始めるには、フックの登録・スクリプト・`.gitignore`・CLAUDE.md の追記を利用先ごとに揃える必要がある。一方、今の導入コマンド（lib 約 1,800 行）は、配置したファイルの記録と改変の検出・汎用の取り除き計画・対話での聞き取り・下流が項目を足せる汎用の契約まで持つ「小さな配布管理システム」になり、配置物を写すだけの用途に対して重い。また、配置先が Claude Code だけで、Codex を指揮役（会話を進めるメインのエージェント）にした運用に対応していない。
 
 ## Current State
-skyshare の `scripts/agent/` と `.claude/settings.json` に手作りの一式がある。汎用の導入手段は無い。
+- `npx github:nekono-dev/cc-sdd-bootstrap init|update|uninstall` が動き、このリポジトリにも自己適用している。
+- 部品: `lib/cli.mjs`（489 行）・`plan.mjs`（355）・`target.mjs`（275）・`config.mjs`（225）・`blocks.mjs`（132）・`settings-hooks.mjs`（110）・`catalog.mjs`（104）・`ledger.mjs`（94）。
+- 配置先は `.claude/settings.json`・CLAUDE.md・`.gitignore`・`.agent-hooks/cc-sdd-bootstrap/`。
 
 ## Desired Outcome
-- `npx github:nekono-dev/cc-sdd-bootstrap init` で、利用先に一式が配置される。
-- 同じコマンドの `update` で、共通部分が新しい版に置き換わり、プロジェクト固有の部分（設定ファイルの値、CLAUDE.md の管理区画の外、利用者が書いたフック）は残る。
-- 設定ファイル（仮称 `.cc-sdd-bootstrap.json`）に、cc-sdd の版・言語・Codex の有無・役割ごとのモデルが書かれ、リポジトリにコミットされる。
-- このリポジトリ自身にも同じコマンドで導入されている（自己適用）。
+- 1 コマンドで、利用先に一式が配置・更新される。再実行で共通部分が新しい版に置き換わる。
+- 指揮役として Claude Code と Codex の両方に配置する: フックの登録（`.claude/settings.json` と Codex のフックの設定）、文章の管理区画（CLAUDE.md と AGENTS.md）、`.gitignore`。
+- 共通の配置物は「生成物・直接編集しない」と定め、更新の差分は git で確かめる運用にする。配置したファイルの記録・改変の検出・強制上書きの指定は持たない。
+- 設定は小さな 1 ファイル（`.cc-sdd-bootstrap.json`）。対話の聞き取りはせず、既定値で作り、利用者がファイルを直接直す。
+- クラウド環境の準備スクリプトから呼べる入口を、session-install と合わせて用意する（後述）。
 
 ## Approach
-配置物は、このリポジトリ内に利用先と同じ相対パスの形で持ち、導入コマンドはそれを写す。共通部分は上書きし、プロジェクト固有の部分は無いときだけ置く（bootstrap-ci-builder の sync と同じ考え方）。
+配置物はこのリポジトリ内に利用先と同じ相対パスで持ち、固定の一覧を写す。既存ファイルとの統合は、フックの登録（自分の印のある項目だけを置き換える）と管理区画（目印の行で囲んだ範囲だけを書き換える）の 2 つに絞る。
 
 ## Scope
-- **In**: CLI（`init`・`update`。対話の選択と、同じ選択を引数で渡す非対話の指定）、設定ファイルの形式と検証、`.claude/settings.json` へのフックの統合、`.gitignore` への追記、CLAUDE.md の管理区画の作成・更新、配置した版の記録、自己適用。
-- **Out**: 各部品（セッション開始時の導入、kiro-gate、モデルの判定、Codex）の中身。それぞれの spec で扱う。
+- **In**: 固定の配置一覧の写し、設定ファイルの初期作成と最小の検証、Claude Code と Codex のフックの登録の統合、CLAUDE.md と AGENTS.md の管理区画、`.gitignore`、自己適用。
+- **Out**: 配置したファイルの記録と改変の検出、`--force`、汎用の取り除き計画、対話の聞き取り、下流が項目を足せる汎用の契約（カタログ・項目定義の拡張点）。
 
 ## Boundary Candidates
-- 設定ファイルの読み書きと検証
-- 配置（写す・上書きする・無いときだけ置く）
-- 既存ファイルとの統合（settings.json・.gitignore・CLAUDE.md）
+- 配置（固定の一覧を写す）
+- 既存ファイルとの統合（フックの登録・管理区画・.gitignore）
+- 設定ファイルの初期作成
 
 ## Out of Boundary
 - cc-sdd 本体の取得（session-install）
-- 役割とモデルの定義（subagent-model-policy）
+- 役割とモデルの定義（subagent-delegation）
 
 ## Upstream / Downstream
 - **Upstream**: なし
-- **Downstream**: 他のすべての spec（設定ファイルにキーを足し、配置物を足す）
+- **Downstream**: session-install・kiro-gate・subagent-delegation（配置物と管理区画の文章を足す）
 
 ## Existing Spec Touchpoints
-- **Extends**: なし
-- **Adjacent**: plugin-skill（同じ CLI を会話から呼ぶ）
+- **Extends**: installer-core 自身（要件から改訂）
+- **Adjacent**: session-install（準備スクリプトの入口）
 
 ## Constraints
 - Node.js 22 以上、外部パッケージなし。
-- 要件の段階で決めること: 設定ファイルの名前、配置先のディレクトリ名（skyshare と同じ `scripts/agent/` にするか）、`update` で利用者が書き換えた共通部分をどう扱うか（上書き・中止・差分の表示）、アンインストールを扱うか。
-- CLAUDE.md の cc-sdd 標準の決まり（cc-sdd の `doc_main`）はコミットしない。導入時に `.kiro/settings/cc-sdd-guide.md` へ出力し、CLAUDE.md の管理区画から `@.kiro/settings/cc-sdd-guide.md` で取り込む（2026-11-18、このリポジトリで採用。取り込みが効くこと・ファイルが無くても壊れないことを PoC で確認済み）。
-- 自己適用のとき、このリポジトリの暫定の導入の仕組み（`scripts/agent/install-cc-sdd.sh`・`install-gate.mjs` と、`.claude/settings.json` のそのフックの登録、CLAUDE.md の「cc-sdd の導入（暫定）」の節）を、導入コマンドの配置物に置き換えて消す（2026-11-18 に暫定で置いた）。
-- PoC: `npx github:<owner>/<repo>` で bin が動くこと（公開リポジトリ、認証なし）。
-- 実現可能性の確認（2026-11-18、discovery Step 5）の指摘: bin の先頭に `#!/usr/bin/env node` が必須。`npx github:` は既定ブランチの先端を取るので、版の固定には `github:nekono-dev/cc-sdd-bootstrap#<タグ>` を案内する。package.json に `name` と `bin` が要る。Windows では `npx` が `npx.cmd` になる。
+- 残す安全策: 利用者が書いたフック・管理区画の外の文章を壊さない、配置先をリポジトリの中に限る、シンボリックリンクの先へ書かない。
+- 要件で決めること: `uninstall` を残すか（残すならフックの登録と管理区画を外す程度の単純なもの）、廃止した配置物を更新でどう片付けるか（固定の「廃止一覧」で足りるか）。
+- Codex のフックは信頼の承認が要る（BRW の Codex 対応の記述）。設計前に PoC で、Codex のフックの設定の置き場所・形式・承認の扱いを確かめる。
+- 自己適用で、既存の配置記録（`.agent-hooks/cc-sdd-bootstrap/installed.json`）を片付ける。

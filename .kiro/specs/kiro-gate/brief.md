@@ -1,41 +1,44 @@
 # Brief: kiro-gate
 
+> 改訂（2026-11-22、単純化の discovery）: タスクまで承認済み・未実装だったが、要件に戻して削り、Codex への対応を足す。理由と全体の方針は `.kiro/steering/roadmap.md` の「単純化の決定（2026-11-22）」を参照する。旧版の brief は git の履歴（`a1263af`）にある。
+
 ## Problem
-cc-sdd のスキルは、`disable-model-invocation: true` のものや導入直後のものがスキル一覧に載らない。そのため `/kiro-*` と入力しても、エージェントが手順書を読まずに自己流で進めることがある。また、kiro-discovery で複数の spec に分けたのに、分割を会話の中だけに残し、各 spec の brief.md を書かずに終えることがある。
+cc-sdd のスキルは、`disable-model-invocation: true` のものや導入直後のものがスキル一覧に載らない。そのため `/kiro-*` と入力しても、エージェントが手順書（SKILL.md）を読まずに自己流で進めることがある（大目的②）。Codex を指揮役にしたときも同じことが起きる。
+
+旧要件は、手順書の先読みに加えて、roadmap を読んで brief の欠けで終了を止める判定（旧要件 3.2〜3.4・4）、セッション開始時の spec 状態の知らせ（旧要件 5）、手順書が無いときの停止（旧要件 2）まで持ち、5 種類のフックを使う設計になっていた。前の 2 つは先読みの強制とは別の成果物の検査で、最後の 1 つは session-install の入力の停止と重なる。
 
 ## Current State
-skyshare の `kiro-gate.mjs` が次の 2 つを強制している。
-1. `/kiro-*` で始めたターンでは、対応する SKILL.md を Read するまで他のツールを拒否する。
-2. そのセッションで roadmap.md が更新され、最後の「Specs (dependency order)」節に載った spec の brief.md が欠けていれば、ターンの終了を 1 回だけ止める。
+- 未実装。要件・設計・タスク・PoC（`poc/kiro-gate/`）がある。
+- PoC で確認済み: UserPromptSubmit の `prompt` は入力のまま届く。PreToolUse の拒否は Bash を止め、手順書の Read は通せる。拒否の理由はモデルに届き、モデルは手順書を読んでやり直す。
 
 ## Desired Outcome
-- 上の 2 つが、利用先のどのリポジトリでも同じに動く（2026-11-18 の相談で、roadmap の判定を付けることを決定。他のファイルの判定は付けない）。
-- 書式が想定と違う（cc-sdd の版で見出しが変わった等）ときは、何もしない。
-- 手順書が無いとき（導入の失敗）は、導入の再試行を案内して止める。
+- `/kiro-*` で始めた依頼では、対応する手順書を読むまで他の作業ツールを拒否する。Claude Code と Codex の両方で同じ規則で動く。
+- 自然文の依頼は、依頼の種類と使うスキルの対応表を CLAUDE.md・AGENTS.md の管理区画に書いて促す（フックで止めない）。
+- 判定できないときは通す（通常の作業を止めない）。状態はリポジトリに残さない。
 
 ## Approach
-skyshare の実装を移す。状態は OS の一時ディレクトリに置き、リポジトリに残さない。判定できないときは通す（通常の作業を止めない）。
+入力時のフックで対象の手順書を決め、ツール起動前のフックで、その手順書の読み取りまで他のツールを拒否する。読んだかどうかの最小の状態だけを持つ。
 
 ## Scope
-- **In**: SessionStart（spec の状態の要約）、UserPromptSubmit（`/kiro-*` の検出）、PreToolUse（未読の間の拒否）、PostToolUse（Read の記録）、Stop（未読・brief 欠けの停止）。
-- **Out**: spec.json の承認や tasks.md のチェックの判定（cc-sdd のスキル自身が管理するため付けない）。
+- **In**: `/kiro-*` の検出、手順書を読むまでの拒否、読んだ記録、自然文の依頼の対応表（文章）、Claude Code と Codex の両方のフック。
+- **Out**: roadmap と brief の欠けによる終了の停止、セッション開始時の spec 状態の知らせ、手順書が無いときの停止（session-install の入力の停止に任せる）、spec.json の承認や tasks.md のチェックの判定。
 
 ## Boundary Candidates
-- コマンドの検出と状態
+- コマンドの検出と最小の状態
 - 未読の間の拒否
-- 終了時の判定（未読・roadmap と brief）
 
 ## Out of Boundary
-- 自然文の依頼（`/kiro-*` で始まらない）の強制
-- サブエージェントのモデルの判定（subagent-model-policy）
+- 自然文の依頼の機械的な強制
+- サブエージェントのモデルの判定（subagent-delegation）
 
 ## Upstream / Downstream
-- **Upstream**: session-install（スキルの場所と、導入失敗の扱い）
+- **Upstream**: session-install（スキルの場所、導入の失敗の扱い）、installer-core（フックの登録・管理区画）
 - **Downstream**: なし
 
 ## Existing Spec Touchpoints
-- **Extends**: なし
-- **Adjacent**: subagent-model-policy（同じ PreToolUse で動く）
+- **Extends**: kiro-gate 自身（要件から改訂）
+- **Adjacent**: session-install、subagent-delegation（同じツール起動前のフックで動く）
 
 ## Constraints
-- PoC: UserPromptSubmit の入力に `/kiro-*` がどの形で入るか（スキル一覧に無いコマンドを入力したとき）、PreToolUse の deny が ToolSearch 以外を止めること、Stop の `stop_hook_active` で 2 回目は通ること。
+- 設計前の PoC: Codex で、スキルの呼び出し（`/kiro-*` に当たる入力）が UserPromptSubmit にどの形で届くか、PreToolUse の拒否で手順書の読み取り以外を止められるか、読み取りをどのツール名で観測できるか。
+- 手順書の場所はベンダで違う（Claude Code は `.claude/skills/<名前>/SKILL.md`、Codex は `.agents/skills/<名前>/SKILL.md`）。
