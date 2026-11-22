@@ -108,3 +108,52 @@ Codex は利用上限のため実行していない。`codex_live.py` は計画�
 ## npm test
 
 `timeout 500 npm test` を同期で実行。630 件中 626 件が通過。失敗は指定の無関係な 3 件（`subagent-model-policy` の Claude 起動: 38・43・45）のみ。
+
+## Codex フックの実機確認（2026-11-22）
+
+- 再実行: `python3 poc/codex-delegation-live/codex_hook_live.py`（対照実験は `--allow-mcp`）。Codex CLI 0.167.0、Linux。モデル `gpt-6-luna`・推論量 `low`・`-a never exec --sandbox read-only`。CODEX_HOME は一時領域で、認証ファイルは一時コピーを終了時に削除する。ホストの `~/.codex` と作業ツリーは変えない。
+- Codex の呼び出しは全体で 5 回（上限 6 回）。内訳: 拒否の初回、stdin 修正後の再実行、対照（承認設定なし）、対照（承認設定あり）、拒否の再実行。
+- 上の「Codex（未実行）」の節は、フックの項目について今回の結果で置き換わる。
+
+| 確認項目 | 結果 | 根拠 |
+|---|---|---|
+| (A) シェルの PreToolUse の tool_name | `Bash`。tool_input はオブジェクトで、`command` の文字列 | フックの観測ログ |
+| (A) `updatedInput` による書き換え | 実行されたのは書き換え後のコマンド `/bin/bash -lc 'echo hello CCSDD-POC-MARK'`。出力は `hello CCSDD-POC-MARK` | `command_execution` の JSON イベント（2 回とも同じ） |
+| (B) MCP の PreToolUse の tool_name | `mcp__ccsddpoc__ping`（`mcp__<サーバー名>__<ツール名>`）。tool_input は空のオブジェクト | フックの観測ログ |
+| (B) フックの deny | ツールは実行されず（呼び出し記録 0 回）。Codex は `Tool call blocked by PreToolUse hook: CCSDD-POC-MCP-DENIED` として扱い、理由はモデルの応答にも届いた | 観測ログ・stderr・agent_message |
+| (B) 対照（deny なし・承認設定あり） | ping が 1 回実行され、結果は PONG | 呼び出し記録 1 回 |
+| (B) 対照（deny なし・承認設定なし） | フックは通したが Codex が `MCP tool call requires approval, but approval policy is never` で失敗し、実行されない | `mcp_tool_call` の error |
+
+確認できたことの要点:
+
+- `updatedInput` は Codex の PreToolUse でも効く。書き換えたコマンドが実際に実行されることを、実行ログの command で確かめた。
+- MCP の拒否は、Codex が MCP を承認対象として扱う前にフックで止まる。拒否理由は stderr と応答の両方に出る。
+- `-a never` では MCP 呼び出しに承認が要る。承認を与えない MCP 登録は、フックが通しても失敗する。これは `default_tools_approval_mode = "approve"` で解消した（今回の PoC で確認）。
+
+Codex の入力・出力のスキーマ（バイナリに埋め込まれた JSON Schema の文字列を読んだ結果。実機のログでは未記録）:
+
+- 入力には `model`・`turn_id`・`transcript_path`・`tool_use_id`・`permission_mode` があり、`transcript_path`・`turn_id` は必須。`turn_id` は実機で存在を確認した。`transcript_path` の実値は未確認。
+- 出力は `hookSpecificOutput.permissionDecision`（allow・deny・ask）と `updatedInput`。`updatedInput` の注記は「PermissionRequest では将来用」。PreToolUse では実機で使えた。
+
+未確認（今回の範囲外）:
+
+- 実際の命令（`node .agent-hooks/cc-sdd-bootstrap/delegate.mjs start …`）に対する書き換えの成立。今回は `echo` の末尾に目印の引数を足しただけ。
+- 書き換えたコマンドの文字列（参照）がモデルに見えないこと。今回は目印がコマンドの出力に出て、モデルがそれを報告した。管理入口の出力が参照を返さないかは、`delegate.mjs` 側の出力に依存するため未確認。
+- 観測ログの `transcript_path` の実値と、Codex の `permissionDecision` の matcher（どの表記で MCP 名を絞るか）。今回は matcher を付けず、全イベントを対象にした。
+- シェル以外の名前（`shell` など）。今回の確認は `Bash` の 1 種類だけ。
+
+設計への示唆:
+
+- G1 の案 B（PreToolUse で `updatedInput` を使い、`delegate.mjs` の命令の末尾に参照を付け足す）は、Codex の Bash でも成立する見込みが高い。実際の `delegate.mjs` の命令で再確認するのが次の段階。
+- MCP の拒否は `mcp__<サーバー名>__<ツール名>` の名前で判定できる。Codex の MCP 直接起動の拒否（ガード）は、この名前を条件にすれば書ける見込み（matcher の表記は未確認）。
+- cc-sdd が Codex に登録する MCP（`cc-sdd-codex` など）に、承認設定（`default_tools_approval_mode`）が必要かどうかを確認すべき。承認がなければ、フックで許可しても実行されない。
+- 警告の扱い: `codex exec` は標準入力が閉じていても「Reading additional input from stdin...」を出す（PoC の結果には影響しない）。また一時領域の `/tmp` 配下では「helper binaries を作らない」警告が出る（PATH の別名が作られないだけで、今回の確認には影響しない）。
+
+実行ログの抜粋（2 回目の拒否の実行。認証情報は含まない）:
+
+```
+{"event": "PreToolUse", "tool_name": "Bash", "tool_input_type": "dict", "tool_input_keys": ["command"], "model": "gpt-6-luna", "turn_id_present": true}
+{"event": "PreToolUse", "tool_name": "mcp__ccsddpoc__ping", "tool_input_type": "dict", "tool_input_keys": [], "model": "gpt-6-luna", "turn_id_present": true}
+{"command": "/bin/bash -lc 'echo hello CCSDD-POC-MARK'", "status": "completed", "exit_code": 0, "output": "hello CCSDD-POC-MARK\n"}
+ping の実行回数: 0
+```
