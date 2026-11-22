@@ -16,7 +16,7 @@ skyshare で手作りした cc-sdd の運用一式を汎用化し、`npx github:
 
 ## Scope
 
-- **In**: 導入・更新コマンドと設定ファイル、セッション開始時の cc-sdd 固定版導入と失敗時の停止、kiro-gate、役割ごとのサブエージェントのモデル固定と指揮役と同じモデルの拒否、Codex MCP サーバーによる委任（選択制）、プラグインのスキル、それぞれの前提を確かめる PoC。
+- **In**: 導入・更新コマンドと設定ファイル、セッション開始時の cc-sdd 固定版導入と失敗時の停止、kiro-gate、役割ごとのサブエージェントのモデル固定と指揮役と同じモデルの拒否、異系統のクラウド型エージェント MCP とネイティブサブエージェントへの優先順つき委任、プラグインのスキル、それぞれの前提を確かめる PoC。
 - **Out**: cc-sdd 本体（スキル・雛形）の配布や改変、BRW（branch-release-workflow）の導入、skyshare 固有の仕組み（migration-gate、コメント規約など）、skyshare の移行手順。
 
 ## Constraints
@@ -34,7 +34,7 @@ skyshare で手作りした cc-sdd の運用一式を汎用化し、`npx github:
   - 設定ファイルの形式: installer-core が定義し、他の spec はキーを足す。キーの名前と既定値の衝突に注意する。
   - `.claude/settings.json` のフックの登録: 各部品のフックを installer-core が混ぜて書く。登録の順番と、利用者が書いた既存のフックを壊さないこと。
   - CLAUDE.md の管理区画: 各部品が文章を足す。区画の中の並びと重複に注意する。
-  - 役割の一覧: subagent-model-policy が定義し、codex-delegation が同じ役割を Codex に割り当てる。
+  - 役割の一覧: subagent-model-policy が役割と適格条件を定義し、codex-delegation がそれに沿って委任先を選ぶ。
 
 ## Specs (dependency order)
 
@@ -42,5 +42,5 @@ skyshare で手作りした cc-sdd の運用一式を汎用化し、`npx github:
 - [x] session-install -- セッション開始時に設定の版で cc-sdd を入れ直し、失敗したら次の入力を止める. Dependencies: installer-core
 - [ ] kiro-gate -- `/kiro-*` で始めた作業で手順書を先に読ませ、roadmap の新しい spec に brief が欠けたまま終わらせない. Dependencies: session-install
 - [ ] subagent-model-policy -- 役割ごとのモデルの設定、エージェント定義の生成、指揮役と同じモデルや未指定（引き継ぎ）の起動を拒否するフック. Dependencies: installer-core
-- [ ] codex-delegation -- 導入時の選択で、Codex MCP サーバーと委任の決まりを配置し、役割を Codex に割り当てる. Dependencies: installer-core, subagent-model-policy
+- [ ] codex-delegation -- 登録済みのエージェント型 MCP を探査して候補と優先順を設定し、委任の直前に受付モデルを確認して実行先を選ぶ. Dependencies: installer-core, subagent-model-policy
 - [ ] plugin-skill -- プラグインの定義と、会話から導入・更新を行うスキル。マーケットプレイス nekono-dev への掲載. Dependencies: installer-core
