@@ -11,6 +11,10 @@
       "kind": "common",
       "sha256": "411fc0e0a7e783fbd1f963238a1115c49bdbb7bb0ca04cb5c0d7818407d1a6b2"
     },
+    ".agent-hooks/cc-sdd-bootstrap/codex-agent-mcp.mjs": {
+      "kind": "common",
+      "sha256": "1fe3c49fa06ec5d1805564c9f13536edfb221adb40aa84d390468c0728c3bf61"
+    },
     ".agent-hooks/cc-sdd-bootstrap/codex-native-agent-adapter.mjs": {
       "kind": "common",
       "sha256": "88684d9fd7fa418164983902b997a74dbb49cc463626b9d394855d0643f9044b"
@@ -18,6 +22,38 @@
     ".agent-hooks/cc-sdd-bootstrap/config-schema.mjs": {
       "kind": "common",
       "sha256": "83210f0da2931f74ee96418a759a4c9e938fa322c0dba673e9ac0822f232a0fd"
+    },
+    ".agent-hooks/cc-sdd-bootstrap/delegate.mjs": {
+      "kind": "common",
+      "sha256": "162f37364b410dcc72aa983172df1a104457bb581481975210b038a2074c623b"
+    },
+    ".agent-hooks/cc-sdd-bootstrap/delegation-job-control.mjs": {
+      "kind": "common",
+      "sha256": "cc5c7b5adf45aa428b92b96407ca38587122e21a4c541358dae61f200637c8b6"
+    },
+    ".agent-hooks/cc-sdd-bootstrap/delegation-job-store.mjs": {
+      "kind": "common",
+      "sha256": "91da419dc560320f99410401365759c9ef4b75aa95aa9f0a235e00e1f463495e"
+    },
+    ".agent-hooks/cc-sdd-bootstrap/delegation-job-worker.mjs": {
+      "kind": "common",
+      "sha256": "c6f34d8f1dd11c6f2748059ca349a081cc8da414ba22a90dab7db25018f2d42c"
+    },
+    ".agent-hooks/cc-sdd-bootstrap/delegation-mcp-gate.mjs": {
+      "kind": "common",
+      "sha256": "512f7aa6493a914d9965b4234b1e6544430e581e200726f2d8320c3c98e5f3f6"
+    },
+    ".agent-hooks/cc-sdd-bootstrap/delegation-mcp.mjs": {
+      "kind": "common",
+      "sha256": "b8ba08bb882acecc5774026a6fa885905a5521c47ddc930942109dd3c97348fd"
+    },
+    ".agent-hooks/cc-sdd-bootstrap/delegation-registry.mjs": {
+      "kind": "common",
+      "sha256": "9b2bb5866a57380df2846bb7b510ed06c6102a5d491c9883aa78096a83bb25d5"
+    },
+    ".agent-hooks/cc-sdd-bootstrap/delegation-select.mjs": {
+      "kind": "common",
+      "sha256": "69fa3c22ab1a6b02e6f6dc02dec7916e9d21bd0ab9364306bb83dcceaa6d8fbe"
     },
     ".agent-hooks/cc-sdd-bootstrap/install-cc-sdd.mjs": {
       "kind": "common",
@@ -33,7 +69,7 @@
     },
     ".agent-hooks/cc-sdd-bootstrap/kiro-delegation-context.mjs": {
       "kind": "common",
-      "sha256": "adb18807f30f0f5843f553069ac6ff2ed6ae32747a70fbcd29545986cd7fe71c"
+      "sha256": "f9212b97f9682d8ac2ae2fe132ac38b84272c2411e61107ac3042378769a5128"
     },
     ".agent-hooks/cc-sdd-bootstrap/native-agent-definitions.mjs": {
       "kind": "common",
@@ -49,7 +85,7 @@
     },
     ".agent-hooks/cc-sdd-bootstrap/subagent-model-policy-hook.mjs": {
       "kind": "common",
-      "sha256": "d4404aae5f12be445b73d3a2abd8f081224ba788c6d37b77b9f330c40560ce7b"
+      "sha256": "c44b1589498c9a28d0b824ef17827b03ea47c677f93036a2aabda65784ca0cb0"
     },
     ".claude/agents/cc-sdd-debug.md": {
       "kind": "common",

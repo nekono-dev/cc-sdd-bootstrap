@@ -52,4 +52,7 @@ SKILL.md が見つからない場合は、導入が完了していないと利�
 - ネイティブだけを導入した構成では、起動直前に `node .agent-hooks/cc-sdd-bootstrap/kiro-delegation-context.mjs preflight <kiro-skill> <base64url>` をシェルツールで単独実行する。最後の引数は `{requestId, role, readOnly?, toolName, toolInput}` の JSON を UTF-8・base64url にしたもの。依頼ごとに異なる `requestId` を使う。
 - `toolName` は `Agent`、`toolInput.subagent_type` は役割定義名。起動ツールに渡す引数一式を事前確認の `toolInput` に入れる。モデルの別名が解決できない場合は、現在の環境で確認済みの正規モデル ID を役割に設定して更新する。
 - 事前確認が成功したら、同じ引数で起動ツールを一度呼ぶ。確認に失敗した場合は理由を確認する。設定と権限が確認できる役割だけを利用する。
+
+## cc-sdd の管理された委任
+- エージェント MCP の直接起動の拒否と管理された委任は無効: Claude Code で PreToolUse による MCP 直接起動の拒否を実機で確認していないため、管理委任は無効です。サブエージェントは上のネイティブの定義に従う。
 <!-- cc-sdd-bootstrap:end -->

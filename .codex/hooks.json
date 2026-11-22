@@ -21,6 +21,16 @@
             "timeout": 10
           }
         ]
+      },
+      {
+        "matcher": "mcp__.*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "repo_root=\"$(git rev-parse --show-toplevel)\" && node \"$repo_root/.agent-hooks/cc-sdd-bootstrap/delegation-mcp-gate.mjs\" codex pre-tool-use # cc-sdd-bootstrap:managed",
+            "timeout": 10
+          }
+        ]
       }
     ],
     "Stop": [
