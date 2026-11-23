@@ -343,7 +343,7 @@ const STATE_PATH = ".cache/cc-sdd-install.state.json";
   - 強制終了で印が残ると PromptHook と CLI は止め、古い印なら印を消して再試行する 1 行を示す。印を消して再試行すると導入され、停止が解ける（5.1・5.3・5.4）。
   - 偽の npx を遅くして、2 回の合計が導入全体の期限で打ち切られ、失敗として止まる（2.2・5.2）。
   - PromptHook で例外（設定が JSON でない）が止める（5.6）。
-- **実機（PoC）**: `poc/req-feasibility/`（両ツールの最初の入力時の導入、Codex の停止）、`poc/first-kiro-command/`（起動前の導入で最初の `/kiro-steering`）。実装後に `poc/self-install/run.sh` を Codex 込みに更新し、このリポジトリで導入と停止を確かめる。
+- **実機（PoC）**: `poc/req-feasibility/`（両ツールの最初の入力時の導入、Codex の停止）、`poc/first-kiro-command/`（起動前の導入で最初の `/kiro-steering`）。実装後に `poc/self-install/run.sh` を Codex 込みに更新し、一時のリポジトリで導入と停止を確かめる（このリポジトリ自身での確認は、自己適用の後に installer-core 7.2 で行う）。
 
 ## Migration Strategy
 
