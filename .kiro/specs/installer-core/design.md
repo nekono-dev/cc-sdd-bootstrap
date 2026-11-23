@@ -28,6 +28,7 @@
 - カタログ（配置するスクリプト・フックの登録・`.gitignore` の行・運用の区画の文章の一覧）の形と、installer-core 自身の項目。
 - 設定ファイル `.cc-sdd-bootstrap.json` の初期作成・読み取り・検証・補いと、項目定義の形。
 - 配置先ディレクトリ `.agent-hooks/cc-sdd-bootstrap/` の中身（カタログのスクリプトと、組み立てた運用の区画のファイル）。
+- カタログの `generated` が返すファイル（`owns` の型の範囲。中身は各 spec が決める）の書き出しと片付け。
 - `.claude/settings.json` と `.codex/hooks.json` の中の、一式の登録（コマンドに `/.agent-hooks/cc-sdd-bootstrap/` を含む組）。
 - `.gitignore` の中の目印で囲んだ区画。
 - 運用の区画の目印の定義と、`uninstall` で CLAUDE.md・AGENTS.md から区画を外す処理。
@@ -46,7 +47,7 @@
 - 配置先のスクリプトは `lib/` を読み込まない（利用先には `lib/` が無い）。`lib/` は配置先の `config-schema.mjs` だけを読み込んでよい（`lib/config-schema.mjs` の 1 行の公開し直し）。
 
 ### Revalidation Triggers
-- カタログの形（項目の名前・意味）の変更 → session-install・kiro-gate・subagent-delegation の追加分を見直す。
+- カタログの形（項目の名前・意味）の変更 → session-install・kiro-gate・subagent-delegation の追加分を見直す。`generated`（設定から作るファイル）は subagent-delegation の設計で足した（2026-11-23）。
 - 運用の区画のファイルの道筋・目印の行の変更 → session-install の書き足しを見直す。
 - フックのコマンドの形（根の求め方・見分けの文字列）の変更 → 各フックのスクリプトの起動のされ方を見直す。
 - 設定の項目定義の形の変更 → 設定を読むフック（session-install・subagent-delegation）を見直す。
@@ -272,11 +273,17 @@ interface CatalogHook {
   timeout?: number;                                          // 秒
 }
 interface AgentSection { id: string; claude: string; codex: string } // Markdown。両ツールで同じ趣旨
+interface CatalogGenerated {                                 // 設定から作るファイル（subagent-delegation の役割定義）
+  id: string;
+  owns: string[];                                            // "*" を 1 つ含む道筋の型（例 ".claude/agents/cc-sdd-*.md"）
+  render(config: ConfigObject): { files: { path: string; content: string }[]; notices: string[] };
+}
 interface Catalog {
   files: CatalogFile[];
   hooks: CatalogHook[];
   gitignore: string[];
   agentSections: AgentSection[];
+  generated: CatalogGenerated[];
 }
 ```
 - installer-core 自身の項目:
@@ -352,6 +359,7 @@ interface TargetSnapshot {
   gitignore: string | null;
   agentDocs: { claude: string | null; codex: string | null };   // uninstall と init の案内だけに使う
   deployDirFiles: Record<string, Buffer>;                         // 配置先ディレクトリの今のファイル（道筋 → 中身）
+  generatedFiles: Record<string, Buffer>;                         // generated の owns の型に当たる今のファイル
   sourceFiles: Record<string, Buffer>;                            // 同梱のカタログのファイル
 }
 type FileChange =
@@ -360,7 +368,7 @@ type FileChange =
 type PlanAbort =
   | { code: "CONFIG_EXISTS" } | { code: "CONFIG_MISSING" }
   | ConfigError | HooksError | BlockError;
-type PlanNotice = { code: "EXISTING_AGENT_DOCS"; files: string[] } | { code: "CODEX_TRUST" } | { code: "CONFIG_CREATED"; defaults: string[] };
+type PlanNotice = { code: "EXISTING_AGENT_DOCS"; files: string[] } | { code: "CODEX_TRUST" } | { code: "CONFIG_CREATED"; defaults: string[] } | { code: "GENERATED_NOTICE"; id: string; messages: string[] };
 type Plan = { ok: true; changes: FileChange[]; notices: PlanNotice[]; removed: string[] } | { ok: false; aborts: PlanAbort[] };
 function computePlan(input: { operation: Operation; snapshot: TargetSnapshot; catalog: Catalog; fields: ConfigField[] }): Plan;
 function renderAgentSection(tool: Tool, sections: AgentSection[]): string; // 目印の行・各区画の文章を空行で区切って連結
@@ -369,9 +377,10 @@ function renderAgentSection(tool: Tool, sections: AgentSection[]): string; // �
   - 設定: `init` は無ければ既定値で作る。あれば `CONFIG_EXISTS`。`update` は無ければ `CONFIG_MISSING`、あれば検証し、欠けた項目だけ補う。
   - 配置先: `deployDirFiles` のうちカタログと 2 つの区画のファイルに無いものを `delete`、カタログのファイルと区画のファイルを内容が違えば `write`（3.1・3.4）。
   - 2 つのフックの設定へ `mergeHooks`、`.gitignore` へ `replaceBlock`。
+  - `generated`: 設定を検証した後に各 `render` を呼び、返したファイルを内容が違えば `write`、`owns` の型に当たる今のファイルのうち返さなかったものを `delete`。`notices` は `PlanNotice` の `GENERATED_NOTICE` として表示する。`render` が `owns` に当たらない道筋を返したら実装の誤りとして例外にする。`uninstall` は生成物を消さない（7.2 の共通の配置物と同じ扱い）。
   - CLAUDE.md・AGENTS.md は変更に載せない（5.4）。`init` でどちらかがあれば `EXISTING_AGENT_DOCS`（5.5）。
 - `uninstall`: 2 つのフックの設定へ `removeHooks`、CLAUDE.md・AGENTS.md があれば `removeBlock`（区画が無ければ変更なし）。それ以外は変更に載せない（7.2）。設定ファイル・配置先は読まない（壊れていても取り外しを妨げない）。
-- 変更の道筋は `ALLOWED_PATHS`（設定ファイル・配置先の下・2 つのフックの設定・`.gitignore`・`uninstall` のときの CLAUDE.md・AGENTS.md）に限る。外れたら実装の誤りとして例外にする（8.3）。
+- 変更の道筋は `ALLOWED_PATHS`（設定ファイル・配置先の下・2 つのフックの設定・`.gitignore`・`generated` の `owns` の型・`uninstall` のときの CLAUDE.md・AGENTS.md）に限る。外れたら実装の誤りとして例外にする（8.3）。
 - 中止の理由はすべて集めてから返す。1 つでもあれば変更は空。
 
 ### 入出力

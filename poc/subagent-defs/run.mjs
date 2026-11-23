@@ -6,7 +6,7 @@
 //   a. Claude Code: .claude/agents/<名前>.md の frontmatter（model・effort・tools）で定義した子を、Agent の subagent_type で起動できる。
 //      PreToolUse の tool_input に subagent_type が入り、model は入らない（定義のモデルはフックから見えない）。tools を読み取りだけにした子は書けない
 //   b. Codex: .codex/agents/<名前>.toml（model・model_reasoning_effort・sandbox_mode = "read-only"）で定義した子を agent_type で起動できるか。子が書けるか（観測）
-//   c. claude -p: --tools Read,Grep,Glob で読み取り専用にすると書けない。--permission-mode acceptEdits なら書ける
+//   c. claude -p: --tools Read,Grep,Glob で読み取り専用にすると書けない。--permission-mode acceptEdits なら書け、--allowedTools Bash でシェルも使える
 //
 // 使い方: node poc/subagent-defs/run.mjs [a b c]   （既定はすべて）
 // 必要なもの: claude（認証済み）・codex（~/.codex/auth.json）・版管理の CLI。作業場所は ~/.cache/cc-sdd-bootstrap-scratch/subagent-defs。
@@ -87,6 +87,8 @@ if (want("c")) {
   check("c. --tools Read,Grep,Glob では書けない", !fs.existsSync(path.join(repo, "ro.txt")));
   spawnSync("claude", ["-p", "--model", "haiku", "--effort", "medium", "--setting-sources", "project", "--permission-mode", "acceptEdits", "--max-turns", "4", ask("rw.txt")], { cwd: repo, env, encoding: "utf8", input: "", timeout: 300000 });
   check("c. --permission-mode acceptEdits なら書ける", fs.existsSync(path.join(repo, "rw.txt")));
+  spawnSync("claude", ["-p", "--model", "haiku", "--effort", "medium", "--setting-sources", "project", "--permission-mode", "acceptEdits", "--allowedTools", "Bash", "--max-turns", "4", "Bash ツールで echo ok > sh.txt を実行してください。結果を答えてください。"], { cwd: repo, env, encoding: "utf8", input: "", timeout: 300000 });
+  check("c. --permission-mode acceptEdits --allowedTools Bash ならシェル（テストの実行）も使える", fs.existsSync(path.join(repo, "sh.txt")));
 }
 
 console.log(`結果: OK ${pass} 件、NG ${fail} 件`);

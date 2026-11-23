@@ -13,6 +13,7 @@
 | b. `sandbox_mode = "read-only"` の子は書けないか | **書けた**。定義の権限は効かず、子は親の権限（workspace-write）で動いた（観測） |
 | c. `claude -p --tools Read,Grep,Glob` は書けないか | 書けない |
 | c. `claude -p --permission-mode acceptEdits` は書けるか | 書ける |
+| c. `--permission-mode acceptEdits --allowedTools Bash` でシェル（テストの実行）も使えるか | 使える |
 
 ## 設計に引き継ぐこと
 
