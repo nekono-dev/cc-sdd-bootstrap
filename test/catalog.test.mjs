@@ -10,6 +10,11 @@ import {
   OWNED_MARKER,
   CONFIG_PATH,
   LEDGER_PATH,
+  CLAUDE_SETTINGS_PATH,
+  CODEX_HOOKS_PATH,
+  AGENT_DOCS,
+  AGENT_SECTION_FILES,
+  AGENT_SECTION_MARKERS,
 } from "../lib/catalog.mjs";
 
 test("DEPLOY_DIR は配置先のディレクトリ", () => {
@@ -188,5 +193,48 @@ test("配置物は lib/ を import / require しない（配置先では lib/ �
     const importLike =
       /(?:\bfrom\s*|\bimport\s*\(?\s*|\brequire\s*\(\s*)["'][^"']*\blib\/[^"']*["']/;
     assert.ok(!importLike.test(text), f.path);
+  }
+});
+
+test("新しい設定・区画の道筋と目印が揃っている", () => {
+  assert.equal(CLAUDE_SETTINGS_PATH, ".claude/settings.json");
+  assert.equal(CODEX_HOOKS_PATH, ".codex/hooks.json");
+  assert.deepEqual(AGENT_DOCS, { claude: "CLAUDE.md", codex: "AGENTS.md" });
+  assert.deepEqual(AGENT_SECTION_FILES, {
+    claude: `${DEPLOY_DIR}/agent-section-claude.md`,
+    codex: `${DEPLOY_DIR}/agent-section-codex.md`,
+  });
+  assert.ok(AGENT_SECTION_MARKERS.begin.includes("cc-sdd-bootstrap:begin"));
+  assert.equal(AGENT_SECTION_MARKERS.end, "<!-- cc-sdd-bootstrap:end -->");
+  assert.deepEqual(catalog.generated, []);
+  assert.deepEqual(catalog.agentSections.map(({ id }) => id), ["bootstrap-intro"]);
+  const section = catalog.agentSections[0];
+  for (const text of [section.claude, section.codex]) {
+    assert.ok(text.includes("導入のたびに書き足される"));
+    assert.ok(text.includes(`${DEPLOY_DIR}/`));
+    assert.ok(text.includes(".kiro/steering/"));
+    assert.ok(!text.includes("# Agentic SDLC and Spec-Driven Development"));
+  }
+});
+
+test("新しいフック一覧は Claude 向けの session-install 2 件を記述する", () => {
+  assert.deepEqual(catalog.agentHooks, [
+    { tools: ["claude"], event: "SessionStart", script: "install-cc-sdd.mjs", args: ["session-start"], timeout: 600 },
+    { tools: ["claude"], event: "UserPromptSubmit", script: "install-gate.mjs", args: ["user-prompt-submit"], timeout: 10 },
+  ]);
+});
+
+test("新しい除外行は導入物と手元の状態を外す 6 行（要件 6.1）", () => {
+  assert.deepEqual(catalog.agentGitignore, [
+    ".claude/skills/kiro-*/", ".agents/skills/kiro-*/", ".kiro/settings/", "/CLAUDE.md", "/AGENTS.md", "/.cache/",
+  ]);
+});
+
+test("新しい除外行は設定・配置物・両フック設定・仕様と方針に当たらない", () => {
+  const protectedPaths = [CONFIG_PATH, ...catalog.files.map((f) => f.path),
+    CLAUDE_SETTINGS_PATH, CODEX_HOOKS_PATH, ".kiro/specs/installer-core/requirements.md",
+    ".kiro/steering/product.md"];
+  for (const line of catalog.agentGitignore) {
+    for (const p of protectedPaths) assert.ok(!gitignoreMatches(line, p), `${line} が ${p} に当たる`);
   }
 });
