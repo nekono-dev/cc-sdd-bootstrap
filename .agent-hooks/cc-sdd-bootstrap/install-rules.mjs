@@ -7,6 +7,8 @@ export const FAILURE_RECORD = ".cache/cc-sdd-install.failed";
 export const STATE_PATH = ".cache/cc-sdd-install.state.json";
 export const RETRY_COMMAND = "node .agent-hooks/cc-sdd-bootstrap/install-cc-sdd.mjs";
 export const NPX_TIMEOUT_MS = 540000;
+/** 導入中の印が古いとみなす経過時間（導入全体の期限＋120秒。UserPromptSubmit の時間切れ 600 秒より長い） */
+export const STALE_LOCK_MS = 660000;
 
 /** 道筋（"a.b"）で値を読む。無ければ undefined */
 function getPath(obj, path) {
@@ -127,18 +129,29 @@ export function isFingerprintTarget(path, keepTemplates) {
 }
 
 /**
- * 状態と現在あるファイルから、入れ直す理由または省略を返す（内容は比べない。4.4）。
- * @param {{ config: { version: string, lang: string }, state: { version: string, lang: string, files: string[] } | null, failureRecordExists: boolean, currentFiles: Record<string, true> }} input
- *   currentFiles は、今あるファイルの道筋をキーにしたもの
+ * 判断: 材料（InstallFacts）から、導入するか・省くか・止めるかを返す（内容は比べない。4.4）。
+ * 順序: 設定の誤り → 導入中の印 → 失敗の記録 → 状態の欠け → 版・言語 → 記録した道筋の欠け → 運用の区画の欠け → 省く。
+ * @param {{
+ *   config: { ok: true, config: { version: string, lang: string } } | { ok: false, reason: string },
+ *   state: { version: string, lang: string, files: string[] } | null,
+ *   lock: { present: false } | { present: true, ageMs: number },
+ *   failure: { present: false } | { present: true, text: string | null },
+ *   missingFiles: string[],
+ *   sectionPresent: { claude: boolean, codex: boolean }
+ * }} facts
  */
-export function decideInstall({ config, state, failureRecordExists, currentFiles }) {
-  if (failureRecordExists) return { action: "install", reason: "failure-record" };
-  if (state === null) return { action: "install", reason: "no-state" };
-  if (config.version !== state.version || config.lang !== state.lang) {
+export function decideInstall(facts) {
+  if (!facts.config.ok) return { action: "fail", reason: facts.config.reason };
+  if (facts.lock.present) return { action: "busy", stale: facts.lock.ageMs > STALE_LOCK_MS };
+  if (facts.failure.present) return { action: "install", reason: "failed" };
+  if (facts.state === null) return { action: "install", reason: "no-state" };
+  const { version, lang } = facts.config.config;
+  if (version !== facts.state.version || lang !== facts.state.lang) {
     return { action: "install", reason: "config-changed" };
   }
-  if (state.files.some((path) => !Object.hasOwn(currentFiles, path))) {
-    return { action: "install", reason: "files-missing" };
+  if (facts.missingFiles.length > 0) return { action: "install", reason: "files-missing" };
+  if (!facts.sectionPresent.claude || !facts.sectionPresent.codex) {
+    return { action: "install", reason: "section-missing" };
   }
   return { action: "skip" };
 }

@@ -1,4 +1,4 @@
-import { readInstallConfig, parseState, buildState, isFingerprintTarget, FAILURE_RECORD, STATE_PATH, RETRY_COMMAND, NPX_TIMEOUT_MS, decideInstall, removalTargets, buildManifest, npxArgs, RECORD_IN_PROGRESS, messageInstalled, messageSkipped, messageGuide, failureRecordText, messageFailed } from "../.agent-hooks/cc-sdd-bootstrap/install-rules.mjs";
+import { readInstallConfig, parseState, buildState, isFingerprintTarget, FAILURE_RECORD, STATE_PATH, RETRY_COMMAND, NPX_TIMEOUT_MS, STALE_LOCK_MS, decideInstall, removalTargets, buildManifest, npxArgs, RECORD_IN_PROGRESS, messageInstalled, messageSkipped, messageGuide, failureRecordText, messageFailed } from "../.agent-hooks/cc-sdd-bootstrap/install-rules.mjs";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
@@ -158,24 +158,75 @@ test("isFingerprintTarget の判定", () => {
 const config = { version: "3.1.0", lang: "ja" };
 const KIRO_SKILL = ".claude/skills/kiro-impl/SKILL.md";
 const state = buildState(config, [KIRO_SKILL]);
-const decision = (overrides = {}) => decideInstall({ config, state, failureRecordExists: false, currentFiles: { [KIRO_SKILL]: true }, ...overrides });
+// 判断の材料（InstallFacts）の既定値。試験ごとに上書きする
+const facts = (overrides = {}) => ({
+  config: { ok: true, config },
+  state,
+  lock: { present: false },
+  failure: { present: false },
+  missingFiles: [],
+  sectionPresent: { claude: true, codex: true },
+  ...overrides
+});
 
-test("導入記録の定数と判定理由・優先順位", () => {
+test("導入記録の定数", () => {
   assert.equal(FAILURE_RECORD, ".cache/cc-sdd-install.failed");
   assert.equal(STATE_PATH, ".cache/cc-sdd-install.state.json");
   assert.equal(RETRY_COMMAND, "node .agent-hooks/cc-sdd-bootstrap/install-cc-sdd.mjs");
   assert.equal(NPX_TIMEOUT_MS, 540000);
-  assert.deepEqual(decision({ failureRecordExists: true, state: null }), { action: "install", reason: "failure-record" });
-  assert.deepEqual(decision({ state: null }), { action: "install", reason: "no-state" });
-  assert.deepEqual(decision({ config: { ...config, lang: "en" } }), { action: "install", reason: "config-changed" });
-  assert.deepEqual(decision({ config: { ...config, version: "3.2.0" } }), { action: "install", reason: "config-changed" });
-  assert.deepEqual(decision({ currentFiles: {} }), { action: "install", reason: "files-missing" });
-  assert.deepEqual(decision(), { action: "skip" });
+  assert.equal(STALE_LOCK_MS, 660000);
 });
 
-test("判断は道筋の有無だけを見る（内容が変わっても入れ直さない）", () => {
-  const rewritten = { [KIRO_SKILL]: true };
-  assert.deepEqual(decideInstall({ config, state, failureRecordExists: false, currentFiles: rewritten }), { action: "skip" });
+test("揃っていれば省く（skip）", () => {
+  assert.deepEqual(decideInstall(facts()), { action: "skip" });
+});
+
+test("設定の誤りは fail にし、理由をそのまま返す", () => {
+  const reason = ".cc-sdd-bootstrap.json が JSON として読めません。update で設定を新しくしてください。";
+  assert.deepEqual(decideInstall(facts({ config: { ok: false, reason }, state: null })), { action: "fail", reason });
+});
+
+test("設定の誤りは導入中の印より先に判定する", () => {
+  const reason = "設定の誤り";
+  assert.deepEqual(decideInstall(facts({ config: { ok: false, reason }, lock: { present: true, ageMs: 0 } })), { action: "fail", reason });
+});
+
+test("導入中の印は busy にし、経過時間が STALE_LOCK_MS を超えたときだけ stale にする", () => {
+  assert.deepEqual(decideInstall(facts({ lock: { present: true, ageMs: 1000 } })), { action: "busy", stale: false });
+  assert.deepEqual(decideInstall(facts({ lock: { present: true, ageMs: STALE_LOCK_MS } })), { action: "busy", stale: false });
+  assert.deepEqual(decideInstall(facts({ lock: { present: true, ageMs: STALE_LOCK_MS + 1 } })), { action: "busy", stale: true });
+});
+
+test("導入中の印は失敗の記録・状態の欠けより先に判定する", () => {
+  assert.deepEqual(decideInstall(facts({ lock: { present: true, ageMs: 1 }, failure: { present: true, text: "x" }, state: null })), { action: "busy", stale: false });
+});
+
+test("失敗の記録があれば入れ直す（reason は failed）", () => {
+  assert.deepEqual(decideInstall(facts({ failure: { present: true, text: "取得に失敗しました" } })), { action: "install", reason: "failed" });
+  assert.deepEqual(decideInstall(facts({ failure: { present: true, text: null }, state: null })), { action: "install", reason: "failed" });
+});
+
+test("状態が無ければ入れ直す（reason は no-state）", () => {
+  assert.deepEqual(decideInstall(facts({ state: null })), { action: "install", reason: "no-state" });
+});
+
+test("版・言語が設定と違えば入れ直す（reason は config-changed）", () => {
+  assert.deepEqual(decideInstall(facts({ config: { ok: true, config: { ...config, lang: "en" } } })), { action: "install", reason: "config-changed" });
+  assert.deepEqual(decideInstall(facts({ config: { ok: true, config: { ...config, version: "3.2.0" } } })), { action: "install", reason: "config-changed" });
+});
+
+test("記録した道筋のうち今は無いものがあれば入れ直す（reason は files-missing）", () => {
+  assert.deepEqual(decideInstall(facts({ missingFiles: [KIRO_SKILL] })), { action: "install", reason: "files-missing" });
+});
+
+test("どちらかの文書に運用の区画が無ければ入れ直す（reason は section-missing）", () => {
+  assert.deepEqual(decideInstall(facts({ sectionPresent: { claude: false, codex: true } })), { action: "install", reason: "section-missing" });
+  assert.deepEqual(decideInstall(facts({ sectionPresent: { claude: true, codex: false } })), { action: "install", reason: "section-missing" });
+});
+
+test("内容だけが変わった導入物は道筋がある限り省く（内容は判断の材料に無い）", () => {
+  // 内容の変更は InstallFacts に現れない。道筋・版・言語・区画が揃っていれば skip のまま
+  assert.deepEqual(decideInstall(facts({ missingFiles: [] })), { action: "skip" });
 });
 
 test("removalTargets は kiro- のみを順に消し、保持時の雛形を残す", () => {

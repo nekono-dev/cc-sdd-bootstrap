@@ -152,7 +152,17 @@ try {
   const state = parseState(stateText);
   const failureRecordExists = fs.existsSync(absolute(FAILURE_RECORD));
   const missing = templatesMissing();
-  const decision = decideInstall({ config, state, failureRecordExists, currentFiles: existingFiles(KEEP_TEMPLATES) });
+  const currentFiles = existingFiles(KEEP_TEMPLATES);
+  // 判断の材料の読み取りは 2.1 で組み直す。ここでは従来の判断と同じ結果になるよう、印と区画は無い・ある扱いにする
+  const missingFiles = state ? state.files.filter((rel) => !Object.hasOwn(currentFiles, rel)) : [];
+  const decision = decideInstall({
+    config: checked,
+    state,
+    lock: { present: false },
+    failure: { present: failureRecordExists, text: null },
+    missingFiles,
+    sectionPresent: { claude: true, codex: true }
+  });
   if (decision.action === 'skip') {
     process.stdout.write(`${messageSkipped(config)}\n${messageGuide()}\n`);
   } else {
