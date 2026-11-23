@@ -44,7 +44,7 @@
 ### Allowed Dependencies
 - Node.js 22 の標準モジュールだけ（外部パッケージなし）。
 - 依存の向き: `catalog`・`config-schema`（データ）→ `config`・`blocks`・`hooks-merge`・`plan`（純粋な計算）→ `target`（入出力）→ `cli`（操作の流れと表示）→ `bin`（入口）。逆向きの読み込みは誤りとして扱う。
-- 配置先のスクリプトは `lib/` を読み込まない（利用先には `lib/` が無い）。`lib/` は配置先の `config-schema.mjs` だけを読み込んでよい（`lib/config-schema.mjs` の 1 行の公開し直し）。
+- 配置先のスクリプトは `lib/` を読み込まない（利用先には `lib/` が無い）。`lib/` は配置先の `config-schema.mjs`（`lib/config-schema.mjs` の 1 行の公開し直し）と、カタログの `generated` の `render` に使う配置物の純粋な関数（subagent-delegation の `subagent-roles.mjs` の `renderDefinitions`）だけを読み込んでよい。
 
 ### Revalidation Triggers
 - カタログの形（項目の名前・意味）の変更 → session-install・kiro-gate・subagent-delegation の追加分を見直す。`generated`（設定から作るファイル）は subagent-delegation の設計で足した（2026-11-23）。

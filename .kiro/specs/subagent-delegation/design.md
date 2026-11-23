@@ -33,7 +33,7 @@
 ### Allowed Dependencies
 - installer-core: カタログ（`generated` の項目を足す）・設定の項目定義・フックのコマンドの形。
 - `codex`・`claude` の CLI（入口から起動する）。
-- Node.js 22 の標準モジュール。依存の向き: `config-schema` → `subagent-roles`（純粋）→ `subagent-check`・`delegate`（入出力と入口）。`lib/` からは `subagent-roles` の生成の関数だけを読む（カタログの `generated` から）。
+- Node.js 22 の標準モジュール。依存の向き: `config-schema` → `subagent-roles`（純粋）→ `subagent-check`・`delegate`（入出力と入口）。`lib/catalog.mjs` は `subagent-roles` の `renderDefinitions` だけを読み込む（カタログの `generated` のため。installer-core の Allowed Dependencies に同じ例外を書く）。
 
 ### Revalidation Triggers
 - `subagents` の形の変更 → installer-core の設定の検証、手順の文章。
@@ -134,9 +134,9 @@ sequenceDiagram
 
 | Requirement | Summary | Components | Interfaces | Flows |
 |-------------|---------|------------|------------|-------|
-| 1.1 | 役割ごとに提供元・モデル・推論量・権限を指揮役の提供元ごとに | Roles, ConfigSchema | `SubagentsConfig` | — |
+| 1.1 | 役割ごとに提供元・モデル・推論量・権限を指揮役の提供元ごとに | Roles, ConfigSchema | `SubagentsConfig.roles[指揮役][役割]` | — |
 | 1.2 | 格の指定と既定 | Roles | `DEFAULT_TIERS` `familyOf` | — |
-| 1.3 | 格 2 の指揮役の既定値の表 | Roles | `DEFAULT_ASSIGN` `DEFAULT_ROLES` | — |
+| 1.3 | 格 2 の指揮役の既定値の表 | Roles | `DEFAULT_ROLES` | — |
 | 1.4 | 格 2 以外の既定のモデル | Roles, Delegate | `defaultModelFor` | 委任 |
 | 1.5 | 最下位の指揮役は自分で実装 | Roles, 区画の文章 | `defaultModelFor` が null | — |
 | 1.6 | 推論量の目安と選択 | Delegate, 区画の文章 | `--effort` | — |
@@ -191,40 +191,39 @@ type Vendor = "claude" | "codex";
 type Role = "implement" | "review" | "investigate" | "debug";
 type Effort = "medium" | "high";
 type Permission = "write" | "read-only";
-type RoleSetting = { model: string; effort: Effort; permission: Permission };
+type RoleSetting = { provider: "same" | "other"; model: string; effort: Effort; permission: Permission };
 type SubagentsConfig = {
   tiers?: Record<string, number>;                         // 系統の語 → 格。既定に足す・上書きする
   modelIds?: Record<string, string>;                      // 系統の語 → 起動に使うモデルの名前。既定に足す・上書きする
-  assign?: Partial<Record<Vendor, Partial<Record<Role, "same" | "other">>>>;
-  roles?: Partial<Record<Vendor, Partial<Record<Role, Partial<RoleSetting>>>>>;
+  roles?: Partial<Record<Vendor, Partial<Record<Role, Partial<RoleSetting>>>>>;  // 指揮役の提供元 → 役割 → 設定（1.1）
 };
 const DEFAULT_TIERS = { haiku: 1, luna: 1, sonnet: 2, sol: 2, opus: 3, astra: 3 };
-const DEFAULT_MODEL_IDS = { haiku: "haiku", sonnet: "sonnet", opus: "opus", luna: "gpt-6-luna", sol: "gpt-6.1-sol" };
-// astra は格の比較には使うが、既定のモデルの名前を持たない（ID が未確認のため）。1.4 の既定の選択の候補にならず、利用者が modelIds で足せば候補になる
-const DEFAULT_ASSIGN = { implement: "same", review: "other", investigate: "other", debug: "other" }; // 両ツール共通
-const DEFAULT_ROLES = {
-  claude: { implement: { model: "haiku", effort: "medium", permission: "write" },
-            review: { model: "sonnet", effort: "medium", permission: "read-only" },
-            investigate: { model: "haiku", effort: "medium", permission: "read-only" },
-            debug: { model: "sonnet", effort: "medium", permission: "read-only" } },
-  codex:  { implement: { model: "gpt-6-luna", effort: "medium", permission: "write" },
-            review: { model: "gpt-6.1-sol", effort: "medium", permission: "read-only" },
-            investigate: { model: "gpt-6-luna", effort: "medium", permission: "read-only" },
-            debug: { model: "gpt-6.1-sol", effort: "medium", permission: "read-only" } },
+const DEFAULT_MODEL_IDS = { haiku: "haiku", sonnet: "sonnet", opus: "opus", luna: "gpt-6-luna", sol: "gpt-6.1-sol", astra: "gpt-6.2-astra" };
+// astra の ID は Codex のモデル一覧（~/.codex/models_cache.json、2026-11-23）で確認した。modelIds で変えられる
+const DEFAULT_ROLES = {   // 指揮役の提供元ごと。1.3 の表そのもの
+  claude: { implement:   { provider: "same",  model: "haiku",       effort: "medium", permission: "write" },
+            review:      { provider: "other", model: "gpt-6.1-sol", effort: "medium", permission: "read-only" },
+            investigate: { provider: "other", model: "gpt-6-luna",  effort: "medium", permission: "read-only" },
+            debug:       { provider: "other", model: "gpt-6.1-sol", effort: "medium", permission: "read-only" } },
+  codex:  { implement:   { provider: "same",  model: "gpt-6-luna",  effort: "medium", permission: "write" },
+            review:      { provider: "other", model: "sonnet",      effort: "medium", permission: "read-only" },
+            investigate: { provider: "other", model: "haiku",       effort: "medium", permission: "read-only" },
+            debug:       { provider: "other", model: "sonnet",      effort: "medium", permission: "read-only" } },
 };
-// assign と roles の既定から 1.3 の表が出る（例: Claude Code が指揮役のレビュー = other = codex の review = gpt-6.1-sol）
+// 委任先の提供元 = provider が same なら指揮役の提供元、other なら反対の提供元
 
 function validateSubagents(value: unknown): { ok: true; config: SubagentsConfig } | { ok: false; problems: string[] }; // 問題の項目の道筋つき（1.8）
 function familyOf(model: string, tiers: Record<string, number>): string | null; // 小文字の ID が含む系統の語（長い語を先に照合）
 function vendorOfFamily(family: string): Vendor | null;                          // haiku・sonnet・opus → claude、luna・sol・astra → codex（設定で足した語は null）
 function resolveRole(cfg: SubagentsConfig, from: Vendor, role: Role, orchestratorModel: string | null):
   { ok: true; target: Vendor; setting: RoleSetting; selfImplement: boolean } | { ok: false; reason: string };
-// target = assign で決まる提供元。setting = roles の明示値 → 無い項目は既定（1.7）。
+// setting = roles[from][role] の明示値 → 無い項目は既定（1.7）。target = provider から求める。
 // 指揮役のモデルが分かり格が 2 でないとき、明示されていない model は defaultModelFor で決める（1.4）。
 // 実装・修正で同じ提供元に指揮役より下の格が無ければ selfImplement = true（1.5）
-function defaultModelFor(role: Role, target: Vendor, orchestratorTier: number, tiers: Record<string, number>, roles: SubagentsConfig["roles"]): string | null;
+function defaultModelFor(role: Role, target: Vendor, orchestratorTier: number, cfg: SubagentsConfig): string | null;  // tiers・modelIds は cfg と既定を合わせて使う
 // 実装: 同じ提供元で指揮役より 1 つ下の格、レビュー・デバッグ: 別の提供元で指揮役の格以下で最も上、調査: 別の提供元の格 1（1.4）。
-// 候補は、提供元が分かり（vendorOfFamily）、modelIds に名前がある系統だけ。候補が無ければ null
+// 候補は、提供元が分かり（vendorOfFamily）、modelIds に名前がある系統だけ。候補が無ければ null。
+// 例: Opus の指揮役のレビュー = Codex の格 3 = gpt-6.2-astra。Haiku の指揮役のレビュー = gpt-6-luna
 function compareTier(child: string, orchestrator: string | null, tiers: Record<string, number>): "higher" | "same-model" | "ok" | "unknown";
 
 type SpawnInput = { vendor: Vendor; childModel: string | null; childFromDefinition: boolean; orchestratorModel: string | null };
@@ -235,7 +234,8 @@ function messageSpawnDenied(kind: "missing" | "inherit" | "same-model" | "higher
 
 type Definition = { path: string; content: string };
 function renderDefinitions(cfg: SubagentsConfig): { files: Definition[]; notices: string[] };
-// Claude Code: 4 つの役割すべて。frontmatter に name・description・model・effort、読み取り専用は tools: Read, Grep, Glob
+// 提供元ごとに、その提供元が受け持つ役割の設定を集める: 自分が指揮役で provider=same の役割と、相手が指揮役で provider=other の役割（既定では Claude Code は 4 つ、Codex も 4 つ）。
+// Claude Code: frontmatter に name・description・model・effort、読み取り専用は tools: Read, Grep, Glob
 // Codex: permission が write の役割だけ（name・description・model・model_reasoning_effort・developer_instructions）。
 //        read-only の役割は作らず、「Codex の組み込みの子では読み取り専用を適用できない（<役割>）」を notices に入れる（2.3）
 function buildCliCommand(target: Vendor, setting: RoleSetting, root: string): { command: string; args: string[] };
@@ -258,8 +258,8 @@ function buildCliCommand(target: Vendor, setting: RoleSetting, root: string): { 
 ### Delegate（`delegate.mjs`）
 
 ##### Batch / Job Contract
-- 起動: `node .agent-hooks/cc-sdd-bootstrap/delegate.mjs --from <claude|codex> --role <implement|review|investigate|debug> --instructions <ファイル> [--effort medium|high] [--model <ID>] [--orchestrator-model <ID>]`。根はスクリプトの位置から求める。
-- 処理: 設定を読み（読めなければ理由を返す、1.8）、`resolveRole` で解決する。委任先は常に別の提供元（`--from` の反対）で、`assign` が `same` の役割を指定されたら、その旨を返して起動しない（組み込みの子を使う役割のため）。`--effort`・`--model` はその実行だけ役割の設定を上書きする（1.6）。`--orchestrator-model` があれば `compareTier` で上の格を止める（4.8）。
+- 起動: `node .agent-hooks/cc-sdd-bootstrap/delegate.mjs --from <claude|codex> --role <implement|review|investigate|debug> --instructions <ファイル> [--to same] [--effort medium|high] [--model <ID>] [--orchestrator-model <ID>]`。`--to same` のときも、子のモデルが指揮役と同じ系統なら起動しない（指揮役のモデルを渡したとき）。根はスクリプトの位置から求める。
+- 処理: 設定を読み（読めなければ理由を返す、1.8）、`resolveRole` で解決する。委任先は役割の `provider` で決まる提供元。`provider` が `same` の役割（実装・修正）は、組み込みの子を使う役割なので、その旨を返して起動しない。ただし `--to same` を付けたときは同じ提供元の CLI で起動する（別の提供元が使えない環境で、Codex の読み取り専用の役割を `codex exec --sandbox read-only` と指揮役と異なるモデルで行うため。5.7）。`--effort`・`--model` はその実行だけ役割の設定を上書きする（1.6）。`--orchestrator-model` があれば `compareTier` で上の格を止める（4.8）。
 - 起動: `buildCliCommand` の引数で、指示のファイルを標準入力に渡し、`cwd` を根にする（4.3）。子の標準出力・標準エラーはそのまま流す。
 - 結果: 子の終了コードをそのまま返し、最後に 1 行「委任先の終了: 成功／失敗（終了コード）」を標準エラーに出す（4.6）。役割が未定義・指示のファイルを読めない・CLI を起動できない・上の格・解決できない設定は、理由を出して終了コード 2。別の提供元・モデル・推論量・権限でやり直さない（4.7）。
 
@@ -271,8 +271,8 @@ function buildCliCommand(target: Vendor, setting: RoleSetting, root: string): { 
   - 分担（5.1）: 実装・修正は同じ提供元の子（指揮役が最下位の格なら自分）、レビューとデバッグの原因調査は別の提供元、調査は別の提供元の格 1。既定の表（1.3）と、格 2 以外の指揮役の決め方（1.4・1.5）、推論量の目安（1.6）。
   - 作業の流れ（5.2・5.3・5.4）: 実装 → 別の提供元のレビュー 1 回 → 同じ実装役が修正 → 同じレビュー役が指摘箇所だけ再確認。調査 → 指揮役が設計 → 別の提供元が設計をレビュー（推論量は目安に従い指揮役が選ぶ）。原因調査（別）→ 修正（同じ）→ テスト。
   - 結果の扱い（5.5）: 指揮役は同じ観点のレビューをやり直さず、結果を未確認として差分と必要なテストで確かめてから完了とする。
-  - 読み替え（5.6）: cc-sdd の手順が「Agent ツールで子に任せる」と書く箇所は、実装・修正は同じ提供元の役割定義（Claude Code は `cc-sdd-implement`、Codex は `cc_sdd_implement`）で `model` を明示して起動、レビュー・デバッグは別の提供元の入口（`delegate.mjs --role review` など）で、同じ依頼内容と成果物の形式のまま渡す。
-  - 別の提供元が使えないとき（5.7）: すべての役割を同じ提供元の、指揮役と異なり指揮役の格以下のモデルで行い、レビューは 1 回。Codex の組み込みの子は読み取り専用にできないので、読み取り専用の役割は指揮役自身が行うか、書き込まないことを指示に明記する。
+  - 読み替え（5.6）: cc-sdd の手順が「Agent ツールで子に任せる」と書く箇所は、実装・修正は同じ提供元の役割定義（Claude Code は `cc-sdd-implement`、Codex は `cc_sdd_implement`。Codex は `fork_turns` を `none` にし、`model` を明示する。履歴を引き継ぐと親と同じモデルになるため）で `model` を明示して起動、レビュー・デバッグは別の提供元の入口（`delegate.mjs --role review` など）で、同じ依頼内容と成果物の形式のまま渡す。
+  - 別の提供元が使えないとき（5.7）: すべての役割を同じ提供元の、指揮役と異なり指揮役の格以下のモデルで行い、レビューは 1 回。Claude Code は役割定義（読み取り専用は道具を制限済み）に `model` を明示して起動する。Codex の組み込みの子は読み取り専用にできないので、読み取り専用の役割は `delegate.mjs --to same --role review --model <指揮役と異なるモデル>`（`codex exec --sandbox read-only`）で行う。
   - 指示のファイル（5.8・5.9）: `~/.cache/cc-sdd-bootstrap-scratch/` に置く（リポジトリ内と `/tmp` には置かない）。範囲・必要な決まり・禁止する操作・成果物の形式を書き、子が CLAUDE.md・AGENTS.md を読むことに頼らない。
   - 書き込みは 1 つずつ（5.10）: 書き込み可の子の実行中は、読み取り専用の子も重ねない。
   - Codex の文章だけ（5.11・5.12）: Codex から `claude -p` の子を使うには、シェルに通信の許可（`sandbox_workspace_write.network_access=true` など）が要り、無いと子は応答を返せない。フックの信頼が承認されていないと起動前の確認は働かないので、役割表に従い `model` を明示し、指揮役と同じモデル・上の格を避ける。
@@ -295,7 +295,7 @@ function buildCliCommand(target: Vendor, setting: RoleSetting, root: string): { 
 ## Testing Strategy
 - **単体（Roles）**:
   - 既定の `assign`・`roles` から、両ツールの指揮役で 1.3 の表のとおりのモデル・推論量・権限が出る（1.3）。明示した値が残る（1.7）。
-  - 指揮役が Opus のとき実装は Sonnet、レビューは Sol（Codex に格 3 の既定のモデルが無いため格 2）。Haiku のとき実装は `selfImplement`、レビューは Luna（1.4・1.5）。
+  - 指揮役が Opus のとき実装は Sonnet、レビューは `gpt-6.2-astra`。Haiku のとき実装は `selfImplement`、レビューは Luna（1.4・1.5）。指揮役ごとに同じ役割へ別の推論量を設定できる（1.1）。
   - `familyOf`: `claude-sonnet-5-5`・`sonnet` → sonnet、`gpt-6.1-sol` → sol、知らない ID → null（1.2）。
   - `decideSpawn`: 未指定・`inherit` は拒否、Sonnet の指揮役で `sonnet` の子は拒否、Opus の子は拒否、Haiku は通す、指揮役が不明で子が明示なら通す（3.2–3.4・3.6）。理由の文言に明示の必要が入る（3.7）。
   - `renderDefinitions`: Claude Code は 4 つ、読み取り専用の役割に `tools: Read, Grep, Glob`。Codex は `implement` だけで、読み取り専用の役割は notices に出る（2.1–2.3）。
