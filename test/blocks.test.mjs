@@ -4,10 +4,12 @@ import assert from "node:assert/strict";
 import {
   CLAUDE_MD_MARKERS,
   GITIGNORE_MARKERS,
+  replaceBlock,
   findBlock,
   upsertBlock,
   removeBlock,
 } from "../lib/blocks.mjs";
+import { AGENT_SECTION_MARKERS } from "../lib/catalog.mjs";
 
 const M = GITIGNORE_MARKERS;
 const BEGIN = "# >>> cc-sdd-bootstrap（この区画は管理される）";
@@ -24,13 +26,13 @@ test("目印の定数が設計の値どおり", () => {
 });
 
 test("findBlock: 区画が無ければ found false", () => {
-  assert.deepEqual(findBlock("x\ny\n", M), { found: false });
-  assert.deepEqual(findBlock("", M), { found: false });
+  assert.equal(findBlock("x\ny\n", M), null);
+  assert.equal(findBlock("", M), null);
 });
 
 test("findBlock: 1 組なら行番号（0 始まり）で返す", () => {
-  assert.deepEqual(findBlock(`x\n${BEGIN}\na\n${END}\ny\n`, M), { found: true, start: 1, end: 3 });
-  assert.deepEqual(findBlock(`${BEGIN}\r\n${END}`, M), { found: true, start: 0, end: 1 });
+  assert.deepEqual(findBlock(`x\n${BEGIN}\na\n${END}\ny\n`, M), { start: 1, end: 3 });
+  assert.deepEqual(findBlock(`${BEGIN}\r\n${END}`, M), { start: 0, end: 1 });
 });
 
 test("findBlock: 壊れた目印は MARKERS_BROKEN（4 通り）", () => {
@@ -112,7 +114,7 @@ test("upsertBlock: CLAUDE.md 用の目印でも動く", () => {
   const e = "<!-- cc-sdd-bootstrap:end -->";
   const r = upsertBlock({ text: "# T\n", markers: cm, beginLine: b, endLine: e, body: "@x.md", file: "CLAUDE.md" });
   assert.equal(r.text, `# T\n\n${b}\n@x.md\n${e}\n`);
-  assert.deepEqual(findBlock(r.text, cm), { found: true, start: 2, end: 4 });
+  assert.deepEqual(findBlock(r.text, cm), { start: 2, end: 4 });
 });
 
 test("removeBlock: 区画と直前の空行 1 つを取り除き、外は変えない", () => {
@@ -152,3 +154,42 @@ test("往復: upsert → remove で元に戻る（LF・CRLF・空）", () => {
     assert.equal(r.text, orig, JSON.stringify(orig));
   }
 });
+
+for (const [name, markers] of [[".gitignore", GITIGNORE_MARKERS], ["運用文書", AGENT_SECTION_MARKERS]]) {
+  test(`新しい区画処理: ${name} の追加・置き換え・取り除きは外側を保ち、重複しない`, () => {
+    const prefix = `先頭${name}\r\n`;
+    const suffix = "末尾\r\n";
+    const once = replaceBlock(prefix + suffix, markers, "本文", name);
+    assert.equal(typeof once, "string");
+    assert.ok(!/(^|[^\r])\n/.test(once));
+    assert.ok(once.startsWith(prefix));
+    assert.ok(once.includes(prefix + suffix));
+    assert.equal((once.match(new RegExp(markers.begin, "g")) ?? []).length, 1);
+    const twice = replaceBlock(once, markers, "本文", name);
+    assert.equal(twice, once);
+    const changed = replaceBlock(once, markers, "新しい本文", name);
+    assert.ok(changed.includes("新しい本文"));
+    assert.ok(changed.startsWith(prefix));
+    assert.ok(changed.includes(prefix + suffix));
+    assert.equal(removeBlock(changed, markers, name), prefix + suffix);
+  });
+
+  test(`新しい区画処理: ${name} の片方だけ・逆順・複数組をエラーにする`, () => {
+    const invalid = [
+      markers.begin + "\n",
+      markers.end + "\n",
+      `${markers.end}\n${markers.begin}\n`,
+      `${markers.begin}\n${markers.end}\n${markers.begin}\n${markers.end}\n`,
+    ];
+    for (const text of invalid) {
+      const found = findBlock(text, markers, name);
+      assert.equal(found.code, "MARKERS_BROKEN");
+      assert.equal(found.file, name);
+      assert.ok(found.detail);
+      const replaced = replaceBlock(text, markers, "本文", name);
+      assert.equal(replaced.code, "MARKERS_BROKEN");
+      const removed = removeBlock(text, markers, name);
+      assert.equal(removed.code, "MARKERS_BROKEN");
+    }
+  });
+}
