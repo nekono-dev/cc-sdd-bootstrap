@@ -8,13 +8,34 @@ export const STATE_PATH = ".cache/cc-sdd-install.state.json";
 export const RETRY_COMMAND = "node .agent-hooks/cc-sdd-bootstrap/install-cc-sdd.mjs";
 export const NPX_TIMEOUT_MS = 540000;
 
-const own = (o, k) => Object.hasOwn(o, k) ? o[k] : undefined;
+/** 道筋（"a.b"）で値を読む。無ければ undefined */
+function getPath(obj, path) {
+  let cur = obj;
+  for (const key of path.split(".")) {
+    if (typeof cur !== "object" || cur === null || Array.isArray(cur) || !Object.hasOwn(cur, key)) return undefined;
+    cur = cur[key];
+  }
+  return cur;
+}
+
+/** 道筋の途中に、あるのに普通のオブジェクトでない値があれば、その道筋を返す（installer-core の規則と同じ） */
+function findBlockedPrefix(obj, path) {
+  const keys = path.split(".");
+  let cur = obj;
+  for (let i = 0; i < keys.length - 1; i++) {
+    if (typeof cur !== "object" || cur === null || !Object.hasOwn(cur, keys[i])) return null;
+    cur = cur[keys[i]];
+    if (typeof cur !== "object" || cur === null || Array.isArray(cur)) return keys.slice(0, i + 1).join(".");
+  }
+  return null;
+}
 
 /**
- * 設定ファイルのテキストを解析し、有効な設定オブジェクトまたは失敗理由を返す。
- * 不正な形式や欠損項目は日本語のメッセージで報告する。
+ * 設定ファイルのテキストを解析し、有効な設定（版・言語）または失敗理由を返す。
+ * installer-core と同じ扱い: 必須は format だけ。項目定義（configFields）の項目は値があれば検証し、無ければ既定値を使う。
+ * 雛形の保持は扱わない。
  * @param {string | null} text
- * @returns {{ ok: true, config: { version: any, lang: any, keepTemplates: boolean } } | { ok: false, reason: string }}
+ * @returns {{ ok: true, config: { version: string, lang: string } } | { ok: false, reason: string }}
  */
 export function readInstallConfig(text) {
   const fail = (detail) => ({
@@ -42,46 +63,34 @@ export function readInstallConfig(text) {
     return fail(`${CONFIG_FILE} の ${fmtProb}`);
   }
 
-  const ccSdd = (parsed.ccSdd && typeof parsed.ccSdd === "object" && !Array.isArray(parsed.ccSdd))
-    ? parsed.ccSdd
-    : {};
-
-  const version = own(ccSdd, "version");
-  const lang = own(ccSdd, "lang");
-  const keepRaw = own(ccSdd, "keepTemplates");
-  const keepTemplates = keepRaw === undefined ? false : keepRaw;
-
-  const checks = [
-    { path: "ccSdd.version", val: version },
-    { path: "ccSdd.lang", val: lang },
-    ...(keepRaw === undefined ? [] : [{ path: "ccSdd.keepTemplates", val: keepTemplates }])
-  ];
-
-  for (const c of checks) {
-    const field = configFields.find((f) => f.path === c.path);
-    if (field) {
-      const err = field.validate(c.val);
-      if (typeof err === "string") {
-        return fail(`${CONFIG_FILE} の ${c.path}: ${err}`);
-      }
+  for (const field of configFields) {
+    const blocked = findBlockedPrefix(parsed, field.path);
+    if (blocked) return fail(`${CONFIG_FILE} の ${blocked}: オブジェクトで指定してください。`);
+    const value = getPath(parsed, field.path);
+    if (value === undefined) continue;
+    const err = field.validate(value);
+    if (typeof err === "string") {
+      return fail(`${CONFIG_FILE} の ${field.path}: ${err}`);
     }
   }
 
-  return { ok: true, config: { version, lang, keepTemplates } };
-}
-
-/** buildState: 設定と導入したファイルの指紋から、導入状態の記録を組み立てる */
-export function buildState({ config, files }) {
-  return {
-    format: 1,
-    version: config.version,
-    lang: config.lang,
-    keepTemplates: config.keepTemplates,
-    files: { ...files }
+  const resolve = (path) => {
+    const value = getPath(parsed, path);
+    return value === undefined ? configFields.find((f) => f.path === path).defaultValue : value;
   };
+  return { ok: true, config: { version: resolve("ccSdd.version"), lang: resolve("ccSdd.lang") } };
 }
 
-/** parseState: 導入状態の記録の文字列を厳密に検証して返す。読めない・形が違えば null */
+/**
+ * 導入状態の記録を組み立てる。files は導入に成功したときの導入物の相対の道筋の一覧（中身は持たない）。
+ * @param {{ version: string, lang: string }} config
+ * @param {string[]} files
+ */
+export function buildState(config, files) {
+  return { format: 2, version: config.version, lang: config.lang, files: [...files] };
+}
+
+/** parseState: 導入状態の記録の文字列を厳密に検証して返す。読めない・形が違う・format が 2 でなければ null（旧版の指紋つきの記録も含む） */
 export function parseState(text) {
   if (text === null) return null;
   let obj;
@@ -91,17 +100,15 @@ export function parseState(text) {
     return null;
   }
   if (typeof obj !== "object" || obj === null || Array.isArray(obj)) return null;
-  const { format, version, lang, keepTemplates, files } = obj;
-  if (format !== 1) return null;
+  const { format, version, lang, files } = obj;
+  if (format !== 2) return null;
   if (typeof version !== "string" || version.length === 0) return null;
   if (typeof lang !== "string" || lang.length === 0) return null;
-  if (typeof keepTemplates !== "boolean") return null;
-  if (typeof files !== "object" || files === null || Array.isArray(files)) return null;
-  for (const [path, fp] of Object.entries(files)) {
-    if (typeof fp !== "string" || !/^[0-9a-f]{64}$/.test(fp)) return null;
+  if (!Array.isArray(files)) return null;
+  for (const path of files) {
     if (!isRelativePath(path)) return null;
   }
-  return { format, version, lang, keepTemplates, files };
+  return { format, version, lang, files: [...files] };
 }
 
 /** 相対の道筋か（絶対・`\` を含む・`..` や `.`・空の区間を含むものは外） */
@@ -119,17 +126,20 @@ export function isFingerprintTarget(path, keepTemplates) {
   return false;
 }
 
-/** 状態と現在の導入物から、入れ直す理由または省略を返す。 */
-export function decideInstall({ config, state, failureRecordExists, currentHashes, templatesMissing }) {
+/**
+ * 状態と現在あるファイルから、入れ直す理由または省略を返す（内容は比べない。4.4）。
+ * @param {{ config: { version: string, lang: string }, state: { version: string, lang: string, files: string[] } | null, failureRecordExists: boolean, currentFiles: Record<string, true> }} input
+ *   currentFiles は、今あるファイルの道筋をキーにしたもの
+ */
+export function decideInstall({ config, state, failureRecordExists, currentFiles }) {
   if (failureRecordExists) return { action: "install", reason: "failure-record" };
   if (state === null) return { action: "install", reason: "no-state" };
-  if (config.version !== state.version || config.lang !== state.lang || config.keepTemplates !== state.keepTemplates) {
+  if (config.version !== state.version || config.lang !== state.lang) {
     return { action: "install", reason: "config-changed" };
   }
-  if (Object.entries(state.files).some(([path, hash]) => currentHashes[path] !== hash)) {
-    return { action: "install", reason: "files-changed" };
+  if (state.files.some((path) => !Object.hasOwn(currentFiles, path))) {
+    return { action: "install", reason: "files-missing" };
   }
-  if (config.keepTemplates && templatesMissing) return { action: "install", reason: "templates-missing" };
   return { action: "skip" };
 }
 

@@ -19,7 +19,7 @@ test('初回導入は指紋を記録し、途中経過を標準出力に出さ�
   assert.ok(result.npxCalls[0].args.includes('--manifest'));
   const state = parseState(repo.read(STATE_PATH));
   assert.ok(state);
-  assert.deepEqual(Object.keys(state.files).sort(), ['.claude/skills/kiro-fake/SKILL.md', '.kiro/settings/cc-sdd-guide.md', '.kiro/settings/templates/specs/tasks.md']);
+  assert.deepEqual(state.files.slice().sort(), ['.claude/skills/kiro-fake/SKILL.md', '.kiro/settings/cc-sdd-guide.md', '.kiro/settings/templates/specs/tasks.md']);
   assert.equal(repo.exists(FAILURE_RECORD), false);
   assert.match(result.stdout, /3\.1\.0/);
   assert.match(result.stdout, /SKILL\.md/);
@@ -138,12 +138,11 @@ test('設定の版・言語の変更や、記録したファイルの書き換�
   assert.equal(r2.npxCalls.length, 1);
   assert.ok(r2.npxCalls[0].args.includes('en'));
 
+  // 内容が変わっても入れ直さない（内容は判断に使わない。要件 4.4）
   repo.write('.kiro/settings/cc-sdd-guide.md', 'new content');
   const r3 = runEntry(repo, ['session-start']);
-  assert.equal(r3.npxCalls.length, 1);
-
-  const r4 = runEntry(repo, ['session-start']);
-  assert.equal(r4.npxCalls.length, 0);
+  assert.equal(r3.npxCalls.length, 0);
+  assert.equal(repo.read('.kiro/settings/cc-sdd-guide.md'), 'new content');
 });
 
 test('失敗のあと手の再試行が成功すると記録が消え、停止の処理が通す', (t) => {
@@ -170,74 +169,15 @@ test('再試行のコマンドの一致', (t) => {
   assert.ok(JSON.parse(gate(repo).stdout).reason.includes(RETRY_COMMAND));
 });
 
-const cfg = (keep, version = '3.1.0') => JSON.stringify({ format: 1, ccSdd: { version, lang: 'ja', keepTemplates: keep } });
 const T = '.kiro/settings/templates/specs/tasks.md';
 
-test('保持を選ぶと、書き換えた雛形は入れ直しの理由にならず残る', (t) => {
-  const repo = makeRepo({ config: cfg(true) });
+test('雛形の中身を書き換えても入れ直さず、書き換えた内容が残る（内容は判断に使わない。要件 4.4）', (t) => {
+  const repo = makeRepo();
   t.after(() => repo.cleanup());
-  const r1 = runEntry(repo, ['session-start']);
-  assert.equal(r1.npxCalls.length, 1);
-  assert.equal(repo.read(T), 'templates 3.1.0 ja');
-  assert.ok(!parseState(repo.read(STATE_PATH)).files[T]);
-
+  runEntry(repo, ['session-start']);
   repo.write(T, '手元の書き換え');
-  const r2 = runEntry(repo, ['session-start']);
-  assert.equal(r2.npxCalls.length, 0);
+
+  const r = runEntry(repo, ['session-start']);
+  assert.equal(r.npxCalls.length, 0);
   assert.equal(repo.read(T), '手元の書き換え');
-});
-
-test('保持を選んで版を上げても、書き換えた雛形は上書きされない', (t) => {
-  const repo = makeRepo({ config: cfg(true) });
-  t.after(() => repo.cleanup());
-  runEntry(repo, ['session-start']);
-  repo.write(T, '手元の書き換え');
-
-  repo.write('.cc-sdd-bootstrap.json', cfg(true, '3.2.0'));
-  const r = runEntry(repo, ['session-start']);
-  assert.equal(r.npxCalls.length, 1);
-  assert.equal(repo.read(T), '手元の書き換え');
-  assert.equal(repo.read('.kiro/settings/cc-sdd-guide.md'), 'guide 3.2.0 ja');
-});
-
-test('保持を選んでいて雛形を消すと、次の開始で置かれる', (t) => {
-  const repo = makeRepo({ config: cfg(true) });
-  t.after(() => repo.cleanup());
-  runEntry(repo, ['session-start']);
-
-  fs.rmSync(path.join(repo.root, '.kiro/settings/templates'), { recursive: true, force: true });
-  const r = runEntry(repo, ['session-start']);
-  assert.equal(r.npxCalls.length, 1);
-  assert.equal(repo.read(T), 'templates 3.1.0 ja');
-});
-
-test('保持の選択を変えると入れ直し、保持しない側では雛形が戻り、保持する側では残る', (t) => {
-  const repo = makeRepo({ config: cfg(true) });
-  t.after(() => repo.cleanup());
-  runEntry(repo, ['session-start']);
-  repo.write(T, '手元の書き換え');
-
-  repo.write('.cc-sdd-bootstrap.json', cfg(false));
-  const r1 = runEntry(repo, ['session-start']);
-  assert.equal(r1.npxCalls.length, 1);
-  assert.equal(repo.read(T), 'templates 3.1.0 ja');
-  assert.ok(parseState(repo.read(STATE_PATH)).files[T]);
-
-  repo.write(T, '再び書き換え');
-  repo.write('.cc-sdd-bootstrap.json', cfg(true));
-  const r2 = runEntry(repo, ['session-start']);
-  assert.equal(r2.npxCalls.length, 1);
-  assert.equal(repo.read(T), '再び書き換え');
-  assert.ok(!parseState(repo.read(STATE_PATH)).files[T]);
-});
-
-test('保持しない場合は、書き換えた雛形が入れ直しの理由になり戻される', (t) => {
-  const repo = makeRepo({ config: cfg(false) });
-  t.after(() => repo.cleanup());
-  runEntry(repo, ['session-start']);
-  repo.write(T, '手元の書き換え');
-
-  const r = runEntry(repo, ['session-start']);
-  assert.equal(r.npxCalls.length, 1);
-  assert.equal(repo.read(T), 'templates 3.1.0 ja');
 });

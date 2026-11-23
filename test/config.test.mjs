@@ -14,7 +14,7 @@ test("設定処理: format だけを必須にし、欠けた項目を補う", ()
   assert.equal(parsed.ok, true);
   assert.equal(validateConfig(parsed.config, configFields), null);
   const filled = fillDefaults(parsed.config, configFields);
-  assert.deepEqual(filled.filled, ["ccSdd.lang", "ccSdd.keepTemplates", "codex.enabled", "models"]);
+  assert.deepEqual(filled.filled, ["ccSdd.lang", "codex.enabled", "models"]);
   assert.equal(filled.config.ccSdd.version, "3.2.0");
   assert.deepEqual(filled.config.extra, { keep: true });
   assert.equal(serializeConfig(filled.config).endsWith("\n"), true);

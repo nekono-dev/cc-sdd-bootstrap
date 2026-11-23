@@ -5,16 +5,22 @@ import assert from "node:assert/strict";
 const base = { format: 1, ccSdd: { version: "3.1.0", lang: "ja" } };
 const ok = (obj) => readInstallConfig(JSON.stringify(obj));
 
-test("有効な設定を読み、keepTemplates が無ければ false にする", () => {
+test("有効な設定を読み、版・言語だけを返す（雛形の保持の項目は扱わない）", () => {
   const r = ok(base);
   assert.equal(r.ok, true);
-  assert.deepEqual(r.config, { version: "3.1.0", lang: "ja", keepTemplates: false });
+  assert.deepEqual(r.config, { version: "3.1.0", lang: "ja" });
 });
 
-test("keepTemplates が true の設定を読む", () => {
-  const r = ok({ ...base, ccSdd: { ...base.ccSdd, keepTemplates: true } });
+test("ccSdd の項目が無いときは既定値で補う", () => {
+  const r = ok({ format: 1 });
   assert.equal(r.ok, true);
-  assert.equal(r.config.keepTemplates, true);
+  assert.deepEqual(r.config, { version: "3.1.0", lang: "ja" });
+});
+
+test("format 1 の設定は読める（format 以外は必須ではない）", () => {
+  const r = ok({ format: 1, ccSdd: { version: "3.2.0" } });
+  assert.equal(r.ok, true);
+  assert.deepEqual(r.config, { version: "3.2.0", lang: "ja" });
 });
 
 test("設定ファイルが無いときは理由にファイル名と init を含める", () => {
@@ -55,10 +61,11 @@ test("format が新しすぎるときは理由に format と update を含める
   assert.match(r.reason, /update/);
 });
 
-test("版が不正なときは理由に ccSdd.version と update を含める", () => {
+test("版が不正なときは理由に ccSdd.version・ファイル名・update を含める", () => {
   const r = ok({ ...base, ccSdd: { ...base.ccSdd, version: "x" } });
   assert.equal(r.ok, false);
   assert.match(r.reason, /ccSdd\.version/);
+  assert.match(r.reason, /\.cc-sdd-bootstrap\.json/);
   assert.match(r.reason, /update/);
 });
 
@@ -68,58 +75,70 @@ test("言語が不正なときは理由に ccSdd.lang を含める", () => {
   assert.match(r.reason, /ccSdd\.lang/);
 });
 
-test("keepTemplates が真偽でないときは理由に ccSdd.keepTemplates を含める", () => {
+test("雛形の保持の項目（keepTemplates）は読まず、真偽でなくても誤りにしない", () => {
   const r = ok({ ...base, ccSdd: { ...base.ccSdd, keepTemplates: "yes" } });
-  assert.equal(r.ok, false);
-  assert.match(r.reason, /ccSdd\.keepTemplates/);
+  assert.equal(r.ok, true);
+  assert.deepEqual(r.config, { version: "3.1.0", lang: "ja" });
 });
 
 test("ccSdd が文字列でも例外を投げず失敗にする", () => {
   const r = ok({ format: 1, ccSdd: "x" });
   assert.equal(r.ok, false);
+  assert.match(r.reason, /ccSdd/);
+});
+
+test("buildState は format 2 と版・言語・導入物の道筋の一覧を作る", () => {
+  const cfg = { version: "3.1.0", lang: "ja" };
+  const s = buildState(cfg, [".claude/skills/kiro-impl/SKILL.md", ".kiro/settings/cc-sdd-guide.md"]);
+  assert.deepEqual(s, { format: 2, version: "3.1.0", lang: "ja", files: [".claude/skills/kiro-impl/SKILL.md", ".kiro/settings/cc-sdd-guide.md"] });
 });
 
 test("buildState と parseState の往復", () => {
-  const H = "a".repeat(64);
-  const cfg = { version: "3.1.0", lang: "ja", keepTemplates: false };
-  const files = { ".claude/skills/kiro-impl/SKILL.md": H };
-  const s = buildState({ config: cfg, files });
+  const s = buildState({ version: "3.1.0", lang: "ja" }, [".claude/skills/kiro-impl/SKILL.md"]);
   assert.deepEqual(parseState(JSON.stringify(s)), s);
 });
 
 test("buildState は files を複製する", () => {
-  const H = "a".repeat(64);
-  const cfg = { version: "3.1.0", lang: "ja", keepTemplates: false };
-  const files = { ".claude/skills/kiro-impl/SKILL.md": H };
-  const s = buildState({ config: cfg, files });
-  files[".claude/skills/kiro-impl/SKILL.md"] = "b".repeat(64);
-  assert.deepEqual(s.files, { ".claude/skills/kiro-impl/SKILL.md": H });
+  const files = [".claude/skills/kiro-impl/SKILL.md"];
+  const s = buildState({ version: "3.1.0", lang: "ja" }, files);
+  files.push(".kiro/settings/cc-sdd-guide.md");
+  assert.deepEqual(s.files, [".claude/skills/kiro-impl/SKILL.md"]);
 });
 
-test("parseState は不正入力に対し null", () => {
+test("parseState は読めない・オブジェクトでない入力に対し null", () => {
   assert.equal(parseState(null), null);
   assert.equal(parseState("{"), null);
   assert.equal(parseState("[]"), null);
+  assert.equal(parseState("null"), null);
 });
 
-test("parseState は形式不正に対し null", () => {
+test("parseState は旧版の指紋つき（format 1）の記録を読めない扱いにする", () => {
   const H = "a".repeat(64);
+  const old = { format: 1, version: "3.1.0", lang: "ja", keepTemplates: false, files: { ".claude/skills/kiro-impl/SKILL.md": H } };
+  assert.equal(parseState(JSON.stringify(old)), null);
+});
+
+test("parseState は形が違う記録に対し null", () => {
+  const good = { format: 2, version: "3.1.0", lang: "ja", files: [".claude/skills/kiro-impl/SKILL.md"] };
   const cases = [
-    { format: 2, version: "3.1.0", lang: "ja", keepTemplates: false, files: { ".claude/skills/kiro-impl/SKILL.md": H } },
-    { format: 1, version: "", lang: "ja", keepTemplates: false, files: { ".claude/skills/kiro-impl/SKILL.md": H } },
-    { format: 1, version: "3.1.0", lang: "ja", keepTemplates: "no", files: { ".claude/skills/kiro-impl/SKILL.md": H } },
-    { format: 1, version: "3.1.0", lang: "ja", keepTemplates: false, files: { ".claude/skills/kiro-impl/SKILL.md": "xyz" } },
+    { ...good, format: 3 },
+    { ...good, format: "2" },
+    { ...good, version: "" },
+    { ...good, lang: 1 },
+    { ...good, files: {} },
+    { ...good, files: "a.md" },
+    { ...good, files: [1] },
+    { ...good, files: [""] },
   ];
   for (const c of cases) {
     assert.equal(parseState(JSON.stringify(c)), null);
   }
 });
 
-test("parseState は相対でない files に対し null", () => {
-  const H = "a".repeat(64);
-  const badPaths = ["/etc/passwd", "../x", "a/../b", "a\\b", "a//b"];
+test("parseState は相対でない道筋を含む記録に対し null", () => {
+  const badPaths = ["/etc/passwd", "../x", "a/../b", "a\\b", "a//b", "./a"];
   for (const p of badPaths) {
-    const obj = { format: 1, version: "3.1.0", lang: "ja", keepTemplates: false, files: { [p]: H } };
+    const obj = { format: 2, version: "3.1.0", lang: "ja", files: [p] };
     assert.equal(parseState(JSON.stringify(obj)), null);
   }
 });
@@ -136,9 +155,10 @@ test("isFingerprintTarget の判定", () => {
   assert.equal(isFingerprintTarget("CLAUDE.md", true), false);
 });
 
-const config = { version: "3.1.0", lang: "ja", keepTemplates: false };
-const state = buildState({ config, files: { "a": "a".repeat(64) } });
-const decision = (overrides = {}) => decideInstall({ config, state, failureRecordExists: false, currentHashes: { a: "a".repeat(64) }, templatesMissing: false, ...overrides });
+const config = { version: "3.1.0", lang: "ja" };
+const KIRO_SKILL = ".claude/skills/kiro-impl/SKILL.md";
+const state = buildState(config, [KIRO_SKILL]);
+const decision = (overrides = {}) => decideInstall({ config, state, failureRecordExists: false, currentFiles: { [KIRO_SKILL]: true }, ...overrides });
 
 test("導入記録の定数と判定理由・優先順位", () => {
   assert.equal(FAILURE_RECORD, ".cache/cc-sdd-install.failed");
@@ -148,14 +168,14 @@ test("導入記録の定数と判定理由・優先順位", () => {
   assert.deepEqual(decision({ failureRecordExists: true, state: null }), { action: "install", reason: "failure-record" });
   assert.deepEqual(decision({ state: null }), { action: "install", reason: "no-state" });
   assert.deepEqual(decision({ config: { ...config, lang: "en" } }), { action: "install", reason: "config-changed" });
-  assert.deepEqual(decision({ config: { ...config, keepTemplates: true } }), { action: "install", reason: "config-changed" });
   assert.deepEqual(decision({ config: { ...config, version: "3.2.0" } }), { action: "install", reason: "config-changed" });
-  assert.deepEqual(decision({ currentHashes: { a: null } }), { action: "install", reason: "files-changed" });
-  assert.deepEqual(decision({ currentHashes: {} }), { action: "install", reason: "files-changed" });
-  const keepState = buildState({ config: { ...config, keepTemplates: true }, files: {} });
-  assert.deepEqual(decideInstall({ config: { ...config, keepTemplates: true }, state: keepState, failureRecordExists: false, currentHashes: {}, templatesMissing: true }), { action: "install", reason: "templates-missing" });
+  assert.deepEqual(decision({ currentFiles: {} }), { action: "install", reason: "files-missing" });
   assert.deepEqual(decision(), { action: "skip" });
-  assert.deepEqual(decision({ templatesMissing: true }), { action: "skip" });
+});
+
+test("判断は道筋の有無だけを見る（内容が変わっても入れ直さない）", () => {
+  const rewritten = { [KIRO_SKILL]: true };
+  assert.deepEqual(decideInstall({ config, state, failureRecordExists: false, currentFiles: rewritten }), { action: "skip" });
 });
 
 test("removalTargets は kiro- のみを順に消し、保持時の雛形を残す", () => {

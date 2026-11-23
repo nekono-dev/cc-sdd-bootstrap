@@ -2,7 +2,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import {
   CONFIG_FILE, UPDATE_COMMAND, FAILURE_RECORD, STATE_PATH, NPX_TIMEOUT_MS, RECORD_IN_PROGRESS,
@@ -25,10 +24,12 @@ const writeRecord = (rel, text) => {
   fs.mkdirSync(path.dirname(absolute(rel)), { recursive: true });
   fs.writeFileSync(absolute(rel), text, 'utf8');
 };
-const hashFile = (file) => createHash('sha256').update(fs.readFileSync(file)).digest('hex');
+// 雛形の保持は廃止した（installer-core で組み直すまでの間、常に保持しない扱い）
+const KEEP_TEMPLATES = false;
 
-function currentHashes(keepTemplates) {
-  const hashes = {};
+/** 今あるファイルの道筋を、道筋をキーにした対応で返す（中身は見ない。4.4） */
+function existingFiles(keepTemplates) {
+  const found = {};
   const walk = (rel) => {
     const full = absolute(rel);
     let entries;
@@ -37,13 +38,13 @@ function currentHashes(keepTemplates) {
       const child = `${rel}/${entry.name}`;
       if (entry.isDirectory()) walk(child);
       else if (entry.isFile() && isFingerprintTarget(child, keepTemplates)) {
-        try { hashes[child] = hashFile(absolute(child)); } catch { /* 読めないファイルは未記録とする */ }
+        found[child] = true;
       }
     }
   };
   walk('.claude/skills');
   walk('.kiro/settings');
-  return hashes;
+  return found;
 }
 
 function templatesMissing() {
@@ -75,8 +76,9 @@ function removeTarget(rel) {
   else fs.unlinkSync(full);
 }
 
+/** 導入物の道筋の一覧を返す（中身は持たない） */
 function collectFiles(keepTemplates) {
-  const files = {};
+  const files = [];
   const collect = (rel) => {
     let entries;
     try { entries = fs.readdirSync(absolute(rel), { withFileTypes: true }); }
@@ -84,7 +86,7 @@ function collectFiles(keepTemplates) {
     for (const entry of entries) {
       const child = `${rel}/${entry.name}`;
       if (entry.isDirectory()) collect(child);
-      else if (entry.isFile() && isFingerprintTarget(child, keepTemplates)) files[child] = hashFile(absolute(child));
+      else if (entry.isFile() && isFingerprintTarget(child, keepTemplates)) files.push(child);
     }
   };
   let skillEntries = [];
@@ -95,7 +97,7 @@ function collectFiles(keepTemplates) {
   }
   const guide = '.kiro/settings/cc-sdd-guide.md';
   try {
-    if (fs.lstatSync(absolute(guide)).isFile() && isFingerprintTarget(guide, keepTemplates)) files[guide] = hashFile(absolute(guide));
+    if (fs.lstatSync(absolute(guide)).isFile() && isFingerprintTarget(guide, keepTemplates)) files.push(guide);
   } catch (error) { if (error.code !== 'ENOENT') throw error; }
   if (!keepTemplates) collect('.kiro/settings/templates');
   return files;
@@ -106,12 +108,12 @@ function performInstall(config, templatesAbsent) {
   rejectLinkedParents();
   let skillEntries = [];
   try { skillEntries = fs.readdirSync(absolute('.claude/skills')); } catch (error) { if (error.code !== 'ENOENT') throw error; }
-  for (const rel of removalTargets({ skillEntries, keepTemplates: config.keepTemplates })) removeTarget(rel);
+  for (const rel of removalTargets({ skillEntries, keepTemplates: KEEP_TEMPLATES })) removeTarget(rel);
 
   const cache = absolute('.cache');
   fs.mkdirSync(cache, { recursive: true });
   const manifestPath = absolute(`.cache/cc-sdd-install.manifest.${process.pid}.json`);
-  const manifest = buildManifest({ keepTemplates: config.keepTemplates, templatesMissing: templatesAbsent });
+  const manifest = buildManifest({ keepTemplates: KEEP_TEMPLATES, templatesMissing: templatesAbsent });
   try {
     fs.writeFileSync(manifestPath, JSON.stringify(manifest), 'utf8');
     const rawTimeout = process.env.CC_SDD_BOOTSTRAP_NPX_TIMEOUT_MS;
@@ -123,7 +125,7 @@ function performInstall(config, templatesAbsent) {
     if (result.error) throw new Error(`npx を起動できませんでした: ${result.error.message}`);
     if (result.status !== 0) throw new Error(`npx の終了コードが ${result.status ?? result.signal} でした。通信・版（${config.version}）・言語（${config.lang}）を確かめてください`);
 
-    const state = buildState({ config, files: collectFiles(config.keepTemplates) });
+    const state = buildState(config, collectFiles(KEEP_TEMPLATES));
     const stateTmp = absolute(`${STATE_PATH}.${process.pid}.tmp`);
     fs.writeFileSync(stateTmp, JSON.stringify(state, null, 2), 'utf8');
     fs.renameSync(stateTmp, absolute(STATE_PATH));
@@ -149,9 +151,8 @@ try {
   try { stateText = fs.readFileSync(absolute(STATE_PATH), 'utf8'); } catch { /* 読めない状態は未記録 */ }
   const state = parseState(stateText);
   const failureRecordExists = fs.existsSync(absolute(FAILURE_RECORD));
-  const current = currentHashes(config.keepTemplates);
   const missing = templatesMissing();
-  const decision = decideInstall({ config, state, failureRecordExists, currentHashes: current, templatesMissing: missing });
+  const decision = decideInstall({ config, state, failureRecordExists, currentFiles: existingFiles(KEEP_TEMPLATES) });
   if (decision.action === 'skip') {
     process.stdout.write(`${messageSkipped(config)}\n${messageGuide()}\n`);
   } else {
