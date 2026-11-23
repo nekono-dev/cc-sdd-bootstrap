@@ -102,7 +102,7 @@ stateDiagram-v2
     Read --> Idle: kiro コマンドで始まらない入力
 ```
 
-- `StopBlocked` でもツールの拒否は続く（2.3）。2 回目の終了は通し、状態を消す（2.7）。
+- `StopBlocked` でもツールの拒否は続く（2.3）。2 回目の終了は通し、`turn` を消す（2.7）。状態の図の Idle は `turn` が無い状態で、`listed` はセッションの間ずっと残る。
 - 新しい `/kiro-*` の入力は、前の状態を引き継がずに上書きする（1.4）。
 
 ## Requirements Traceability
@@ -133,7 +133,7 @@ stateDiagram-v2
 | 4.4 | 判断できなければ尋ねる | カタログの項目 | 同上 | — |
 | 4.5 | `/kiro-*` では読むまで拒否される旨 | カタログの項目 | 同上 | — |
 | 4.6 | AGENTS.md の未承認時の先読みの指示 | カタログの項目（Codex の文章） | 同上 | — |
-| 4.7 | 自然文では止めない | Gate | 自然文は状態を消すだけ | →Idle |
+| 4.7 | 自然文では止めない | Gate | 自然文は `turn` を消すだけ | →Idle |
 
 ## Components and Interfaces
 
@@ -187,10 +187,10 @@ function messageStop(state: TurnState): string;              // 同上（2.6）
 - 入力: 標準入力の JSON（`session_id`・`prompt`・`tool_name`・`tool_input`・`tool_response`・`stop_hook_active`）。
 - 出力:
   - SessionStart: そのツールの手順書の置き場所にある `kiro-*` の名前を `listed` に書く（Claude Code の `source` が `compact` のときは書き換えない）。何も出さない。
-  - UserPromptSubmit: 対象が決まり、`isExpandedInvocation` が真なら `turn` を読み取り済みで書いて何も出さない（2.4）。偽なら未読で書き、`hookSpecificOutput.additionalContext` に `messageAdditionalContext`。`/kiro-*` で始まらない、または手順書が無い（3.3）なら状態を消し、何も出さない（1.5・4.7）。
+  - UserPromptSubmit: 対象が決まり、`isExpandedInvocation` が真なら `turn` を読み取り済みで書いて何も出さない（2.4）。偽なら未読で書き、`hookSpecificOutput.additionalContext` に `messageAdditionalContext`。`/kiro-*` で始まらない、または手順書が無い（3.3）なら `turn` を消し（`listed` は残す）、何も出さない（1.5・4.7）。
   - PreToolUse: 拒否なら `hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "deny", permissionDecisionReason }`。それ以外は何も出さない。
-  - PostToolUse: 手順書の最初の空でない行を読み、`isSkillRead` なら状態の `read` を真にする。何も出さない。
-  - Stop: 止めるなら `{ decision: "block", reason }` を出し `stopBlocked` を真にする。通すときは状態を消す。
+  - PostToolUse: 手順書の最初の空でない行を読み、`isSkillRead` なら `turn.read` を真にする。何も出さない。
+  - Stop: 止めるなら `{ decision: "block", reason }` を出し `turn.stopBlocked` を真にする。通すときは `turn` を消す（`listed` は残す）。
 - 例外・判定できない入力（`session_id` が無い、JSON でないなど）: 標準エラーに日本語で理由を出し、何も出力せず終了 0（3.1・3.2）。
 - 両ツールで出力の形は同じ（PoC で確認）。
 
@@ -221,6 +221,6 @@ function messageStop(state: TurnState): string;              // 同上（2.6）
   - `decidePreToolUse`: 未読で Claude Code の手順書の Read と ToolSearch は通し、Bash・Edit・別のファイルの Read・Agent は拒否して理由に道筋を含む。Codex は `cat .agents/skills/<名前>/SKILL.md`（相対・絶対）を通し、`ls <手順書>`・`sed -i '1d' <手順書>`・別のリポジトリの同じ道筋の `cat`・他の Bash を拒否（2.2・2.3・3.6）。読み取り済みなら通す（2.5）。
   - `isSkillRead`: 応答に手順書の最初の行が無い（`cat: ...: No such file or directory` など）ときと ToolSearch では読んだ扱いにしない（2.4）。
   - `decideStop`: 未読の 1 回目は止め、`stopBlocked` または `stop_hook_active` なら通す（2.6・2.7）。
-- **入口（一時ディレクトリ、標準入力）**: SessionStart で一覧を記録 → 一覧にあるスキルの Claude Code の `/kiro-x` は拒否しない（2.4）。一覧に無いスキル（SessionStart の後に作った手順書）で UserPromptSubmit → PreToolUse 拒否 → PostToolUse で読み取り → PreToolUse 通過、の一連。次の `/kiro-*` で未読に戻る、自然文で解除（1.4・1.5・4.7）。手順書が無いと状態を作らない（3.3）。別の `session_id`・別の根の状態を使わない（3.5）。`cwd` を変えても同じ根を使う（3.6）。状態がリポジトリの中に作られない（3.4）。壊れた JSON の入力で出力なし・終了 0・標準エラーに理由（3.1・3.2）。
+- **入口（一時ディレクトリ、標準入力）**: SessionStart で一覧を記録 → 一覧にあるスキルの Claude Code の `/kiro-x` は拒否しない（2.4）→ Stop・自然文の入力・手順書の無い `/kiro-y` を挟んだ後の `/kiro-x` も拒否しない（`listed` が残る）。一覧に無いスキル（SessionStart の後に作った手順書）で UserPromptSubmit → PreToolUse 拒否 → PostToolUse で読み取り → PreToolUse 通過、の一連。次の `/kiro-*` で未読に戻る、自然文で解除（1.4・1.5・4.7）。手順書が無いと状態を作らない（3.3）。別の `session_id`・別の根の状態を使わない（3.5）。`cwd` を変えても同じ根を使う（3.6）。状態がリポジトリの中に作られない（3.4）。壊れた JSON の入力で出力なし・終了 0・標準エラーに理由（3.1・3.2）。
 - **カタログの試験**: 対応表の行が要件 4.1 と同じ、Codex の文章にだけ 4.6 の一文がある。
 - **実機（PoC 済み）**: Claude Code は `poc/kiro-gate/run.sh`、Codex は `poc/req-feasibility/codex.sh`（c・d・e）。実装後は配置したスクリプトで同じ確認を行う。

@@ -267,7 +267,8 @@ function buildCliCommand(target: Vendor, setting: RoleSetting, modelName: string
 ### Delegate（`delegate.mjs`）
 
 ##### Batch / Job Contract
-- 起動: `node .agent-hooks/cc-sdd-bootstrap/delegate.mjs --from <claude|codex> --role <implement|review|investigate|debug> --instructions <ファイル> [--to same] [--effort medium|high] [--model <ID>] [--orchestrator-model <ID>]`。`--to same` のときも、子のモデルが指揮役と同じ系統なら起動しない（指揮役のモデルを渡したとき）。根はスクリプトの位置から求める。
+- 起動: `node .agent-hooks/cc-sdd-bootstrap/delegate.mjs --from <claude|codex> --role <implement|review|investigate|debug> --instructions <ファイル> [--to same] [--effort medium|high] [--model <ID>] [--orchestrator-model <ID>]`。
+- 名前だけ求める: `delegate.mjs --resolve-model --from <claude|codex> --role <役割> [--to same] [--orchestrator-model <ID>]` は、子を起動せず、その役割に使う起動の名前と推論量を 1 行で出す（`resolveRole` と `resolveModelName` の結果。求められなければ理由と終了 2）。指揮役が組み込みの子（Codex の `spawn_agent` など）の `model` に明示する名前を得るために使う（1.4・1.9）。`--to same` のときも、子のモデルが指揮役と同じ系統なら起動しない（指揮役のモデルを渡したとき）。根はスクリプトの位置から求める。
 - 処理: 設定を読み（読めなければ理由を返す、1.8）、`resolveRole` で解決する。委任先は役割の `provider` で決まる提供元。`provider` が `same` の役割（実装・修正）は、組み込みの子を使う役割なので、その旨を返して起動しない。ただし `--to same` を付けたときは同じ提供元の CLI で起動する（別の提供元が使えない環境で、Codex の読み取り専用の役割を `codex exec --sandbox read-only` と指揮役と異なるモデルで行うため。5.7）。`--effort`・`--model` はその実行だけ役割の設定を上書きする（1.6）。`--orchestrator-model` があれば `compareTier` で上の格を止める（4.8）。
 - モデルの名前: 委任先が Codex なら `codex debug models` を実行して一覧を得て（失敗なら一覧なし）、`resolveModelName` で起動の名前を求める。求められなければ理由を出して終了 2（1.9）。
 - 起動: `buildCliCommand` の引数で、指示のファイルを標準入力に渡し、`cwd` を根にする（4.3）。子の標準出力・標準エラーはそのまま流す。
@@ -281,7 +282,7 @@ function buildCliCommand(target: Vendor, setting: RoleSetting, modelName: string
   - 分担（5.1）: 実装・修正は同じ提供元の子（指揮役が最下位の格なら自分）、レビューとデバッグの原因調査は別の提供元、調査は別の提供元の格 1。既定の表（1.3）と、格 2 以外の指揮役の決め方（1.4・1.5）、推論量の目安（1.6）。
   - 作業の流れ（5.2・5.3・5.4）: 実装 → 別の提供元のレビュー 1 回 → 同じ実装役が修正 → 同じレビュー役が指摘箇所だけ再確認。調査 → 指揮役が設計 → 別の提供元が設計をレビュー（推論量は目安に従い指揮役が選ぶ）。原因調査（別）→ 修正（同じ）→ テスト。
   - 結果の扱い（5.5）: 指揮役は同じ観点のレビューをやり直さず、結果を未確認として差分と必要なテストで確かめてから完了とする。
-  - 読み替え（5.6）: cc-sdd の手順が「Agent ツールで子に任せる」と書く箇所は、実装・修正は同じ提供元の役割定義（Claude Code は `cc-sdd-implement`、Codex は `cc_sdd_implement`。Codex は `fork_turns` を `none` にし、`model` に Luna の今の名前（`codex debug models` の一覧で最新の `-luna`）を明示する。履歴を引き継ぐと親と同じモデルになるため）で `model` を明示して起動、レビュー・デバッグは別の提供元の入口（`delegate.mjs --role review` など）で、同じ依頼内容と成果物の形式のまま渡す。
+  - 読み替え（5.6）: cc-sdd の手順が「Agent ツールで子に任せる」と書く箇所は、実装・修正は同じ提供元の役割定義（Claude Code は `cc-sdd-implement`、Codex は `cc_sdd_implement`。Codex は `fork_turns` を `none` にし、`model` に `delegate.mjs --resolve-model --from codex --role implement --orchestrator-model <自分のモデル>` が出す名前を明示する。役割設定と指揮役の格から系統を決め、その系統の最新の名前になる。履歴を引き継ぐと親と同じモデルになるため）で `model` を明示して起動、レビュー・デバッグは別の提供元の入口（`delegate.mjs --role review` など）で、同じ依頼内容と成果物の形式のまま渡す。
   - 別の提供元が使えないとき（5.7）: すべての役割を同じ提供元の、指揮役と異なり指揮役の格以下のモデルで行い、レビューは 1 回。Claude Code は役割定義（読み取り専用は道具を制限済み）に `model` を明示して起動する。Codex の組み込みの子は読み取り専用にできないので、読み取り専用の役割は `delegate.mjs --to same --role review --model <指揮役と異なるモデル>`（`codex exec --sandbox read-only`）で行う。
   - 指示のファイル（5.8・5.9）: `~/.cache/cc-sdd-bootstrap-scratch/` に置く（リポジトリ内と `/tmp` には置かない）。範囲・必要な決まり・禁止する操作・成果物の形式を書き、子が CLAUDE.md・AGENTS.md を読むことに頼らない。
   - 書き込みは 1 つずつ（5.10）: 書き込み可の子の実行中は、読み取り専用の子も重ねない。
@@ -307,13 +308,13 @@ function buildCliCommand(target: Vendor, setting: RoleSetting, modelName: string
   - 既定の `assign`・`roles` から、両ツールの指揮役で 1.3 の表のとおりのモデル・推論量・権限が出る（1.3）。明示した値が残る（1.7）。
   - 指揮役が Opus のとき実装は sonnet、レビューは astra。Haiku のとき実装は `selfImplement`、レビューは Luna（1.4・1.5）。指揮役ごとに同じ役割へ別の推論量を設定できる（1.1）。
   - `familyOf`: `claude-sonnet-5-5`・`sonnet` → sonnet、`gpt-6.1-sol`・`gpt-6.2-sol` → sol、知らない ID → null（1.2・1.9）。
-  - `resolveModelName`: 一覧の優先度で最新の `-sol` を選ぶ、`modelIds` があればそれ、Claude Code は別名のまま、一覧が無く `modelIds` も無い Codex の系統は理由を返す（1.9）。
+  - `resolveModelName`: 一覧の優先度で最新の `-sol` を選ぶ。`modelIds` や役割設定に版を含む名前（例 `gpt-6.1-sol`）を明示していればそのまま使う（1.7・1.9 の例外）。Claude Code は別名のまま。一覧が無く明示も無い Codex の系統は理由を返す（1.9）。
   - `decideSpawn`: 未指定・`inherit` は拒否、Sonnet の指揮役で `sonnet` の子は拒否、Opus の子は拒否、Haiku は通す、指揮役が不明で子が明示なら通す（3.2–3.4・3.6）。理由の文言に明示の必要が入る（3.7）。
   - `renderDefinitions`: Claude Code は 4 つ（`implement` は `model: haiku`、`provider=other` の 3 つは `model` 無し）、読み取り専用の役割に `tools: Read, Grep, Glob`。Codex は書き込み可の `implement` だけで、読み取り専用の役割は notices に出る（2.1–2.3）。`roles.claude` と `roles.codex` に同じ役割で別の設定を書いても、別のファイルになり衝突しない（1.1）。
   - `buildCliCommand`: 両ツール・両権限の引数（4.2・4.4・4.5）。
   - `validateSubagents`: 知らない役割・不正な権限・推論量で問題の道筋を返す（1.8）。
 - **入口（Check）**: 標準入力の JSON・一時の会話の記録・一時の定義ファイルで、`tool_input.model` が無く定義に `model: haiku` があれば Sonnet の指揮役で通る、定義が無ければ拒否、定義の `inherit` は拒否、会話の記録が無ければ子が明示なら通す、Codex の `model` で比べる。何も出さないときに `allow` を出さない（3.1–3.8）。
-- **入口（Delegate）**: 偽の `codex`・`claude` を `PATH` に置き、渡された引数・標準入力・作業場所を記録させる。両方向・両権限の引数、子の終了コードの受け渡し、指示のファイルが無い・役割が未定義・上の格で終了 2 と CLI を呼ばないこと（4.1–4.8）。
+- **入口（Delegate）**: `--resolve-model` は、偽の `codex debug models` の一覧から、Astra の指揮役の Codex の実装で sol の最新の名前（既定の 1.4 の規則）、Sonnet の指揮役の Codex の実装で luna の最新の名前を出し、子を起動しない（1.4・1.9）。偽の `codex`・`claude` を `PATH` に置き、渡された引数・標準入力・作業場所を記録させる。両方向・両権限の引数、子の終了コードの受け渡し、指示のファイルが無い・役割が未定義・上の格で終了 2 と CLI を呼ばないこと（4.1–4.8）。
 - **カタログの試験**: 区画の文章に 5.1〜5.12 の要素（指示のファイルの置き場所、書き込みは 1 つずつ、Codex の通信の許可など）が入る。
 - **実機**: `poc/subagent-defs/run.mjs`（定義ファイル・CLI の権限）、`poc/req-feasibility/claude.sh` の d・e と `codex.sh` の f・g（拒否と指揮役のモデル、Codex から `claude -p`）。実装後、配置したフックと入口で同じ確認を行う。
 
