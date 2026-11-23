@@ -44,7 +44,10 @@ for (const tool of ["claude", "codex"]) {
     const commands = Object.values(output.hooks).flat().flatMap((group) => group.hooks.map((handler) => handler.command));
     const expected = catalog.hooks.filter((hook) => hook.tools.includes(tool));
     assert.equal(commands.length, expected.length);
-    assert.deepEqual(commands, expected.map((hook) => buildCommand(tool, hook)));
+    for (const event of [...new Set(expected.map((hook) => hook.event))]) {
+      const actual = output.hooks[event].flatMap((group) => group.hooks.map((handler) => handler.command));
+      assert.deepEqual(actual, expected.filter((hook) => hook.event === event).map((hook) => buildCommand(tool, hook)));
+    }
   });
 }
 
@@ -77,11 +80,18 @@ for (const tool of ["claude", "codex"]) {
     const registered = hooksFor(tool);
     for (const hook of registered) {
       const groups = output.hooks[hook.event];
-      const group = groups.at(-1);
+      const group = groups.find((candidate) => candidate.hooks.some((handler) => handler.command === buildCommand(tool, hook)));
+      assert.ok(group);
       assert.equal(group.matcher, hook.matcher);
       assert.equal(group.hooks[0].command, buildCommand(tool, hook));
       assert.equal(group.hooks[0].timeout, hook.timeout);
       assert.equal(groups.filter((g) => g.hooks.some((h) => h.command === buildCommand(tool, hook))).length, 1);
+    }
+    for (const event of ["SessionStart", "UserPromptSubmit"]) {
+      const eventCommands = output.hooks[event].flatMap((group) => group.hooks.map((handler) => handler.command));
+      const install = registered.find((hook) => hook.event === event && hook.script === "install-cc-sdd.mjs");
+      const gate = registered.find((hook) => hook.event === event && hook.script === "kiro-gate.mjs");
+      assert.ok(eventCommands.indexOf(buildCommand(tool, install)) < eventCommands.indexOf(buildCommand(tool, gate)));
     }
     assert.equal(output.hooks.RemovedEvent, undefined);
     assert.deepEqual(output.hooks.UserEvent, input.hooks.UserEvent);

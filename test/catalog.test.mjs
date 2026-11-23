@@ -53,12 +53,23 @@ test("配置物は lib/ を読み込まない", () => {
 });
 
 test("新しいフックと除外行が設計どおりで、共有物や設定を除外しない", () => {
-  assert.deepEqual(catalog.hooks, [
+  const installHooks = [
     { tools: ["claude"], event: "SessionStart", script: "install-cc-sdd.mjs", args: ["session-start", "--tool", "claude"], timeout: 30 },
     { tools: ["codex"], event: "SessionStart", script: "install-cc-sdd.mjs", args: ["session-start", "--tool", "codex"], timeout: 30 },
     { tools: ["claude"], event: "UserPromptSubmit", script: "install-cc-sdd.mjs", args: ["user-prompt-submit", "--tool", "claude"], timeout: 600 },
     { tools: ["codex"], event: "UserPromptSubmit", script: "install-cc-sdd.mjs", args: ["user-prompt-submit", "--tool", "codex"], timeout: 600 },
-  ]);
+  ];
+  assert.deepEqual(catalog.hooks.slice(0, installHooks.length), installHooks);
+  const gateHooks = catalog.hooks.filter((hook) => hook.script === "kiro-gate.mjs");
+  assert.deepEqual(gateHooks, ["claude", "codex"].flatMap((tool) => [
+    { tools: [tool], event: "SessionStart", script: "kiro-gate.mjs", args: ["session-start", "--tool", tool], timeout: 10 },
+    { tools: [tool], event: "UserPromptSubmit", script: "kiro-gate.mjs", args: ["user-prompt-submit", "--tool", tool], timeout: 10 },
+    { tools: [tool], event: "PreToolUse", script: "kiro-gate.mjs", args: ["pre-tool-use", "--tool", tool], timeout: 10 },
+    { tools: [tool], event: "PostToolUse", script: "kiro-gate.mjs", args: ["post-tool-use", "--tool", tool], timeout: 10 },
+    { tools: [tool], event: "Stop", script: "kiro-gate.mjs", args: ["stop", "--tool", tool], timeout: 10 },
+  ]));
+  assert.ok(catalog.hooks.findIndex((hook) => hook.script === "kiro-gate.mjs" && hook.event === "UserPromptSubmit") >
+    catalog.hooks.findIndex((hook) => hook.script === "install-cc-sdd.mjs" && hook.event === "UserPromptSubmit"));
   assert.deepEqual(catalog.gitignore, [
     ".claude/skills/kiro-*/", ".agents/skills/kiro-*/", ".kiro/settings/", "/CLAUDE.md", "/AGENTS.md", "/.cache/",
   ]);
@@ -76,6 +87,45 @@ test("新しいフックと除外行が設計どおりで、共有物や設定�
   }
   for (const file of [".claude/skills/my-skill/SKILL.md", ".agents/skills/my-skill/SKILL.md", ".kiro/specs/x.md", ".kiro/steering/product.md", ".claude/settings.json", ".codex/hooks.json"]) {
     assert.ok(!catalog.gitignore.some((line) => excludedBy(line, file)), file);
+  }
+});
+
+test("kiro-gate の案内は要件の対応表と両ツール向けの手順を示す", () => {
+  const section = catalog.agentSections.find((item) => item.id === "kiro-gate");
+  assert.ok(section);
+  const table = [
+    ["新機能・新プロジェクトの相談、分割の検討", "kiro-discovery"],
+    ["次にやること・進み具合の確認", "kiro-spec-status"],
+    ["既存コードと要件の差の確認", "kiro-validate-gap"],
+    ["設計のレビュー", "kiro-validate-design"],
+    ["実装後の最終確認", "kiro-validate-impl"],
+    ["プロジェクトの方針の整備・更新", "kiro-steering"],
+    ["完了・成功と報告する前", "kiro-verify-completion"],
+  ];
+  const markdownTable = [
+    "| 依頼の種類 | 使うスキル |",
+    "|---|---|",
+    ...table.map(([kind, skill]) => `| ${kind} | \`${skill}\` |`),
+  ].join("\n");
+  for (const tool of ["claude", "codex"]) {
+    assert.ok(section[tool].includes(markdownTable), `${tool}: 対応表が連続した Markdown 表であること`);
+    for (const phrase of ["/kiro-*", "対応する手順書", "最後まで", "依頼の種類", "尋ねてください", "他の作業ツール", "フックが有効"]) {
+      assert.ok(section[tool].includes(phrase), `${tool}: ${phrase}`);
+    }
+  }
+  assert.equal(section.claude.includes("フックの信頼が承認されていない環境でも"), false);
+  assert.equal(section.codex.includes("フックの信頼が承認されていない環境でも"), true);
+  assert.ok(section.claude.includes(".claude/skills/<スキル名>/SKILL.md"));
+  assert.ok(section.codex.includes(".agents/skills/<スキル名>/SKILL.md"));
+  assert.match(section.codex, /信頼が承認されていない環境でも.*作業の前/s);
+  assert.doesNotMatch(section.claude, /信頼が承認されていない環境でも/);
+});
+
+test("kiro-gate の配置物が package.json の配布範囲にも含まれる", () => {
+  for (const name of ["kiro-gate.mjs", "kiro-gate-rules.mjs"]) {
+    const file = `${DEPLOY_DIR}/${name}`;
+    assert.ok(catalog.files.some((entry) => entry.path === file));
+    assert.ok(pkg.files.includes(file));
   }
 });
 
