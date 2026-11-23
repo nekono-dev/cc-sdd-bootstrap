@@ -35,8 +35,11 @@
 - **Selected Approach**: `roles[指揮役の提供元][役割] = { provider: same|other, model, effort, permission }`。既定値は 1.3 の表そのもの。役割定義のファイルは、提供元 V については `roles[V]` だけから作る（V が指揮役のときの組み込みの子）。`provider=other` の役割は、別の提供元が使えないときの予備としてモデル無しで作る。2 人の指揮役の設定を 1 つのファイルに集めると衝突するため（設計レビューの再指摘）。
 - **Rationale**: 最初の案（受け持ちの `assign` と提供元ごとの `roles` に分ける）では、「Claude Code が指揮役のときの Codex の実装」と「Codex が指揮役のときの Codex の実装」に別の推論量を設定できなかった。
 
-### Decision: Astra の既定のモデル
-- Codex のモデル一覧（`~/.codex/models_cache.json`、2026-11-23）に `gpt-6.2-astra`・`gpt-6-astra` がある。既定は一覧の先頭の `gpt-6.2-astra` とし、`modelIds` で変えられる。Opus の指揮役のレビューの既定は Astra になる（1.4）。
+### Decision: モデルは系統の名前で持ち、起動の名前は実行時に求める（利用者の指示）
+- モデルの名前（Luna・Sol・Astra など）はしばらく変わらないが、版の値は頻繁に変わる。既定値・判定・コミットするファイルに版を含む名前を書かない。
+- Claude Code は別名（`haiku`・`sonnet`・`opus`）が最新を指すので、そのまま使う。
+- Codex は `codex debug models` がモデルの一覧（`slug`・`visibility`・`priority`）を返す（2026-11-23、Codex 0.167.0 で確認。一覧は優先度順で `gpt-6.2-sol`・`gpt-6.2-astra`・…・`gpt-6-luna`）。起動のときに、`-<系統>` で終わる表示対象の slug のうち優先度が最も高いものを使う。版を固定したいときだけ設定の `modelIds` に書く。
+- Codex の役割定義（コミットする）には `model` を書かず、起動時に明示する。Opus の指揮役のレビューの既定は Astra（1.4）。
 
 ### Decision: 同じ提供元の CLI も入口で起動できる（設計レビューの指摘）
 - 別の提供元が使えないとき（5.7）、Codex の組み込みの子は読み取り専用にできない。入口に `--to same` を足し、`codex exec --sandbox read-only` を指揮役と異なるモデルで起動できるようにする。
