@@ -12,11 +12,13 @@
 | シェルの展開で根を求める書き方（`node "$(<版管理の CLI> rev-parse --show-toplevel)/.agent-hooks/cc-sdd-bootstrap/probe.mjs"`）で呼べるか | 最上位・下のディレクトリのどちらでも呼べる（コマンドはシェルで解釈される） |
 | フックの入力に、セッションを見分ける値があるか（kiro-gate の状態の置き場所の前提） | ある。すべてのフック（SessionStart・UserPromptSubmit・PreToolUse・PostToolUse・Stop）に `session_id` が入り、1 回の起動の中で同じ値。ほかに `turn_id`・`transcript_path`・`cwd`・`model`・`permission_mode` |
 | シェルの操作はフックの入力にどう入るか | `tool_name` は `Bash`、`tool_input.command` にコマンドの文字列。PostToolUse には `tool_response` が加わる。Stop には `stop_hook_active`（1 回目は false）と `last_assistant_message` |
+| PostToolUse の `tool_response` でシェルの成功と失敗を見分けられるか | 出力の文字列だけ（成功: `PoC のメモ\n`、失敗: `cat: missing.txt: No such file or directory\n`）。終了コードは入らない |
 | フックの環境変数に、プロジェクトの根を表すもの（Claude Code の `CLAUDE_PROJECT_DIR` 相当）があるか | 無い（`CODEX_HOME`・`CODEX_MANAGED_*`・`PWD` だけ） |
 
 ## 設計に引き継ぐこと
 
 - Codex 向けのコマンドは、シェルの展開で根を求める形にする。Claude Code 向けは今どおり `"$CLAUDE_PROJECT_DIR/..."`。
 - フックの作業場所は起動した場所になるので、配置物のスクリプトは自分の位置から根を求める（今の `install-cc-sdd.mjs` と同じ形）。
+- kiro-gate の読み取りの成功は、終了コードではなく応答の中身（手順書の行が含まれるか）で確かめる。
 - kiro-gate の状態は、`session_id` とリポジトリの根でセッションごとに分けられる。
 - `.codex/hooks.json` の形は Claude Code の `hooks` と同じ（イベント → `{ matcher?, hooks: [{ type: "command", command, timeout }] }` の配列）。

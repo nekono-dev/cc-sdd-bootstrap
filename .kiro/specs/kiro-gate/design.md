@@ -156,10 +156,16 @@ type ToolCall = { toolName: string; toolInput: Record<string, unknown> };
 function decidePreToolUse(state: GateState | null, call: ToolCall, root: string): { allow: true } | { allow: false; reason: string };
 // state が無い・read が真 → allow（2.5）
 // 未読のとき allow: Claude Code の Read で file_path が手順書（絶対の道筋で比べる）、ToolSearch（ツールを探す操作）
-//                    Codex の Bash で command に手順書の相対の道筋を含む（2.2）
+//                    Codex の Bash で isReadCommand が真（2.2）
 // それ以外 → 拒否。理由は messageDeny（2.3）
-function isSkillRead(state: GateState, call: ToolCall & { toolResponse: unknown }, root: string): boolean;
-// decidePreToolUse で手順書の読み取りとして通す条件と同じで、tool_response が誤りを示さないこと（2.4）
+function isReadCommand(command: string, cwd: string, absSkillPath: string): boolean;
+// 最初のコマンド（&&・;・| より前）の先頭の語が読み取りのコマンド（cat・head・sed・nl）で、
+// その引数のどれかを入力の cwd から解いた絶対の道筋が、対象の手順書の絶対の道筋と一致する。
+// ls などの存在の確認、別のリポジトリの同じ名前のファイルは一致しない（2.3・3.6）
+function isSkillRead(state: GateState, call: ToolCall & { toolResponse: unknown }, firstLine: string, root: string): boolean;
+// Claude Code の Read で file_path が手順書、または Codex の Bash で isReadCommand が真で、
+// かつ tool_response（文字列にしたもの）に手順書の最初の空でない行が含まれる（2.4）。
+// Codex の tool_response は出力の文字列だけで終了コードが無いため、中身で成功を確かめる。ToolSearch は読み取りにしない
 function decideStop(state: GateState | null, stopHookActive: boolean): { block: true; reason: string } | { block: false };
 // state があり、未読で、stopBlocked でも stopHookActive でもなければ止める（2.6）。それ以外は通す（2.7）
 
@@ -167,7 +173,7 @@ function messageAdditionalContext(state: GateState): string;  // 手順書の場
 function messageDeny(state: GateState): string;              // 読むべき手順書の場所と、先に読む必要（2.3）
 function messageStop(state: GateState): string;              // 同上（2.6）
 ```
-- Codex のまとめたコマンド（`cat SKILL.md && 別のコマンド`）は、手順書の道筋を含むので通り、読んだ扱いになる。コマンドの解析はしない（厳密さのためにコードを増やさない）。
+- Codex のまとめたコマンド（`cat <手順書> && 別のコマンド`）は、最初のコマンドが手順書の読み取りなので通り、読んだ扱いになる。読み取りの後の別のコマンドまで止めることはしない（汎用のシェルの解析はしない。厳密さのためにコードを増やさない）。
 
 ### Gate
 
@@ -177,7 +183,7 @@ function messageStop(state: GateState): string;              // 同上（2.6）
 - 出力:
   - UserPromptSubmit: 対象が決まれば状態を書き、`hookSpecificOutput.additionalContext` に `messageAdditionalContext`。`/kiro-*` で始まらない、または手順書が無い（3.3）なら状態を消し、何も出さない（1.5・4.7）。
   - PreToolUse: 拒否なら `hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "deny", permissionDecisionReason }`。それ以外は何も出さない。
-  - PostToolUse: `isSkillRead` なら状態の `read` を真にする。何も出さない。
+  - PostToolUse: 手順書の最初の空でない行を読み、`isSkillRead` なら状態の `read` を真にする。何も出さない。
   - Stop: 止めるなら `{ decision: "block", reason }` を出し `stopBlocked` を真にする。通すときは状態を消す。
 - 例外・判定できない入力（`session_id` が無い、JSON でないなど）: 標準エラーに日本語で理由を出し、何も出力せず終了 0（3.1・3.2）。
 - 両ツールで出力の形は同じ（PoC で確認）。
@@ -189,7 +195,7 @@ function messageStop(state: GateState): string;              // 同上（2.6）
 ### カタログの項目（installer-core の `lib/catalog.mjs` に足す）
 - `files`: `kiro-gate.mjs`・`kiro-gate-rules.mjs`。
 - `hooks`（`tools: ["claude", "codex"]`、`script: "kiro-gate.mjs"`、引数は `[<イベント>, "--tool", <ツール>]`。ツールごとに別の項目にする）:
-  - UserPromptSubmit（timeout 10 秒。session-install の項目の後）、PreToolUse（matcher なし＝すべてのツール、10 秒）、PostToolUse（matcher なし、10 秒）、Stop（10 秒）。
+  - UserPromptSubmit（timeout 10 秒。カタログでは session-install の項目の後に並べるが、同じイベントのフックは並行に動くことがあり、順序は保証にしない。初回の導入と同じターンでは手順書がまだ無く、そのターンは対象にならない（3.3）。session-install の追加の文脈が手順書を直接読むよう伝える）、PreToolUse（matcher なし＝すべてのツール、10 秒）、PostToolUse（matcher なし、10 秒）、Stop（10 秒）。
 - `agentSections` の `kiro-gate`（両ツールで同じ内容。Codex にだけ 4.6 の一文）:
   - 要件 4.1 の対応表（依頼の種類 → 使うスキル）。
   - 表に該当する依頼は `/kiro-*` で始まっていなくても、対応する手順書を読んで手順を最後まで実行する（4.2）。
@@ -204,9 +210,9 @@ function messageStop(state: GateState): string;              // 同上（2.6）
 
 ## Testing Strategy
 - **単体（Rules）**:
-  - `detectCommand`: `/kiro-spec-init x`・`  $kiro-impl`・`/kiro-steering` を検出、`/kiro-specx` の途中一致や `文中の /kiro-impl` は検出しない（1.1–1.3）。
-  - `decidePreToolUse`: 未読で Claude Code の手順書の Read と ToolSearch は通し、Bash・Edit・別のファイルの Read・Agent は拒否して理由に道筋を含む。Codex は `cat .agents/skills/<名前>/SKILL.md` を通し、他の Bash を拒否（2.2・2.3）。読み取り済みなら通す（2.5）。
-  - `isSkillRead`: 誤りの応答では読んだ扱いにしない（2.4）。
+  - `detectCommand`: `/kiro-spec-init x`・`  $kiro-impl`・`/kiro-steering` を検出、`/kiro-spec-init:` のように直後が空白でないものや `文中の /kiro-impl` は検出しない（1.1–1.3）。
+  - `decidePreToolUse`: 未読で Claude Code の手順書の Read と ToolSearch は通し、Bash・Edit・別のファイルの Read・Agent は拒否して理由に道筋を含む。Codex は `cat .agents/skills/<名前>/SKILL.md`（相対・絶対）を通し、`ls <手順書>`・別のリポジトリの同じ道筋の `cat`・他の Bash を拒否（2.2・2.3・3.6）。読み取り済みなら通す（2.5）。
+  - `isSkillRead`: 応答に手順書の最初の行が無い（`cat: ...: No such file or directory` など）ときと ToolSearch では読んだ扱いにしない（2.4）。
   - `decideStop`: 未読の 1 回目は止め、`stopBlocked` または `stop_hook_active` なら通す（2.6・2.7）。
 - **入口（一時ディレクトリ、標準入力）**: UserPromptSubmit → PreToolUse 拒否 → PostToolUse で読み取り → PreToolUse 通過、の一連。次の `/kiro-*` で未読に戻る、自然文で解除（1.4・1.5・4.7）。手順書が無いと状態を作らない（3.3）。別の `session_id`・別の根の状態を使わない（3.5）。`cwd` を変えても同じ根を使う（3.6）。状態がリポジトリの中に作られない（3.4）。壊れた JSON の入力で出力なし・終了 0・標準エラーに理由（3.1・3.2）。
 - **カタログの試験**: 対応表の行が要件 4.1 と同じ、Codex の文章にだけ 4.6 の一文がある。

@@ -19,7 +19,8 @@
 
 ### 読み取りの観測
 - **Findings**: Claude Code は Read の `tool_input.file_path`（絶対の道筋）。Codex は Bash の `tool_input.command` の文字列に手順書の道筋（`.agents/skills/<名前>/SKILL.md`）が含まれるか。
-- **Implications**: Codex で `cat SKILL.md && 別のコマンド` のように 1 つにまとめられると、読んだ扱いで一緒に通る。厳密さのためにコマンドを解析しない（許容し、設計に明記する）。
+- Codex の PostToolUse の `tool_response` はコマンドの出力の文字列だけで、終了コードは無い（失敗は `cat: missing.txt: No such file or directory` のような出力になる。`poc/codex-hook-path/` で確認）。
+- **Implications**: 道筋を含むかだけで判定すると `ls <手順書>` でも解ける（設計レビューの指摘）。最初のコマンドが読み取りのコマンド（`cat`・`head`・`sed`・`nl`）で、引数を入力の `cwd` から解いた道筋が手順書と一致するときだけ通す。成功は「応答に手順書の最初の空でない行が含まれる」で確かめる（両ツール共通）。`cat <手順書> && 別のコマンド` は最初が読み取りなので通る（汎用のシェルの解析はしない）。
 
 ### スキルとして展開された場合
 - **Findings**: 一覧に載るスキルを `/kiro-x` で呼ぶと、手順書の本文はモデルに渡る（Claude Code の展開）が、`prompt` は入力のままで、フックからは展開の有無が分からない。
@@ -39,7 +40,7 @@
 - 手順書が無いときの停止、roadmap・brief の検査、開始時の状態通知、自然文への機械的な強制、コマンドの解析による読み取りの厳密な判定は持たない。
 
 ## Risks & Mitigations
-- 同じ時点の UserPromptSubmit で session-install が導入した直後は、手順書がまだ無く、そのターンは先読みの対象にならない（要件 3.3 どおり通す）— session-install の追加の文脈が手順書を直接読むよう伝える。
+- 同じ時点の UserPromptSubmit で session-install が導入した直後は、手順書がまだ無く、そのターンは先読みの対象にならない（要件 3.3 どおり通す）。同じイベントのフックは並行に動くことがあるので、カタログの並び順では保証しない — session-install の追加の文脈が手順書を直接読むよう伝える。
 - 一時ディレクトリの状態ファイルが残る — 小さく、OS の一時ディレクトリの掃除に任せる。
 
 ## References
