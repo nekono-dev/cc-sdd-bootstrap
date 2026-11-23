@@ -159,7 +159,7 @@ function decidePreToolUse(state: GateState | null, call: ToolCall, root: string)
 //                    Codex の Bash で isReadCommand が真（2.2）
 // それ以外 → 拒否。理由は messageDeny（2.3）
 function isReadCommand(command: string, cwd: string, absSkillPath: string): boolean;
-// 最初のコマンド（&&・;・| より前）の先頭の語が読み取りのコマンド（cat・head・sed・nl）で、
+// 最初のコマンド（&&・;・| より前）の先頭の語が読み取りだけのコマンド（cat・head・nl。書き換えの形を持つ sed などは含めない）で、
 // その引数のどれかを入力の cwd から解いた絶対の道筋が、対象の手順書の絶対の道筋と一致する。
 // ls などの存在の確認、別のリポジトリの同じ名前のファイルは一致しない（2.3・3.6）
 function isSkillRead(state: GateState, call: ToolCall & { toolResponse: unknown }, firstLine: string, root: string): boolean;
@@ -210,8 +210,8 @@ function messageStop(state: GateState): string;              // 同上（2.6）
 
 ## Testing Strategy
 - **単体（Rules）**:
-  - `detectCommand`: `/kiro-spec-init x`・`  $kiro-impl`・`/kiro-steering` を検出、`/kiro-spec-init:` のように直後が空白でないものや `文中の /kiro-impl` は検出しない（1.1–1.3）。
-  - `decidePreToolUse`: 未読で Claude Code の手順書の Read と ToolSearch は通し、Bash・Edit・別のファイルの Read・Agent は拒否して理由に道筋を含む。Codex は `cat .agents/skills/<名前>/SKILL.md`（相対・絶対）を通し、`ls <手順書>`・別のリポジトリの同じ道筋の `cat`・他の Bash を拒否（2.2・2.3・3.6）。読み取り済みなら通す（2.5）。
+  - `detectCommand`: `/kiro-spec-init x`・`  $kiro-impl`・`/kiro-steering` を検出、`/kiro-spec-init:` のように直後が空白でないものや `文中の /kiro-impl` は検出しない（1.1–1.3）。`/kiro-specx` は名前として検出されるが、手順書が無いので入口で状態を作らない（1.1・3.3）。
+  - `decidePreToolUse`: 未読で Claude Code の手順書の Read と ToolSearch は通し、Bash・Edit・別のファイルの Read・Agent は拒否して理由に道筋を含む。Codex は `cat .agents/skills/<名前>/SKILL.md`（相対・絶対）を通し、`ls <手順書>`・`sed -i '1d' <手順書>`・別のリポジトリの同じ道筋の `cat`・他の Bash を拒否（2.2・2.3・3.6）。読み取り済みなら通す（2.5）。
   - `isSkillRead`: 応答に手順書の最初の行が無い（`cat: ...: No such file or directory` など）ときと ToolSearch では読んだ扱いにしない（2.4）。
   - `decideStop`: 未読の 1 回目は止め、`stopBlocked` または `stop_hook_active` なら通す（2.6・2.7）。
 - **入口（一時ディレクトリ、標準入力）**: UserPromptSubmit → PreToolUse 拒否 → PostToolUse で読み取り → PreToolUse 通過、の一連。次の `/kiro-*` で未読に戻る、自然文で解除（1.4・1.5・4.7）。手順書が無いと状態を作らない（3.3）。別の `session_id`・別の根の状態を使わない（3.5）。`cwd` を変えても同じ根を使う（3.6）。状態がリポジトリの中に作られない（3.4）。壊れた JSON の入力で出力なし・終了 0・標準エラーに理由（3.1・3.2）。
