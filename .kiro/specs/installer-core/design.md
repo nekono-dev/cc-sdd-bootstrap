@@ -1,692 +1,436 @@
-# Design Document: installer-core
+# 設計文書: installer-core
+
+> 改訂（2026-11-23）: 単純化後の要件に合わせて書き直した。旧版（配置記録・改変検出・対話・CLAUDE.md の管理区画）は git の履歴にある。
 
 ## Overview
-**Purpose**: cc-sdd の運用一式を、利用先のリポジトリへ 1 つのコマンドで配置・更新・削除する導入コマンド（以下「導入コマンド」）を提供する。
-**Users**: cc-sdd の運用を始める開発者と、複数のリポジトリで運用を保守する開発者が、`npx github:nekono-dev/cc-sdd-bootstrap <init|update|uninstall>` で使う。下流の spec は、導入コマンドの「カタログ」と「設定の定義」に項目を足して、自分の配置物を届ける。
-**Impact**: このリポジトリに初めて製品のコード（`package.json`・`bin/`・`lib/`・`.agent-hooks/cc-sdd-bootstrap/`）を置く。自己適用で、暫定の導入の仕組み（`scripts/agent/`）を配置物に置き換える。
+
+**Purpose**: 導入コマンド（`npx github:nekono-dev/cc-sdd-bootstrap <操作>`）が、cc-sdd を使うための共通の配置物・設定ファイル・フックの登録・運用の区画の文章・`.gitignore` の除外設定を、Claude Code と Codex の両方に向けて 1 回の操作で揃える。
+
+**Users**: cc-sdd の運用を複数のリポジトリへ導入・更新する開発者。このリポジトリ自身も同じ操作で使う（自己適用）。
+
+**Impact**: develop の導入コマンドから、配置記録・改変検出・`--force`・設定値の引数・対話・CLAUDE.md の管理区画の作成を外す。Codex のフックの設定（`.codex/hooks.json`）への登録と、CLAUDE.md・AGENTS.md の末尾に書き足す運用の区画の文章の配置を足す。
 
 ### Goals
-- `init`・`update`・`uninstall` を、中止の条件をすべて確かめてから書き込む形で実現する（中止のときは 1 ファイルも変えない）。
-- プロジェクト固有の部分（設定ファイルの値、利用者のフック、管理区画の外、書き換えられた共通部分）を、利用者の明示なしに失わない。
-- 下流の spec が、カタログと設定の定義に項目を足すだけで配置物を増やせる。
-- このリポジトリ自身に同じコマンドで導入し、直後の `update` で変更が出ない。
+- `init`・`update`・`uninstall` を、対話なしで、変更の範囲を限って行う。
+- 共通の配置物は再実行で版の内容に揃い、旧版の残りは消える（記録を持たない）。
+- 下流の spec（session-install・kiro-gate・subagent-delegation）は、カタログと設定の項目定義に項目を足すだけで、配置・登録・除外・区画の文章を増やせる。
 
 ### Non-Goals
-- 各部品（cc-sdd の入れ直し、手順書の強制、モデルの判定、Codex）の中身。
-- Windows での動作の保証（フックはシェルの書き方で登録する）。
-- 同じリポジトリでの同時実行の排他。
-- 利用者の書き換えと新しい版の自動の混ぜ合わせ（3 方向のマージ）。
+- cc-sdd 本体の取得・導入、CLAUDE.md・AGENTS.md の書き出しと区画の書き足し（session-install）。
+- 各フックが実行時に何をするか（session-install・kiro-gate・subagent-delegation）。
+- 版管理の操作（追跡を外すなど）。案内だけを出す。
+- 設定の自動移行、利用者が配置先に置いたファイルの保護。
 
 ## Boundary Commitments
 
 ### This Spec Owns
-- 導入コマンドの入口（`bin/cc-sdd-bootstrap.mjs`）と、3 つの操作の流れ・引数・対話・出力・終了コード。
-- 設定ファイル `.cc-sdd-bootstrap.json` の形式、項目の定義の仕組み（設定の定義）、既定値・検証・補い。installer-core が定義する項目は `ccSdd.version`・`ccSdd.lang`・`codex.enabled`・`models`（役割の名前→モデルの対応。役割の一覧は持たない）。
-- カタログ（配置するファイル・フックの登録・`.gitignore` の行・CLAUDE.md の文章）の形式と、その読み方。
-- 配置の記録 `.agent-hooks/cc-sdd-bootstrap/installed.json` の形式と、書き換えの検出。
-- `.claude/settings.json`・`.gitignore`・CLAUDE.md への統合の規則（目印・見分け方・並び）。
-- 初期の配置物として、暫定の 2 本を `.agent-hooks/cc-sdd-bootstrap/` に移すこと（場所に依る文言の修正まで）と、それらのカタログへの登録。
-- このリポジトリへの自己適用。
+- 導入コマンドの入口と操作（`init`・`update`・`uninstall`・使い方の表示）、結果と失敗の日本語の表示。
+- カタログ（配置するスクリプト・フックの登録・`.gitignore` の行・運用の区画の文章の一覧）の形と、installer-core 自身の項目。
+- 設定ファイル `.cc-sdd-bootstrap.json` の初期作成・読み取り・検証・補いと、項目定義の形。
+- 配置先ディレクトリ `.agent-hooks/cc-sdd-bootstrap/` の中身（カタログのスクリプトと、組み立てた運用の区画のファイル）。
+- `.claude/settings.json` と `.codex/hooks.json` の中の、一式の登録（コマンドに `/.agent-hooks/cc-sdd-bootstrap/` を含む組）。
+- `.gitignore` の中の目印で囲んだ区画。
+- 運用の区画の目印の定義と、`uninstall` で CLAUDE.md・AGENTS.md から区画を外す処理。
+- 変更先の安全策（git の最上位、リポジトリの外とシンボリックリンクの拒否、Node.js 22 以上）。
 
 ### Out of Boundary
-- 初期の配置物（`install-cc-sdd.sh`・`install-gate.mjs`）の振る舞いの変更。設定ファイルの版・言語を読むことを含め、session-install が引き継ぐ。
-- `.kiro/settings/cc-sdd-guide.md` の生成（session-install）。
-- 役割の一覧・各役割の既定のモデル・モデルの値の検証の詳細（subagent-model-policy）。installer-core は「文字列から文字列への対応」までを検証する。
-- Codex を使うときに置く物（codex-delegation）。installer-core は `codex.enabled` を記録するだけ。
-- 会話からの呼び出し（plugin-skill）。
-- 設定ファイルの値から内容を組み立てて生成するファイル（エージェント定義など）。カタログのファイルは同梱の内容をそのまま写す。
+- CLAUDE.md・AGENTS.md への区画の書き足しと、標準の文書の書き出し（session-install。installer-core は区画のファイルを用意するだけ）。
+- 区画の文章の中身のうち、導入・手順書の強制・子の委任の案内（各 spec がカタログに足す）。
+- 配置するスクリプトの中身と実行時の振る舞い。
+- 役割表の内容とエージェント定義の生成（subagent-delegation）。
+- このリポジトリの CLAUDE.md の中身の移し替え（`handoff-self-apply.md` の手順で、自己適用のタスクとして行う）。
 
 ### Allowed Dependencies
-- Node.js 22 以上の標準モジュールだけ（`node:fs`・`node:path`・`node:url`・`node:util`・`node:readline/promises`・`node:crypto`・`node:test`）。外部パッケージは使わない。
-- `lib/` の中の依存の向きは「データ（`catalog`・`config-schema`）→ 純粋な処理（`config`・`ledger`・`blocks`・`settings-hooks`・`plan`）→ 入出力（`target`）→ `cli` → `bin`」。右側の層は左側の層から import してよい。
-- 配置物（`.agent-hooks/cc-sdd-bootstrap/` の下）は `lib/` を import しない（利用先には配置物しか無い）。
-- git の実行ファイルには依存しない（git のリポジトリの最上位かどうかは `.git` の有無で見る）。
+- Node.js 22 の標準モジュールだけ（外部パッケージなし）。
+- 依存の向き: `catalog`・`config-schema`（データ）→ `config`・`blocks`・`hooks-merge`・`plan`（純粋な計算）→ `target`（入出力）→ `cli`（操作の流れと表示）→ `bin`（入口）。逆向きの読み込みは誤りとして扱う。
+- 配置先のスクリプトは `lib/` を読み込まない（利用先には `lib/` が無い）。`lib/` は配置先の `config-schema.mjs` だけを読み込んでよい（`lib/config-schema.mjs` の 1 行の公開し直し）。
 
 ### Revalidation Triggers
-- 設定ファイルの形式（`format`・項目の道筋・既定値）を変える → 全ての下流の spec。
-- カタログの項目の形（`CatalogFile`・`CatalogHook`・`CatalogSection`）を変える → 全ての下流の spec。
-- 一式のフックの見分け方（コマンドに `/.agent-hooks/cc-sdd-bootstrap/` を含む）や、配置先のディレクトリ名を変える → session-install・kiro-gate・subagent-model-policy・codex-delegation。
-- CLAUDE.md・`.gitignore` の目印の文字列を変える → 導入済みの全ての利用先（古い目印を読める移行が要る）。
-- 初期の配置物の扱い（直書きの版）→ session-install（設定ファイルの `ccSdd.version`・`ccSdd.lang` を読むように引き継ぐ）。
-- 引数の名前・終了コード・出力の形 → plugin-skill。
+- カタログの形（項目の名前・意味）の変更 → session-install・kiro-gate・subagent-delegation の追加分を見直す。
+- 運用の区画のファイルの道筋・目印の行の変更 → session-install の書き足しを見直す。
+- フックのコマンドの形（根の求め方・見分けの文字列）の変更 → 各フックのスクリプトの起動のされ方を見直す。
+- 設定の項目定義の形の変更 → 設定を読むフック（session-install・subagent-delegation）を見直す。
+- 配置先ディレクトリの道筋の変更 → すべての下流を見直す。
 
 ## Architecture
 
 ### Existing Architecture Analysis
-- 製品のコードは無い。暫定の `scripts/agent/install-cc-sdd.sh`（SessionStart で cc-sdd 3.1.0 を入れ直す）と `install-gate.mjs`（失敗の記録があれば UserPromptSubmit で止める）が `.claude/settings.json` に登録されている。
-- 2 本はリポジトリのルートを自分の位置から `../..` で求める。`.agent-hooks/cc-sdd-bootstrap/` も同じ深さなので、移すだけで動く。
-- steering（structure.md）の方針「配置物はこのリポジトリの中でも配置後と同じ相対パスで持ち、導入コマンドはそれを写すだけ」に従う。このため、このリポジトリでは配置物の元と配置先が同じファイルになる（自己適用で写すときは、内容が同じなので書かない）。
+- 今の導入コマンドは「計画してから書く」形（`plan.mjs` が純粋に計算し、`target.mjs` が読み書きする）。この形は保つ。
+- 外すもの: `lib/ledger.mjs`（配置記録）、`plan.mjs` の記録との比較・改変の検出・`force`、`cli.mjs` の設定値の引数と対話、`blocks.mjs` を使った CLAUDE.md の管理区画の作成・置き換え、カタログの `kind: "project"`・`executable`・条件つきの `.gitignore` の行。
+- 足すもの: Codex のフックの設定への登録、運用の区画のファイルの組み立て、`uninstall` での区画の取り外し、`init` での既存の文書の案内。
 
 ### Architecture Pattern & Boundary Map
-採用する形は「計画してから書く」。対象の今の内容を読み、書く内容と中止の条件をすべて純粋な関数で計算し、中止が無いときだけ書く。
 
 ```mermaid
-graph LR
+graph TB
     Bin[bin entry] --> Cli[cli]
-    Cli --> Plan[plan]
     Cli --> Target[target io]
-    Cli --> Config[config]
-    Plan --> Config
-    Plan --> Ledger[ledger]
+    Cli --> Plan[plan]
+    Plan --> Config[config]
     Plan --> Blocks[blocks]
-    Plan --> SettingsHooks[settings hooks]
+    Plan --> HooksMerge[hooks merge]
     Plan --> Catalog[catalog]
     Config --> Schema[config schema]
-    Target --> RepoFiles[target repository files]
-    Target --> PackageFiles[package files]
+    Target --> Repo[target repository]
+    Repo --> DeployDir[deploy dir]
+    Repo --> ClaudeSettings[claude settings]
+    Repo --> CodexHooks[codex hooks]
+    Repo --> Gitignore[gitignore]
+    SessionInstall[session-install] -.reads.-> DeployDir
 ```
 
 **Architecture Integration**:
-- Selected pattern: 計画してから書く（純粋な計算と入出力の分離）。要件の多くが「ファイルを変更せずに中止」を求めるため。
-- Domain/feature boundaries: 下流の spec が触るのは `lib/catalog.mjs`・`lib/config-schema.mjs` のデータと `.agent-hooks/cc-sdd-bootstrap/` の下のファイルだけ。処理（`plan` など）は触らない。
-- Existing patterns preserved: 配置物は自分の位置からルートを求める。フックは `$CLAUDE_PROJECT_DIR` から呼ぶ。
-- Steering compliance: 外部パッケージなし、日本語の出力、`decide…` の命名（判定を返す関数）、kebab-case のファイル名。
+- Selected pattern: 計画してから書く。中止の条件（設定の誤り・目印の破損・読めない JSON・危険な道筋）をすべて計画の段階で見つけ、1 つでもあれば何も書かない。
+- Domain boundaries: データ（カタログ・項目定義）と計算と入出力を分ける。下流の spec はデータだけを足す。
+- New components rationale: `hooks-merge` は今の `settings-hooks` を Claude Code・Codex の両方に使えるよう一般化したもの。新しい部品はこれだけ。
+- Steering compliance: Node.js 22・外部パッケージなし・日本語の出力・厳密さのためにコードを増やさない。
 
 ### Technology Stack
 
 | Layer | Choice / Version | Role in Feature | Notes |
 |-------|------------------|-----------------|-------|
-| CLI | Node.js 22 以上（ESM、`.mjs`） | 入口・引数・対話・出力 | `parseArgs` の `allowNegative` は 22.4 以降なので使わない |
-| Data / Storage | JSON（設定ファイル・配置の記録・`.claude/settings.json`）、テキスト（`.gitignore`・CLAUDE.md） | 利用先の状態 | 照合は SHA-256（`node:crypto`） |
-| Infrastructure / Runtime | `npx github:nekono-dev/cc-sdd-bootstrap#<ref>` | 配布 | 公開リポジトリ、認証なし。`package.json` の `files` で同梱を絞る（PoC 済み） |
-| Test | `node --test` | 単体・結合・端から端まで | 一時ディレクトリに git のリポジトリを作って実行 |
+| CLI | Node.js 22 以上、ES モジュール（`.mjs`） | 入口と処理の本体 | 外部パッケージなし |
+| 配布 | `npx github:nekono-dev/cc-sdd-bootstrap` | 認証なしの取得と実行 | `package.json` の `files` で配る範囲を絞る |
+| 設定 | JSON（`.cc-sdd-bootstrap.json`、`.claude/settings.json`、`.codex/hooks.json`） | 設定と登録 | 2 つの登録先は同じ形 |
+| テスト | `node --test` | 単体と一時ディレクトリでの通しの試験 | |
 
 ## File Structure Plan
 
 ### Directory Structure
 ```
-package.json                         # name・version・type: module・bin・files・engines（node >=22）。files は bin/・lib/ と配置物のファイルを個別に挙げる（installed.json を配らない）
 bin/
-└── cc-sdd-bootstrap.mjs             # 入口。先頭に #!/usr/bin/env node。Node の版を確かめてから lib/cli.mjs を動的に読み込む
+└── cc-sdd-bootstrap.mjs        # 入口。Node の版を確かめてから cli を動的に読み込む（変更なし）
 lib/
-├── node-version.mjs                 # Node の版の判定（decideNodeSupported）。古い Node でも読み込めるよう標準の構文だけで書き、他の lib を import しない
-├── config-schema.mjs                # 設定の定義（項目の道筋・引数の名前・既定値・検証・質問文）。下流の spec が項目を足す
-├── catalog.mjs                      # 共有の定数（配置先・一式の見分けの文字列・設定ファイル名・記録の道筋）と、カタログ（写すファイル・フックの登録・.gitignore の行・CLAUDE.md の文章）。下流の spec が項目を足す
-├── config.mjs                       # 設定ファイルの解釈・検証・補い・値の決定・書き出し（純粋）
-├── ledger.mjs                       # 配置の記録の解釈・作成と、書き換えの判定（純粋）
-├── blocks.mjs                       # 目印の行で囲んだ区画の作成・置き換え・削除（純粋。.gitignore と CLAUDE.md で使う）
-├── settings-hooks.mjs               # .claude/settings.json の一式のフックの組の取り除きと追加（純粋）
-├── plan.mjs                         # 操作ごとの計画（書く内容・削除・権限・中止の理由）の作成（純粋）
-├── target.mjs                       # 入出力: 対象・設定状態・同梱ファイルと版の読み取り、計画の適用（書き込み・削除・権限・空のディレクトリの削除）
-└── cli.mjs                          # 引数の解析、対話、操作の流れ、出力、終了コード
-.agent-hooks/
-└── cc-sdd-bootstrap/
-    ├── install-cc-sdd.sh            # 初期の配置物（scripts/agent/ から移す。中身は session-install が引き継ぐ）
-    ├── install-gate.mjs             # 初期の配置物（同上）
-    └── installed.json               # このリポジトリの配置の記録（自己適用で作られる。カタログには載せない）
+├── catalog.mjs                 # データ: 道筋の定数・カタログ・運用の区画の目印
+├── config-schema.mjs           # 配置先の config-schema.mjs の公開し直し（変更なし）
+├── config.mjs                  # 設定の解釈・検証・補い・書き出し（純粋）
+├── blocks.mjs                  # 目印で囲んだ区画の作成・置き換え・削除（純粋）
+├── hooks-merge.mjs             # 新設（settings-hooks.mjs を置き換え）: 両ツールのフックの登録の統合と取り外し（純粋）
+├── plan.mjs                    # 操作ごとの計画の計算（純粋）
+├── target.mjs                  # 対象の読み取り・道筋の安全確認・計画の適用（入出力）
+├── node-version.mjs            # Node の版の判定（変更なし）
+└── cli.mjs                     # 引数の解析・操作の流れ・表示
+.agent-hooks/cc-sdd-bootstrap/
+├── config-schema.mjs           # 設定の項目定義（配置物。フックからも読む）
+├── agent-section-claude.md     # 生成物: CLAUDE.md の末尾に書き足す運用の区画（目印の行を含む）
+└── agent-section-codex.md      # 生成物: AGENTS.md の末尾に書き足す運用の区画（目印の行を含む）
 test/
-├── node-version.test.mjs            # Node の版の判定の単体テスト
-├── config.test.mjs                  # config・config-schema の単体テスト
-├── ledger.test.mjs                  # ledger の単体テスト
-├── blocks.test.mjs                  # blocks の単体テスト
-├── settings-hooks.test.mjs          # settings-hooks の単体テスト
-├── plan.test.mjs                    # plan の単体テスト（メモリ上の対象の状態から計画を作る）
-├── target.test.mjs                  # target の単体テスト（一時ディレクトリでの書き込み・権限・削除・途中失敗）
-├── cli.test.mjs                     # cli の引数の解析と対話の単体テスト（擬似の入出力）
-├── catalog.test.mjs                 # 共有の定数の値、カタログのファイルが実在すること、配置物が lib/ を import しないことの確認
-├── cli.e2e.test.mjs                 # 一時ディレクトリの git のリポジトリで bin を実行する端から端までのテスト
-└── package.test.mjs                 # npm pack --dry-run で同梱の範囲（.agent-hooks を含み、test/・poc/ を含まない）を確かめる
-poc/
-├── npx-bin/run.sh, result.md        # 設計の前提の PoC（作成済み）
-└── settings-merge/run.sh, result.md # 設計の前提の PoC（作成済み）
+├── catalog.test.mjs            # カタログの整合（実在・package.json の files・除外の行が共有物を外さない）
+├── config.test.mjs             # 設定の検証・補い・未知の項目の保持
+├── blocks.test.mjs             # 区画の検出と破損の判定
+├── hooks-merge.test.mjs        # 両ツールの登録の統合・重複なし・利用者の組の保持・読めない JSON
+├── plan.test.mjs               # 操作ごとの計画（配置先の片付け・区画の組み立て・uninstall・中止の条件）
+├── target.test.mjs             # 道筋の安全確認と適用・途中の失敗の報告
+├── cli.test.mjs                # 引数の解析・使い方・表示の文言
+└── cli.e2e.test.mjs            # 一時の git リポジトリでの init → update → uninstall の通し
 ```
 
-### Modified Files（自己適用）
-- `scripts/agent/install-cc-sdd.sh`・`scripts/agent/install-gate.mjs` — `.agent-hooks/cc-sdd-bootstrap/` へ移し、元を消す。移した後の文言（再試行のコマンドの道筋・コメントの「暫定」）を直す。
-- `.claude/settings.json` — 暫定のフックの登録を消し、`init` に一式のフックの組を足させる。プラグインの設定は残す。
-- `.gitignore` — `init` が区画を足す。区画の行と重なる既存の行（cc-sdd の導入物の行など）を手で消す。
-- `CLAUDE.md` — 「cc-sdd の標準の決まり」の節（区画と重なる）と「cc-sdd の導入（自己適用ができるまでの暫定の仕組み）」の節を消し、`init` に管理区画を足させる。導入の失敗時の再試行の案内を新しい道筋で書き直す。
-- `poc/self-install/run.sh`・`poc/self-install/result.md` — 暫定の道筋（`scripts/agent/`）を新しい道筋に直す。
-- `.kiro/steering/structure.md` — 決めたディレクトリ名（`bin/`・`lib/`・`.agent-hooks/cc-sdd-bootstrap/`・`test/`・`poc/`）を追記する。
-- `.kiro/steering/tech.md` — 「よく使うコマンド」に `node --test` と導入コマンドの実行例を書く。
-- `README.md` — 使い方（3 つの操作・引数・版の固定 `#<タグ>`・設定ファイル・書き換えの扱い・同時実行は想定しないこと）を書く。
+### Modified Files
+- `lib/catalog.mjs` — `LEDGER_PATH` と `kind`・`executable`・`claudeSections`・条件つきの行を外す。`hooks` に `tools`（`claude`・`codex`）とスクリプト名・引数を持たせ、`agentSections` と `AGENT_SECTION_MARKERS`・`AGENT_SECTION_FILES` を足す。`.gitignore` の行に Codex 向けの導入物と CLAUDE.md・AGENTS.md を足す。
+- `lib/config.mjs` — 設定値の引数（`given`）の解決を外す。読み取り・検証・既定値の補い・書き出しだけにする。
+- `lib/plan.mjs` — 記録・改変検出・`force`・CLAUDE.md の管理区画を外す。配置先の片付け、区画のファイルの組み立て、`.codex/hooks.json`、`uninstall` の区画の取り外し、`init` の既存の文書の案内を足す。
+- `lib/target.mjs` — 記録の読み書きを外す。配置先ディレクトリの一覧、`.codex/hooks.json`・CLAUDE.md・AGENTS.md の読み取りを足す。
+- `lib/cli.mjs` — `--force` と設定値の引数と対話を外す。表示に Codex の信頼の承認・既存の文書・共有の方法の案内を足す。
+- `.agent-hooks/cc-sdd-bootstrap/config-schema.mjs` — installer-core の項目を `ccSdd.version`・`ccSdd.lang` にする（`keepTemplates`・`codex.enabled`・`models` を外す。既存の設定にあれば使わない項目として残る）。
+- `package.json` — `files` をカタログのスクリプトに合わせる（生成物の区画のファイルは含めない）。
+- 削除: `lib/ledger.mjs`・`lib/settings-hooks.mjs`、`test/ledger.test.mjs`・`test/settings-hooks.test.mjs`・`test/config-keep-templates.test.mjs`・`test/cli-field-notice.test.mjs`・`test/plan-gitignore-make.test.mjs`・`test/target-ignore-lines.test.mjs` など記録・対話・条件つきの行に依る試験。残す試験は新しい振る舞いに合わせて直す。
+- 自己適用（要件 9）: `.kiro/steering/project-rules.md` を新設し、`handoff-self-apply.md` の表どおりに今の CLAUDE.md の決まりを移す。この手順の実施は installer-core と session-install の両方の実装が済んでから行う。
 
 ## System Flows
 
-### 操作の流れ（3 つの操作で共通）
 ```mermaid
-flowchart TD
-    Start[bin start] --> NodeCheck{Node 22 or later}
-    NodeCheck -- no --> FailExit[print reason and exit 1]
-    NodeCheck -- yes --> Parse{parse args}
-    Parse -- usage error --> UsageExit[print usage and exit 2]
-    Parse -- help --> HelpExit[print usage and exit 0]
-    Parse -- ok --> GitRoot{git root}
-    GitRoot -- no --> FailExit
-    GitRoot -- yes --> Load[read target state]
-    Load --> Resolve[resolve config values]
-    Resolve -- invalid on init or update --> FailExit
-    Resolve -- invalid on uninstall --> WarnContinue[print warning and continue]
-    WarnContinue --> MakePlan
-    Resolve -- already installed on init --> InfoExit[print guidance and exit 0]
-    Resolve -- ok --> MakePlan[make plan]
-    MakePlan -- blocked --> FailExit
-    MakePlan -- empty --> NoChange[print no change and exit 0]
-    MakePlan -- ok --> Apply[apply plan]
-    Apply -- write error --> PartialExit[print done failed pending and exit 1]
-    Apply -- ok --> Report[print changed files and exit 0]
+sequenceDiagram
+    participant User
+    participant Cli as cli
+    participant Target as target
+    participant Plan as plan
+    User->>Cli: init or update or uninstall
+    Cli->>Target: 安全確認と対象の読み取り
+    Target-->>Cli: 対象の今の状態
+    Cli->>Plan: 操作と状態とカタログ
+    Plan-->>Cli: 変更の一覧 または 中止の理由
+    alt 中止の理由がある
+        Cli-->>User: 理由を表示して失敗で終わる 何も書かない
+    else 変更が無い
+        Cli-->>User: 変更が無いことを表示
+    else 変更がある
+        Cli->>Target: 計画を順に適用
+        Target-->>Cli: 済んだ変更 失敗 未処理
+        Cli-->>User: 結果と案内を表示
+    end
 ```
 
-- 中止の条件（不正な設定・壊れた目印・読めない `.claude/settings.json`・書き換えられた共通部分）は、すべて「make plan」までに判定する。書き込みは「apply plan」だけが行う。
-- `blocked` は理由の一覧を持つ。書き換えられた共通部分は、`--force` があれば中止の理由にしない。
-
-### 共通部分のファイルの扱い（update・uninstall）
-```mermaid
-flowchart TD
-    F[catalog file or recorded file] --> InNew{in new catalog}
-    InNew -- yes --> Kind{kind}
-    Kind -- project --> ExistsP{exists in target}
-    ExistsP -- yes --> KeepP[keep]
-    ExistsP -- no --> WriteP[write]
-    Kind -- common --> ExistsC{exists in target}
-    ExistsC -- no --> WriteC[write and note restored]
-    ExistsC -- yes --> Same{same as new}
-    Same -- yes --> Skip[no change]
-    Same -- no --> Modified{modified after placement}
-    Modified -- no --> WriteC2[write]
-    Modified -- yes --> Force{force}
-    Force -- yes --> WriteC3[write and note overwritten]
-    Force -- no --> Block[block with path]
-    InNew -- no --> ModifiedR{modified after placement}
-    ModifiedR -- no --> Delete[delete]
-    ModifiedR -- yes --> ForceR{force}
-    ForceR -- yes --> Delete
-    ForceR -- no --> Block
-```
-
-- 「modified after placement」は、記録の SHA-256 と今の内容の SHA-256 が違うこと。記録にそのファイルが無い（記録が無い・壊れているを含む）ときは、新しい版の内容と違えば書き換えられたとみなす。
-- 「in new catalog」が no の側で、記録の種類が固有の部分（project）のファイルは、書き換えられていなければ消し、書き換えられていれば中止せずに残して知らせる（利用者の物として扱う。9.2 と同じ考え方）。
-- 記録に載る道筋でも、相対の道筋で `..` を含まず `DEPLOY_DIR` の下にあるものだけを扱う。外れた道筋（記録が壊れた・手で書き換えられた）は、`--force` があっても消さずに無視し、知らせる（4.4）。
-- `uninstall` では全てのファイルを消す側で扱う。書き換えの判定は、カタログに載るファイルは同梱の内容も比べる相手に使う（記録が無い・壊れているときも、同梱と同じ内容なら失うものが無いので消す）。カタログに無く記録だけにあるファイルは、記録との比較だけで判定する。固有の部分は、配置した内容のままなら消し、書き換えられていれば中止せずに残す（9.2）。
+- 適用の順: 設定ファイル → 配置先ディレクトリ（消す → 書く）→ `.claude/settings.json` → `.codex/hooks.json` → `.gitignore`（`uninstall` は 2 つのフックの設定 → CLAUDE.md → AGENTS.md）。途中で失敗したら残りを行わず、済んだもの・失敗・未処理・再実行する操作を表示する（8.5）。
+- 再実行で同じ結果になる（各変更は「この内容にする」形で、差が無ければ変更に載せない）。
 
 ## Requirements Traceability
 
 | Requirement | Summary | Components | Interfaces | Flows |
 |-------------|---------|------------|------------|-------|
-| 1.1 | 3 つの操作をカレントで実行 | Cli, Target | `runCli` | 操作の流れ |
-| 1.2 | 使い方の表示 | Cli | `runCli` | 操作の流れ |
-| 1.3 | 未知の操作・指定 | Cli | `parseCliArgs` | 操作の流れ |
-| 1.4 | Node の版 | Bin | — | 操作の流れ |
-| 1.5 | git の最上位でない | Target | `isGitRoot` | 操作の流れ |
-| 1.6 | 成功時の一覧 | Cli, Target | `ApplyResult` | 操作の流れ |
-| 1.7 | 失敗の理由と次の手 | Cli | `PlanBlock`, `CliOutcome` | 操作の流れ |
-| 1.8 | 日本語の出力 | Cli, Plan | 全ての利用者向けの文言 | — |
-| 1.9 | 標準の機能だけ | 全体 | Allowed Dependencies | — |
-| 2.1 | 対話で項目を尋ねる | Cli, ConfigSchema | `promptValues` | — |
-| 2.2 | 引数の値を使う | Cli, Config | `resolveValues` | — |
-| 2.3 | 非対話は既定値で補う | Cli, Config | `resolveValues` | — |
-| 2.4 | 設定と各統合を行う | Plan, Target | `makePlan`, `applyPlan` | 操作の流れ |
-| 2.5 | 不正な値で中止 | Config | `validateConfig` | 操作の流れ |
-| 2.6 | 導入済みなら update を案内 | Cli | `CliOutcome` | 操作の流れ |
-| 2.7 | コミットと次のセッションの案内 | Cli | — | — |
-| 3.1 | `.cc-sdd-bootstrap.json` | Config, Target | `serializeConfig` | — |
-| 3.2 | 記録する項目 | ConfigSchema | `ConfigField` | — |
-| 3.3 | 型と値の検証 | Config | `validateConfig` | — |
-| 3.4 | update で読めない・不正なら中止 | Config, Cli | `parseConfig` | 操作の流れ |
-| 3.5 | 増えた項目を補う | Config | `fillDefaults` | — |
-| 3.6 | 知らない項目を残して警告 | Config | `findUnknownKeys` | — |
-| 3.7 | 既存の値を書き換えない | Config | `resolveValues` | — |
-| 4.1 | `.agent-hooks/cc-sdd-bootstrap/` に置く | Catalog | `CatalogFile` | — |
-| 4.2 | 共通部分を置き換える | Plan | `makePlan` | ファイルの扱い |
-| 4.3 | 固有の部分は無いときだけ | Plan | `makePlan` | ファイルの扱い |
-| 4.4 | 他のファイルに触れない | Plan, Target | `FileChange` | — |
-| 4.5 | 版と内容の記録 | Ledger | `buildLedger` | — |
-| 4.6 | 書き換えの検出 | Ledger, Plan | `decideModified` | ファイルの扱い |
-| 4.7 | 実行権限 | Catalog, Target | `CatalogFile.executable` | — |
-| 4.8 | 書き込み途中の失敗 | Target, Cli | `ApplyResult` | 操作の流れ |
-| 5.1 | 値を引き継いで更新 | Cli, Plan | `makePlan` | 操作の流れ |
-| 5.2 | 書き換えがあれば中止 | Plan | `PlanBlock` | ファイルの扱い |
-| 5.3 | 強制で上書き | Plan | `PlanInput.force` | ファイルの扱い |
-| 5.4 | 外れたファイルを削除 | Plan, Ledger | `makePlan` | ファイルの扱い |
-| 5.5 | 未導入なら init を案内 | Cli | `CliOutcome` | 操作の流れ |
-| 5.6 | update で値を変える | Cli, Config | `resolveValues` | — |
-| 5.7 | 変更が無いことの表示 | Plan, Cli | `Plan.changes` が空 | 操作の流れ |
-| 6.1 | フックの登録を加える | SettingsHooks | `mergeHooks` | — |
-| 6.2 | 他の内容を残す | SettingsHooks | `mergeHooks` | — |
-| 6.3 | 置き換えて重複させない | SettingsHooks | `mergeHooks` | — |
-| 6.4 | 繰り返しで同じ内容 | SettingsHooks | `mergeHooks` | — |
-| 6.5 | 読めない形式で中止 | SettingsHooks | `mergeHooks` | 操作の流れ |
-| 7.1 | 除外の行を加える | Blocks, Catalog | `upsertBlock` | — |
-| 7.2 | 他の行を残す | Blocks | `upsertBlock` | — |
-| 7.3 | 揃えて重複させない | Blocks | `upsertBlock` | — |
-| 7.4 | 設定などを除外しない | Catalog | `catalog.gitignore` | — |
-| 8.1 | 管理区画を作る | Blocks | `upsertBlock` | — |
-| 8.2 | 取り込みの行と下流の文章 | Catalog, Plan | `CatalogSection` | — |
-| 8.3 | 標準の決まりの中身を書かない | Catalog | `CatalogSection` | — |
-| 8.4 | 区画の中だけ置き換える | Blocks | `upsertBlock` | — |
-| 8.5 | 壊れた目印で中止 | Blocks | `findBlock` | 操作の流れ |
-| 8.6 | 区画が無ければ作り直す | Blocks, Plan | `upsertBlock` | — |
-| 9.1 | 一式を取り除く | Plan, Blocks, SettingsHooks | `makePlan` | ファイルの扱い |
-| 9.2 | 他を残す | Plan | `makePlan` | ファイルの扱い |
-| 9.3 | 書き換えがあれば中止 | Plan | `PlanBlock` | ファイルの扱い |
-| 9.4 | 強制で削除 | Plan | `PlanInput.force` | ファイルの扱い |
-| 9.5 | 空のディレクトリの削除 | Target | `applyPlan` | — |
-| 9.6 | 未導入なら中止 | Cli | `CliOutcome` | 操作の流れ |
-| 9.7 | cc-sdd の導入物と成果物を消さない | Plan | `FileChange` | — |
-| 9.8 | uninstall は不正な設定でも進めて知らせる | Cli | `runCli` | 操作の流れ |
-| 10.1 | 同じ配置を持つ | 自己適用 | `init` の実行 | — |
-| 10.2 | 暫定の仕組みを持たない | 自己適用 | Modified Files | — |
-| 10.3 | 直後の update で変更なし | Plan, Ledger | `makePlan` | 操作の流れ |
+| 1.1 | init で両ツールに一式を配置 | Plan, Target, Catalog | `computePlan` | 導入の流れ |
+| 1.2 | update で設定を保ち揃える | Plan, Config | `computePlan` | 導入の流れ |
+| 1.3 | init で設定があれば変えず update を案内 | Plan, Cli | `PlanAbort` `CONFIG_EXISTS` | 中止 |
+| 1.4 | update で設定が無ければ init を案内して失敗 | Plan, Cli | `PlanAbort` `CONFIG_MISSING` | 中止 |
+| 1.5 | 差が無ければ変更なしと表示 | Plan, Cli | `Plan.changes` が空 | 変更なし |
+| 1.6 | 対話しない | Cli | `parseArgs` | — |
+| 1.7 | 使い方の表示 | Cli | `buildUsage` | — |
+| 1.8 | 未知の操作・指定で失敗 | Cli | `parseArgs` の `usage-error` | — |
+| 2.1 | init で設定を既定値で作る | Plan, Config | `fillDefaults` `serializeConfig` | 導入の流れ |
+| 2.2 | 既定値と直接編集の案内 | Cli | `formatSuccess` | — |
+| 2.3 | update で必要な項目を検証 | Config | `validateConfig` | — |
+| 2.4 | 設定が読めない・不正なら失敗 | Config, Plan, Cli | `ConfigError` | 中止 |
+| 2.5 | 記入した値と使わない項目を保つ | Config | `fillDefaults` は無い項目だけ足す | — |
+| 3.1 | 共通の配置物を作成・置き換え | Plan, Target, Catalog | `FileChange` write | 導入の流れ |
+| 3.2 | 強制の指定なしで置き換え | Plan | — | — |
+| 3.3 | 直接編集しない・差分は git で確認の案内 | Cli | `formatSuccess` | — |
+| 3.4 | 配置先を入れ直し旧版を残さない | Plan, Target | `TargetSnapshot.deployDirFiles`、`FileChange` delete | 導入の流れ |
+| 3.5 | cc-sdd 本体を同梱しない | Catalog, package.json | catalog 試験 | — |
+| 4.1 | 両ツールにフックを登録 | HooksMerge, Plan, Catalog | `mergeHooks` `buildCommand` | 導入の流れ |
+| 4.2 | 自分の組だけ置き換える | HooksMerge | `OWNED_MARKER` | — |
+| 4.3 | 重複させない | HooksMerge | — | — |
+| 4.4 | 読めない設定は変えず失敗 | HooksMerge, Plan | `HooksError` | 中止 |
+| 4.5 | Codex の信頼の承認の案内 | Cli | `formatSuccess` | — |
+| 5.1 | 区画の文章を両ツール向けに配置 | Plan, Catalog | `renderAgentSection` | 導入の流れ |
+| 5.2 | 各 spec の案内と steering を読む案内 | Catalog | `agentSections` | — |
+| 5.3 | 標準の文書の本文を複製しない | Catalog | catalog 試験 | — |
+| 5.4 | CLAUDE.md・AGENTS.md を自ら書き換えない | Plan | init・update の計画に両文書が載らない | — |
+| 5.5 | init で既存の文書の案内 | Plan, Cli | `Plan.notices` `EXISTING_AGENT_DOCS` | — |
+| 6.1 | 導入物と手元の状態を除外 | Catalog, Plan, Blocks | `GITIGNORE_MARKERS` | 導入の流れ |
+| 6.2 | 自分の区画だけ更新 | Blocks | `replaceBlock` | — |
+| 6.3 | 重複させない | Blocks, Plan | — | — |
+| 6.4 | 共有物を除外しない | Catalog | catalog 試験 | — |
+| 6.5 | 共有の方法の案内 | Cli | `formatSuccess` | — |
+| 7.1 | uninstall で登録と区画を外す | Plan, HooksMerge, Blocks | `removeHooks` `removeBlock` | 取り外し |
+| 7.2 | それ以外は残す | Plan | uninstall の計画の範囲 | — |
+| 7.3 | 外したものと残るものを表示 | Cli | `formatSuccess` | — |
+| 7.4 | 読めない設定・壊れた目印は変えず失敗 | Plan, Blocks, HooksMerge | `PlanAbort` | 中止 |
+| 8.1 | git の最上位でなければ失敗 | Target, Cli | `isGitRoot` | 中止 |
+| 8.2 | リポジトリの外・シンボリックリンクを拒否 | Target | `checkPathSafety` | 中止 |
+| 8.3 | 変更の範囲を限る | Plan | `ALLOWED_PATHS` | — |
+| 8.4 | 成功の表示 | Cli | `formatSuccess` | — |
+| 8.5 | 途中の失敗の表示 | Target, Cli | `ApplyResult` `formatApplyFailure` | 適用 |
+| 8.6 | Node.js 22 未満で失敗 | Bin, NodeVersion | `decideNodeSupported` | — |
+| 8.7 | 依存パッケージを求めない | package.json, Catalog | package 試験 | — |
+| 9.1 | このリポジトリにも同じ操作で揃える | Cli（`node bin/cc-sdd-bootstrap.mjs update`） | — | 導入の流れ |
+| 9.2 | 旧配置記録が残らない | Plan（3.4 の片付け） | — | — |
+| 9.3 | 再実行で変更なし | Plan | — | — |
+| 9.4 | 独自の決まりを steering に移し両文書を除外 | project-rules.md、Catalog の除外の行 | `handoff-self-apply.md` | 自己適用 |
 
 ## Components and Interfaces
 
 | Component | Domain/Layer | Intent | Req Coverage | Key Dependencies | Contracts |
 |-----------|--------------|--------|--------------|------------------|-----------|
-| Bin | 入口 | Node の版を確かめて Cli を動かす | 1.4 | Cli (P0) | — |
-| Cli | 入出力 | 引数・対話・流れ・出力・終了コード | 1.1, 1.2, 1.3, 1.6, 1.7, 1.8, 2.1–2.3, 2.6, 2.7, 5.1, 5.5, 5.6, 5.7, 9.6 | Config, Plan, Target (P0) | Service |
-| ConfigSchema | データ | 設定の項目の定義 | 3.2 | — | State |
-| Config | 純粋な処理 | 設定の解釈・検証・補い・値の決定 | 2.2, 2.3, 2.5, 3.1, 3.3–3.7, 5.6 | ConfigSchema (P0) | Service |
-| Catalog | データ | 配置するものの一覧 | 4.1, 4.7, 7.1, 7.4, 8.2, 8.3 | — | State |
-| Ledger | 純粋な処理 | 配置の記録と書き換えの判定 | 4.5, 4.6, 10.3 | — | Service |
-| Blocks | 純粋な処理 | 目印の区画の操作 | 7.1–7.3, 8.1, 8.4–8.6 | — | Service |
-| SettingsHooks | 純粋な処理 | フックの組の統合 | 6.1–6.5 | Catalog (P0) | Service |
-| Plan | 純粋な処理 | 操作ごとの計画 | 2.4, 4.2–4.4, 4.6, 5.2–5.4, 5.7, 9.1–9.4, 9.7, 10.3 | Config, Ledger, Blocks, SettingsHooks, Catalog (P0) | Service |
-| Target | 入出力 | 対象の読み取りと計画の適用 | 1.5, 4.7, 4.8, 9.5 | Node の fs (P0) | Service |
-
-型は JSDoc（`@typedef`）で書く。以下は読みやすさのために TypeScript の記法で示す。
+| Catalog | データ | 配置・登録・除外・区画の文章の一覧と道筋の定数 | 3.1, 3.5, 4.1, 5.1–5.3, 6.1, 6.4 | なし | State |
+| ConfigSchema | データ（配置物） | 設定の項目定義 | 2.1, 2.3 | なし | State |
+| Config | 計算 | 設定の解釈・検証・補い・書き出し | 2.1–2.5 | ConfigSchema (P0) | Service |
+| Blocks | 計算 | 目印で囲んだ区画の操作 | 6.2, 6.3, 7.1, 7.4 | なし | Service |
+| HooksMerge | 計算 | 両ツールのフックの登録の統合と取り外し | 4.1–4.4, 7.1, 7.4 | Catalog (P0) | Service |
+| Plan | 計算 | 操作ごとの変更と中止の理由の計算 | 1.1–1.5, 2.1, 3.1–3.4, 5.1, 5.4, 5.5, 6.1, 7.1, 7.2, 8.3, 9.2, 9.3 | Config, Blocks, HooksMerge, Catalog (P0) | Service |
+| Target | 入出力 | 安全確認・読み取り・適用 | 8.1, 8.2, 8.5 | Plan の型 (P0) | Service |
+| Cli | 流れと表示 | 引数・操作の流れ・日本語の表示 | 1.3, 1.4, 1.6–1.8, 2.2, 3.3, 4.5, 5.5, 6.5, 7.3, 8.4, 8.5 | Target, Plan (P0) | Service |
+| Bin / NodeVersion | 入口 | Node の版の確認 | 8.6 | Cli (P0) | — |
 
 ### データ
 
-#### ConfigSchema（`lib/config-schema.mjs`）
+#### Catalog
 
 | Field | Detail |
 |-------|--------|
-| Intent | 設定ファイルの各項目の道筋・引数の名前・既定値・検証・質問文を 1 か所で定義する |
-| Requirements | 3.2 |
+| Intent | 一式として配置・登録・除外するものと、運用の区画の文章をデータで持つ |
+| Requirements | 3.1, 3.5, 4.1, 5.1, 5.2, 5.3, 6.1, 6.4 |
+
+**Responsibilities & Constraints**
+- データだけを持ち、他の `lib/` を読み込まない。下流の spec はここに項目を足す。
+- `files` の道筋は `DEPLOY_DIR` の下に限る。cc-sdd 本体のスキル・雛形は載せない（3.5）。
+- `gitignore` の行は、設定ファイル・配置先・`.claude/settings.json`・`.codex/hooks.json`・`.kiro/specs/`・`.kiro/steering/` に当たらない（6.4、試験で確かめる）。
 
 **Contracts**: State [x]
 
+##### State Management
 ```typescript
-type ConfigValue = string | boolean | Record<string, string>;
-
-interface ConfigField {
-  path: string;            // 設定ファイルの中の道筋。例 "ccSdd.version"
-  flag: string;            // 引数の名前。例 "cc-sdd-version"（--cc-sdd-version <値>）
-  kind: "string" | "boolean" | "map";
-  defaultValue: ConfigValue;
-  question: string;        // 対話で示す日本語の質問文
-  validate(value: ConfigValue): string | null; // 不正なら日本語の理由、正しければ null
-  mapKeys?: string[];      // kind が map のとき、対話で尋ねるキーの一覧（models では役割の名前）
-}
-
-const CONFIG_FORMAT = 1;
-const configFields: ConfigField[];
-```
-
-installer-core が定義する項目:
-
-| path | flag | kind | 既定値 | 検証 |
-|------|------|------|--------|------|
-| `ccSdd.version` | `cc-sdd-version` | string | `"3.1.0"` | `数字.数字.数字` と任意の `-` 以降 |
-| `ccSdd.lang` | `lang` | string | `"ja"` | `xx` または `xx-YY` の形（cc-sdd の対応言語の一覧は持たない） |
-| `codex.enabled` | `codex` | boolean | `false` | 真偽 |
-| `models` | `model` | map | `{}`（`mapKeys` は空） | 値が空でない文字列の対応 |
-
-- 引数の書き方: 文字列は `--lang ja`、真偽は `--codex yes|no`（`true|false` も受ける）、対応は `--model <役割>=<モデル>` を繰り返す。
-- 下流の spec は `configFields` に項目を足すか、`models` の `mapKeys` と既定値に役割を足す。どちらも、導入済みのリポジトリの次の `update` で既定値が補われる（`fillDefaults`）。
-
-#### Catalog（`lib/catalog.mjs`）
-
-| Field | Detail |
-|-------|--------|
-| Intent | 配置するファイル・フックの登録・`.gitignore` の行・CLAUDE.md の文章の一覧 |
-| Requirements | 4.1, 4.7, 7.1, 7.4, 8.2, 8.3 |
-
-**Contracts**: State [x]
-
-```typescript
-// 共有の定数（他の lib はここから import する）
 const DEPLOY_DIR = ".agent-hooks/cc-sdd-bootstrap";
-const OWNED_MARKER = "/.agent-hooks/cc-sdd-bootstrap/";     // 一式のフックの見分け
+const OWNED_MARKER = "/.agent-hooks/cc-sdd-bootstrap/";
 const CONFIG_PATH = ".cc-sdd-bootstrap.json";
-const LEDGER_PATH = ".agent-hooks/cc-sdd-bootstrap/installed.json";
+const CLAUDE_SETTINGS_PATH = ".claude/settings.json";
+const CODEX_HOOKS_PATH = ".codex/hooks.json";
+const AGENT_DOCS = { claude: "CLAUDE.md", codex: "AGENTS.md" } as const;
+const AGENT_SECTION_FILES = { claude: `${DEPLOY_DIR}/agent-section-claude.md`, codex: `${DEPLOY_DIR}/agent-section-codex.md` } as const;
+const AGENT_SECTION_MARKERS = {
+  begin: "<!-- cc-sdd-bootstrap:begin（この区画は cc-sdd の導入のたびに書き足される。編集しない） -->",
+  end: "<!-- cc-sdd-bootstrap:end -->",
+};
+const GITIGNORE_MARKERS = { begin: "# >>> cc-sdd-bootstrap（この区画は cc-sdd-bootstrap が管理する）", end: "# <<< cc-sdd-bootstrap" };
 
-interface CatalogFile {
-  path: string;                 // リポジトリのルートからの道筋。DEPLOY_DIR の下に限る
-  kind: "common" | "project";   // common は版で置き換える、project は無いときだけ置く
-  executable: boolean;          // true なら写した後に 0o755 にする
-}
-
+type Tool = "claude" | "codex";
+interface CatalogFile { path: string }                       // DEPLOY_DIR の下。同梱の同じ道筋から写す
 interface CatalogHook {
-  event: string;                // "SessionStart" など
+  tools: Tool[];                                             // 登録先
+  event: "SessionStart" | "UserPromptSubmit" | "PreToolUse" | "PostToolUse" | "Stop";
   matcher?: string;
-  command: string;              // 必ず "$CLAUDE_PROJECT_DIR/.agent-hooks/cc-sdd-bootstrap/" を含む
-  timeout?: number;
+  script: string;                                            // DEPLOY_DIR の中のファイル名
+  args: string[];
+  timeout?: number;                                          // 秒
 }
-
-interface CatalogSection {
-  id: string;                   // 並びと重複の確認に使う
-  body: string;                 // 管理区画に入れる文章（Markdown）
-}
-
+interface AgentSection { id: string; claude: string; codex: string } // Markdown。両ツールで同じ趣旨
 interface Catalog {
   files: CatalogFile[];
   hooks: CatalogHook[];
   gitignore: string[];
-  claudeSections: CatalogSection[];
+  agentSections: AgentSection[];
 }
 ```
+- installer-core 自身の項目:
+  - `gitignore`: `.claude/skills/kiro-*/`、`.agents/skills/kiro-*/`、`.kiro/settings/`、`/CLAUDE.md`、`/AGENTS.md`、`/.cache/`。
+  - `agentSections` の先頭 `bootstrap-intro`: この区画は導入のたびに書き足されること、配置先（`.agent-hooks/cc-sdd-bootstrap/`）を直接編集しないこと、プロジェクト独自の決まりは作業の前に `.kiro/steering/` の文書（`product.md`・`tech.md`・`structure.md` と独自の文書）から読むこと（5.2）。標準の文書の本文は書かない（5.3）。
+- 今ある session-install のスクリプト（`install-cc-sdd.mjs`・`install-rules.mjs`・`install-gate.mjs`）と Claude Code 向けの 2 つのフックは、session-install の設計で置き換わるまで、`tools: ["claude"]` の項目として残す。
 
-installer-core が載せる項目:
-- files: `install-cc-sdd.sh`（common、実行権限あり）、`install-gate.mjs`（common、実行権限なし）。
-- hooks: SessionStart `"$CLAUDE_PROJECT_DIR/.agent-hooks/cc-sdd-bootstrap/install-cc-sdd.sh" --claude`（timeout 600）、UserPromptSubmit `node "$CLAUDE_PROJECT_DIR/.agent-hooks/cc-sdd-bootstrap/install-gate.mjs" user-prompt-submit`（timeout 10）。
-- gitignore: `.claude/skills/kiro-*/`、`.kiro/settings/`、`/.cache/cc-sdd-install.failed`。
-- claudeSections: `cc-sdd-guide` — 見出し「cc-sdd の標準の決まり」、一文の説明（cc-sdd の導入物でコミットしないこと）、`@.kiro/settings/cc-sdd-guide.md` の行。
+#### ConfigSchema（`.agent-hooks/cc-sdd-bootstrap/config-schema.mjs`）
 
-不変条件（`test/catalog.test.mjs` で確かめる）: files の道筋は全て `DEPLOY_DIR` の下にあり、パッケージの中に実在する。hooks の command は全て一式の見分けの文字列を含む。gitignore は設定ファイル・配置物・配置の記録・`.claude/settings.json` に一致しない（7.4）。claudeSections の id は重複しない。
+```typescript
+type ConfigValue = string | number | boolean | Record<string, unknown>;
+interface ConfigField {
+  path: string;                 // "ccSdd.version" のような点区切り
+  type: "string" | "boolean" | "object";
+  defaultValue: ConfigValue;
+  allowed?: RegExp | ConfigValue[];
+  description: string;          // 使い方と作成時の表示に使う
+}
+const configFields: ConfigField[]; // installer-core: ccSdd.version（既定 "3.1.0"）、ccSdd.lang（既定 "ja"）。下流が足す
+```
+- 設定ファイルの形: `{ "format": 1, "ccSdd": { "version": "3.1.0", "lang": "ja" } }`（下流の項目が加わる）。`format` は 1 のまま（移行しない）。
 
-### 純粋な処理
+### 計算
 
-#### Config（`lib/config.mjs`）
-
-| Field | Detail |
-|-------|--------|
-| Intent | 設定ファイルの解釈・検証・補い・値の決定・書き出し |
-| Requirements | 2.2, 2.3, 2.5, 3.1, 3.3, 3.4, 3.5, 3.6, 3.7, 5.6 |
-
-**Contracts**: Service [x]
+#### Config
 
 ```typescript
 type ConfigObject = { format: number } & Record<string, unknown>;
-type ConfigError = { code: "CONFIG_UNREADABLE" | "CONFIG_INVALID"; messages: string[] }; // messages は「項目: 理由」
-
+type ConfigError = { code: "CONFIG_UNREADABLE" | "CONFIG_INVALID"; file: string; messages: string[] };
 function parseConfig(text: string): { ok: true; config: ConfigObject } | { ok: false; error: ConfigError };
-function validateConfig(config: ConfigObject, fields: ConfigField[]): ConfigError | null;
-function findUnknownKeys(config: ConfigObject, fields: ConfigField[]): string[];
+function validateConfig(config: ConfigObject, fields: ConfigField[]): ConfigError | null;  // 項目定義にある項目だけ
 function fillDefaults(config: ConfigObject, fields: ConfigField[]): { config: ConfigObject; filled: string[] };
-function resolveValues(input: {
-  base: ConfigObject | null;                 // init では null、update では読んだ設定
-  given: Record<string, ConfigValue>;        // 引数で渡された値（path をキーにする）
-  prompted: Record<string, ConfigValue>;     // 対話で答えた値
-  fields: ConfigField[];
-}): { config: ConfigObject; defaulted: string[] };
-function serializeConfig(config: ConfigObject): string; // 2 文字の字下げ、末尾に改行
+function serializeConfig(config: ConfigObject): string;  // 2 字下げ、末尾改行
 ```
-- 値の優先順位: 引数 > 対話の答え > 既存の値（update）> 既定値。update では引数が無い項目の既存の値を変えない（3.7）。
-- `fillDefaults` は、無い項目を既定値で補う。`map` の項目は、項目そのものがあっても、既定値のキーのうち無いキーだけを補う（例: 既存 `{ "a": "x" }` と既定 `{ "b": "y" }` から `{ "a": "x", "b": "y" }`）。既存のキーの値は変えない（3.5・3.7）。補った道筋は `models.b` の形で `filled` に入れる。
-- `findUnknownKeys` は葉の道筋を返す。`map` の項目の下のキーは知らない項目に数えない。`format` は知っている項目。
-- `format` が `CONFIG_FORMAT` より大きいときは `CONFIG_INVALID`（新しい導入コマンドで書かれた設定）として、導入コマンドの版を上げる案内を出す。
+- 項目定義に無い項目（旧版の `keepTemplates` など）は検証も削除もしない（2.5）。
 
-#### Ledger（`lib/ledger.mjs`）
-
-| Field | Detail |
-|-------|--------|
-| Intent | 配置の記録の解釈・作成と、書き換えの判定 |
-| Requirements | 4.5, 4.6, 10.3 |
-
-**Contracts**: Service [x]
+#### Blocks
 
 ```typescript
-interface LedgerEntry { kind: "common" | "project"; sha256: string }
-interface Ledger { format: 1; bootstrapVersion: string; files: Record<string, LedgerEntry> }
-
-// LEDGER_PATH は catalog から import する
-
-function parseLedger(text: string | null): Ledger | null;  // 無い・壊れているときは null
-function buildLedger(version: string, placed: Array<{ path: string; kind: "common" | "project"; content: Buffer }>): Ledger;
-function decideModified(input: {
-  ledger: Ledger | null; path: string; current: Buffer; incoming: Buffer | null;
-}): boolean;
-function sha256(content: Buffer): string;
-function serializeLedger(ledger: Ledger): string; // 2 文字の字下げ・末尾に改行。同じ配置なら同じ文字列（10.3）
-```
-- `decideModified`: 記録にあれば「今の SHA-256 ≠ 記録の SHA-256」。記録に無ければ「incoming があり、今の内容 ≠ incoming」（incoming が無い＝削除の対象なら、記録の無いファイルは消さずに中止の側へ倒す）。
-- 記録はキーを道筋の順に並べて書く（同じ配置なら同じ内容になり、10.3 で差分が出ない）。
-
-#### Blocks（`lib/blocks.mjs`）
-
-| Field | Detail |
-|-------|--------|
-| Intent | 目印の行で囲んだ区画を探す・作る・置き換える・取り除く |
-| Requirements | 7.1, 7.2, 7.3, 8.1, 8.4, 8.5, 8.6 |
-
-**Contracts**: Service [x]
-
-```typescript
-interface Markers { begin: string; end: string } // 行の先頭がこの文字列で始まれば目印の行とみなす
+type Markers = { begin: string; end: string };
 type BlockError = { code: "MARKERS_BROKEN"; file: string; detail: string };
-
-const CLAUDE_MD_MARKERS: Markers; // begin: "<!-- cc-sdd-bootstrap:begin"、end: "<!-- cc-sdd-bootstrap:end"
-const GITIGNORE_MARKERS: Markers; // begin: "# >>> cc-sdd-bootstrap"、end: "# <<< cc-sdd-bootstrap"
-
-function findBlock(text: string, markers: Markers): { found: false } | { found: true; start: number; end: number } | BlockError;
-function upsertBlock(input: { text: string | null; markers: Markers; beginLine: string; endLine: string; body: string; file: string }):
-  { text: string; created: boolean } | BlockError;
-function removeBlock(input: { text: string; markers: Markers; file: string }): { text: string; removed: boolean } | BlockError;
+function findBlock(text: string, markers: Markers): { start: number; end: number } | null | BlockError;
+function replaceBlock(text: string | null, markers: Markers, body: string): string | BlockError; // 無ければ末尾に足す
+function removeBlock(text: string, markers: Markers): string | BlockError;
 ```
-- 目印の行が片方だけ、順序が逆、または 2 組以上のときは `MARKERS_BROKEN`（8.5。`.gitignore` も同じ規則）。
-- 区画が無いときは末尾に足す（直前に空行を 1 つ）。区画の外の文字は変えない。改行の種類（LF・CRLF）は元のファイルに合わせる。
-- `removeBlock` は区画と、区画の直前に足した空行を取り除く。
+- 目印が片方だけ・順序が逆・複数組なら `BlockError`。改行の種類は元の文書に合わせる（今の実装を保つ）。
 
-#### SettingsHooks（`lib/settings-hooks.mjs`）
-
-| Field | Detail |
-|-------|--------|
-| Intent | `.claude/settings.json` の一式のフックの組を取り除き、カタログの組を後ろに足す |
-| Requirements | 6.1, 6.2, 6.3, 6.4, 6.5 |
-
-**Contracts**: Service [x]
+#### HooksMerge（新設。`settings-hooks.mjs` を置き換え）
 
 ```typescript
-// OWNED_MARKER は catalog から import する
-type SettingsError = { code: "SETTINGS_UNREADABLE"; detail: string };
-
-function mergeHooks(input: { text: string | null; hooks: CatalogHook[] }):
-  { text: string | null; changed: boolean } | SettingsError;  // hooks が空で結果が {} なら text は null（ファイルを消す）
+type HooksError = { code: "HOOKS_UNREADABLE"; file: string; detail: string };
+function buildCommand(tool: Tool, hook: CatalogHook): string;
+// claude: node "$CLAUDE_PROJECT_DIR/.agent-hooks/cc-sdd-bootstrap/<script>" <args>
+// codex : node "$(git rev-parse --show-toplevel)/.agent-hooks/cc-sdd-bootstrap/<script>" <args>
+function mergeHooks(input: { file: string; text: string | null; tool: Tool; hooks: CatalogHook[] }): { text: string; changed: boolean } | HooksError;
+function removeHooks(input: { file: string; text: string | null }): { text: string | null; changed: boolean } | HooksError;
 ```
-- 見分け方: フックの組の `hooks` の各要素のうち、`command` に `OWNED_MARKER` を含むものを一式のものとみなす。
-- 手順: 一式のものを取り除く → 空になった組・イベント・`hooks` の鍵を取り除く → カタログの各項目を 1 組ずつ、イベントの配列の後ろに足す（カタログの順）。
-- 結果を元と深く比べて同じなら `changed: false`（書かない。6.4）。書くときは 2 文字の字下げで整形する。
-- `uninstall` は `hooks: []` で呼ぶ。
+- 形: `{ "hooks": { "<イベント>": [ { "matcher"?: string, "hooks": [ { "type": "command", "command": string, "timeout"?: number } ] } ] } }`（両ツール共通）。
+- 一式の組 = `hooks` の中のコマンドに `OWNED_MARKER` を含む組。統合は「一式の組を外し、そのツール向けのカタログの組を各イベントの最後に足す」。利用者の組とその他の鍵は順序も保つ（4.2）。同じ版での再実行は同じ文字列になる（4.3）。
+- JSON として読めない、または `hooks` が期待の形でない場合は `HooksError`（4.4・7.4）。`removeHooks` で空になったイベントの配列は消す。
 
-#### Plan（`lib/plan.mjs`）
-
-| Field | Detail |
-|-------|--------|
-| Intent | 操作・対象の今の状態・カタログ・設定から、書く内容と中止の理由を計算する |
-| Requirements | 2.4, 4.2, 4.3, 4.4, 4.6, 5.2, 5.3, 5.4, 5.7, 9.1, 9.2, 9.3, 9.4, 9.7, 10.3 |
-
-**Contracts**: Service [x]
+#### Plan
 
 ```typescript
 type Operation = "init" | "update" | "uninstall";
-
-interface TargetSnapshot {                       // Target が読んだ対象の状態（無いファイルは null）
+interface TargetSnapshot {
   config: string | null;
-  ledger: string | null;
-  settings: string | null;
+  claudeSettings: string | null;
+  codexHooks: string | null;
   gitignore: string | null;
-  claudeMd: string | null;
-  files: Record<string, Buffer | null>;          // カタログと記録に載る道筋の今の内容
-  modes: Record<string, boolean | null>;         // 各道筋が実行権限を持つか（無いファイルは null）
-  ignoredPresent: string[];                      // catalog.gitignore の行のうち、対象に実在する道筋（uninstall の知らせに使う）
+  agentDocs: { claude: string | null; codex: string | null };   // uninstall と init の案内だけに使う
+  deployDirFiles: Record<string, Buffer>;                         // 配置先ディレクトリの今のファイル（道筋 → 中身）
+  sourceFiles: Record<string, Buffer>;                            // 同梱のカタログのファイル
 }
-
-interface PlanInput {
-  operation: Operation;
-  config: ConfigObject | null;                   // uninstall では null
-  snapshot: TargetSnapshot;
-  catalog: Catalog;
-  packageFiles: Record<string, Buffer>;          // 同梱の配置物の内容
-  bootstrapVersion: string;
-  force: boolean;
-}
-
 type FileChange =
-  | { action: "write"; path: string; content: Buffer; executable: boolean; note?: "restored" | "overwritten" | "permission-restored" }
-  | { action: "delete"; path: string };
-
-interface PlanBlock { kind: "modified" | "markers" | "settings"; path: string; detail: string }
-
-interface Plan {
-  changes: FileChange[];                         // 空なら「変更はありません」
-  blocks: PlanBlock[];                           // 1 つでもあれば書かずに中止
-  notices: string[];                             // 補った項目、作り直した区画など
-  pruneDirs: string[];                           // uninstall で、空なら消すディレクトリ（深い順）
-}
-
-function makePlan(input: PlanInput): Plan;
+  | { kind: "write"; path: string; content: string | Buffer; created: boolean }
+  | { kind: "delete"; path: string };
+type PlanAbort =
+  | { code: "CONFIG_EXISTS" } | { code: "CONFIG_MISSING" }
+  | ConfigError | HooksError | BlockError;
+type PlanNotice = { code: "EXISTING_AGENT_DOCS"; files: string[] } | { code: "CODEX_TRUST" } | { code: "CONFIG_CREATED"; defaults: string[] };
+type Plan = { ok: true; changes: FileChange[]; notices: PlanNotice[]; removed: string[] } | { ok: false; aborts: PlanAbort[] };
+function computePlan(input: { operation: Operation; snapshot: TargetSnapshot; catalog: Catalog; fields: ConfigField[] }): Plan;
+function renderAgentSection(tool: Tool, sections: AgentSection[]): string; // 目印の行・各区画の文章を空行で区切って連結
 ```
-- 計画が触れてよい道筋は、カタログの files、記録の files、`.cc-sdd-bootstrap.json`、`LEDGER_PATH`、`.claude/settings.json`、`.gitignore`、`CLAUDE.md` だけ（4.4・9.7）。`pruneDirs` は `.agent-hooks/cc-sdd-bootstrap`・`.agent-hooks`・`.claude`（init が `.claude/settings.json` のために作りうる）だけで、空のときだけ消える。
-- 内容が今と同じファイルは `changes` に入れない（10.3・5.7）。
-- `executable: true` のカタログ項目は、内容が同じでも実行権限が無ければ `permission-restored` 注記つきで書き直し、権限を戻す。
-- init・update: ファイルの扱いは「System Flows」の図に従う。続けて設定ファイル、記録、`.claude/settings.json`、`.gitignore`、CLAUDE.md の順に書く内容を計算する。
-- uninstall は設定の値を使わない（`config: null`）。設定ファイルが読めない・検証を通らないときも中止せず、Cli が警告（ファイル名と理由）を出して取り除きを進める（9.8）。設定ファイル自体は通常どおり消す。
-- uninstall: 共通部分の書き換えは中止の理由（`--force` で削除）、固有の部分の書き換えは残す。設定ファイルと記録を消す。統合の 3 ファイルは一式の部分を取り除き、結果が空文字（または `{}`）ならファイルを消す。`snapshot.ignoredPresent` が空でなければ、「`.gitignore` の除外が外れたため、次の道筋が git の未追跡のファイルとして現れる。cc-sdd の導入物はライセンスが異なるのでコミットせず、不要なら削除する」という知らせを、道筋の一覧つきで `notices` に入れる（9.7 で消さないものを、誤ってコミットさせないため）。
-- CLAUDE.md の区画の本文は、`claudeSections` の `body` をカタログの順に空行でつないだもの。目印の行には「この区画は cc-sdd-bootstrap が管理する。手で書き換えると update で戻る」を添える。
+- `init`・`update`:
+  - 設定: `init` は無ければ既定値で作る。あれば `CONFIG_EXISTS`。`update` は無ければ `CONFIG_MISSING`、あれば検証し、欠けた項目だけ補う。
+  - 配置先: `deployDirFiles` のうちカタログと 2 つの区画のファイルに無いものを `delete`、カタログのファイルと区画のファイルを内容が違えば `write`（3.1・3.4）。
+  - 2 つのフックの設定へ `mergeHooks`、`.gitignore` へ `replaceBlock`。
+  - CLAUDE.md・AGENTS.md は変更に載せない（5.4）。`init` でどちらかがあれば `EXISTING_AGENT_DOCS`（5.5）。
+- `uninstall`: 2 つのフックの設定へ `removeHooks`、CLAUDE.md・AGENTS.md があれば `removeBlock`（区画が無ければ変更なし）。それ以外は変更に載せない（7.2）。
+- 変更の道筋は `ALLOWED_PATHS`（設定ファイル・配置先の下・2 つのフックの設定・`.gitignore`・`uninstall` のときの CLAUDE.md・AGENTS.md）に限る。外れたら実装の誤りとして例外にする（8.3）。
+- 中止の理由はすべて集めてから返す。1 つでもあれば変更は空。
 
 ### 入出力
 
-#### Target（`lib/target.mjs`）
-
-| Field | Detail |
-|-------|--------|
-| Intent | 対象と同梱のファイルを読み、計画を適用する |
-| Requirements | 1.5, 4.7, 4.8, 9.5 |
-
-**Contracts**: Service [x]
+#### Target
 
 ```typescript
-interface ApplyResult {
-  ok: boolean;
-  done: FileChange[];
-  failed?: { change: FileChange; message: string };
-  pending: FileChange[];
-  prunedDirs: string[];
-}
-
-function isGitRoot(dir: string): boolean;        // dir 直下に .git（ディレクトリまたはファイル）があるか
-function readSnapshot(root: string, paths: string[], ignored: string[]): TargetSnapshot;
-function readPackageFiles(packageRoot: string, catalog: Catalog): Record<string, Buffer>;
-function readConfigState(root: string): { kind: "missing" | "file" | "other" };
-function readPackageVersion(packageRoot: string): string;
-function applyPlan(root: string, plan: Plan): ApplyResult;
+function isGitRoot(dir: string): boolean;                                  // .git の有無
+function checkPathSafety(root: string, relPath: string): { ok: true } | { ok: false; reason: "OUTSIDE" | "SYMLINK"; at: string };
+function readSnapshot(root: string, packageRoot: string, catalog: Catalog): TargetSnapshot | { ok: false; reason: "OUTSIDE" | "SYMLINK"; at: string };
+type ApplyResult = { ok: boolean; done: FileChange[]; failed?: { change: FileChange; message: string }; pending: FileChange[] };
+function applyPlan(root: string, changes: FileChange[]): ApplyResult;      // 順に書き、失敗したら止める。空になったディレクトリは消す
 ```
-- 設定ファイルの状態と同梱 package.json の版は Target が読み、Cli はファイルシステムに直接アクセスしない。
-- `readSnapshot` は各ファイルの実行権限の有無を `modes` に記録する。実行権限を直す計画も `applyPlan` で適用し、0o755 にする。
-- `readSnapshot` は計画で扱う管理対象の道筋について、root から対象までの既存要素を `lstat` し、シンボリックリンクを通る場合は日本語の理由と道筋を示して失敗する。`applyPlan` も各変更の直前に同じ検査を行い、リンク経由の書き込み・削除を拒む（ignoredPresent の表示用一覧は除く）。
-- 書き込みは、同じディレクトリの一時ファイルに書いてから名前を変える（壊れたファイルを残さない）。既存のファイルの権限は保つ。`executable` のファイルは 0o755 にする（4.7）。
-- 写す元と先が同じファイル（自己適用）でも、内容が同じなら計画に入らないので書かない。
-- 1 つ失敗したらそこで止め、`done`・`failed`・`pending` を返す（4.8）。
-- `pruneDirs` は中身が空のときだけ消す（9.5）。
-- `readSnapshot` は `ignored`（`catalog.gitignore`）の各行を対象の道筋として調べ、実在するものを `ignoredPresent` に入れる。先頭の `/` は取り、最後の区切りの中の `*` だけを展開する（`.claude/skills/kiro-*/` など）。それより複雑な書き方は調べない。
+- 読み取りと書き込みの前に、すべての対象の道筋で安全確認を行う（8.2）。配置先ディレクトリの一覧はシンボリックリンクをたどらない。
 
-#### Cli（`lib/cli.mjs`）と Bin（`bin/cc-sdd-bootstrap.mjs`）
-
-| Field | Detail |
-|-------|--------|
-| Intent | 引数・対話・操作の流れ・出力・終了コード |
-| Requirements | 1.1, 1.2, 1.3, 1.4, 1.6, 1.7, 1.8, 2.1, 2.2, 2.3, 2.6, 2.7, 5.1, 5.5, 5.6, 5.7, 9.6 |
-
-**Contracts**: Service [x]
+#### Cli
 
 ```typescript
-interface CliIo {
-  cwd: string;
-  stdin: NodeJS.ReadableStream; stdout: NodeJS.WritableStream; stderr: NodeJS.WritableStream;
-  interactive: boolean;                          // stdin と stdout の両方が端末のとき true
-  packageRoot: string;
-}
-
-type ParsedArgs =
-  | { kind: "help" }
-  | { kind: "usage-error"; message: string }
-  | { kind: "run"; operation: Operation; given: Record<string, ConfigValue>; force: boolean };
-
-function parseCliArgs(argv: string[], fields: ConfigField[]): ParsedArgs;
-function promptValues(io: CliIo, fields: ConfigField[], base: ConfigObject | null, given: Record<string, ConfigValue>): Promise<Record<string, ConfigValue>>;
-function runCli(argv: string[], io: CliIo): Promise<number>; // 終了コードを返す
+type ParsedArgs = { kind: "help" } | { kind: "usage-error"; message: string } | { kind: "run"; operation: Operation };
+function parseArgs(argv: string[]): ParsedArgs;   // 受け付けるのは init・update・uninstall・help・--help・-h だけ
+function buildUsage(fields: ConfigField[]): string;
+function main(argv: string[], io: { cwd: string; out: (s: string) => void; err: (s: string) => void }): number; // 終了コード
 ```
-- 引数: 1 つめが操作（`init`・`update`・`uninstall`）。指定は `--help`/`-h`、`--force`、設定の定義から作る `--<flag>`。設定の項目の指定は `init` と `update` で受け付ける（5.6）。`uninstall` に渡したら使い方の誤り。`--force` は 3 つの操作すべてで受け付ける。`init` では、記録も設定ファイルも無いのに配置先に内容の違う同名のファイルがある（手で置いた、別の方法で写した、など）ときに、それを置き換える。
-- 対話: `init` で `interactive` のときだけ、引数で渡されていない項目を尋ねる（`[既定値]` を示し、空の入力は既定値。不正なら理由を示して尋ね直す）。`update` では尋ねない。
-- 終了コード: 0＝成功・変更なし・導入済みの init（2.6）・使い方の表示、1＝操作の失敗（Node の版、git の最上位でない、設定の不正（update のとき。uninstall は警告して続ける。9.8）・設定ファイルの道筋がファイルでない・目印・settings の不正、書き換えによる中止、未導入の update・uninstall、書き込みの失敗）、2＝使い方の誤り。
-- 出力: 成功時は「作成」「更新」「削除」に分けた道筋の一覧、補った項目、警告（知らない項目）。init の成功時は、設定ファイルと配置物をコミットすること、cc-sdd 本体は次のセッション開始時に入ること、版の固定は `npx github:nekono-dev/cc-sdd-bootstrap#<タグ>` で行えることを示す（2.7）。uninstall の成功時は、Plan の `notices`（除外が外れて残る cc-sdd の導入物など）も示す。中止時は理由ごとに次の手（`--force` で再実行、目印を直す、`init` を使う、など）を示す（1.7）。
-- Bin は `lib/node-version.mjs` の `decideNodeSupported(process.versions.node)` で Node の版（先頭の数）を確かめ、22 未満なら必要な版を出して 1 で終わる（1.4）。その後で `lib/cli.mjs` を動的に読み込む（古い Node で読み込みの段階の誤りにしないため）。
+- 表示（日本語）:
+  - 成功（8.4）: 作成・更新・削除した対象の一覧。設定を作ったら既定値と直接編集の案内（2.2）。配置先は直接編集せず差分は git で確かめる（3.3）。Codex のフックは信頼の承認が要り、未承認なら AGENTS.md の指示に従う（4.5）。設定と配置物はコミットし、cc-sdd 本体は session-install の手順で入る（6.5）。既存の文書の案内（5.5）。
+  - `uninstall`（7.3）: 外した登録・区画と、残る設定ファイル・配置物・除外設定。
+  - 中止: 理由ごとにファイル名・問題箇所・直し方。
+  - 途中の失敗（8.5）: 失敗した対象と理由、済んだ対象、未処理の対象、再実行する操作。
 
 ## Data Models
 
-### 設定ファイル `.cc-sdd-bootstrap.json`
-```json
-{
-  "format": 1,
-  "ccSdd": { "version": "3.1.0", "lang": "ja" },
-  "codex": { "enabled": false },
-  "models": {}
-}
-```
-- コミットする。利用者が手で書き換えてよい。`format` は形式の版で、形式を変えるときに上げる。
-
-### 配置の記録 `.agent-hooks/cc-sdd-bootstrap/installed.json`
-```json
-{
-  "format": 1,
-  "bootstrapVersion": "0.1.0",
-  "files": {
-    ".agent-hooks/cc-sdd-bootstrap/install-cc-sdd.sh": { "kind": "common", "sha256": "…" },
-    ".agent-hooks/cc-sdd-bootstrap/install-gate.mjs": { "kind": "common", "sha256": "…" }
-  }
-}
-```
-- コミットする（別の clone の update でも書き換えを検出するため。4.5）。`bootstrapVersion` は `package.json` の `version`。
-
-### 統合した後の形（例）
-- `.claude/settings.json`: 既存の各イベントの配列の後ろに、一式の組 `{ "hooks": [ { "type": "command", "command": "…/.agent-hooks/cc-sdd-bootstrap/…", "timeout": … } ] }` が並ぶ。
-- `.gitignore`: 末尾に `# >>> cc-sdd-bootstrap（この区画は cc-sdd-bootstrap が管理する）` から `# <<< cc-sdd-bootstrap` までの区画。
-- `CLAUDE.md`: 末尾に `<!-- cc-sdd-bootstrap:begin … -->` から `<!-- cc-sdd-bootstrap:end -->` までの区画。
+### Data Contracts & Integration
+- **運用の区画のファイル**（session-install が読む）: `AGENT_SECTION_FILES` の 2 つ。中身は `AGENT_SECTION_MARKERS.begin` の行で始まり `end` の行で終わる 1 つの区画で、末尾は改行。session-install は解釈せず、そのまま文書の末尾へ足す。
+- **カタログ**（下流が足す）: 上の `Catalog` の形。`agentSections` は配列の順に区画へ並ぶ（installer-core の `bootstrap-intro` が先頭）。
+- **設定の項目定義**（下流が足す）: `ConfigField`。下流の項目も `init` で既定値が入り、`update` で欠けた項目が補われる。
 
 ## Error Handling
 
-### Error Strategy
-- 中止の条件は全て計画の段階で集め、一度に表示する（1 つ直して再実行、を繰り返させない）。
-- 書き込みの段階の失敗だけが「一部が変わった」状態を作る。そのときは変えたもの・失敗したもの・残りを示す（4.8）。
-
-### Error Categories and Responses
-
-| 種類 | 例 | 終了コード | 表示する次の手 |
-|------|----|-----------|----------------|
-| 使い方の誤り | 未知の操作・指定、値の形の誤り | 2 | 使い方 |
-| 前提の不足 | Node 22 未満、git の最上位でない | 1 | 必要な版 / リポジトリの最上位で実行する |
-| 状態の不一致 | 未導入の update・uninstall、導入済みの init | 1（導入済みの init は 0） | `init` / `update` を使う |
-| 内容の不正 | 設定の不正・知らない新しい形式（update のとき）、壊れた目印、読めない `.claude/settings.json` | 1 | ファイルと項目と理由。直してから再実行 |
-| 設定の不正（uninstall） | 設定ファイルが読めない・検証を通らない | 0（取り除きが成功すれば） | 警告（ファイル名と理由）を出し、設定の値を使わずに取り除きを続ける（9.8）。設定ファイルの道筋がディレクトリなどファイルでないときは 1 |
-| 利用者の書き換え | 書き換えられた共通部分 | 1 | 一覧と `--force` での再実行 |
-| 書き込みの失敗 | 権限・容量 | 1 | 変えたもの・失敗したもの・残り |
-
-### Monitoring
-- 記録や送信はしない。利用者向けの出力だけ。予期しない例外は標準エラーに理由を出して 1 で終わる。
+| 状況 | 扱い | 要件 |
+|---|---|---|
+| git の最上位でない | 何も書かず、最上位で実行するよう案内して失敗 | 8.1 |
+| Node.js 22 未満 | 何も読み込まず、必要な版を表示して失敗 | 8.6 |
+| 未知の操作・指定 | 何も書かず、問題の指定と使い方を表示して失敗 | 1.8 |
+| init で設定がある／update で設定が無い | 何も書かず、正しい操作を案内（update が無いときは失敗） | 1.3, 1.4 |
+| 設定が読めない・不正 | 何も書かず、ファイル名・項目・理由を表示して失敗 | 2.4 |
+| フックの設定が読めない | 何も書かず、ファイル名と理由を表示して失敗 | 4.4, 7.4 |
+| 区画の目印が壊れている | 何も書かず、ファイルと目印の状態・直し方を表示して失敗 | 7.4 |
+| リポジトリの外・シンボリックリンク | 何も書かず、対象と理由を表示して失敗 | 8.2 |
+| 書き込みの途中の失敗 | 残りを行わず、済んだ・失敗・未処理・再実行を表示して失敗 | 8.5 |
 
 ## Testing Strategy
 
-### Unit Tests
-- Config: 既定値の補い（3.5）と、既存の値を変えないこと（3.7）。引数 > 対話 > 既存 > 既定値の優先順位（2.2・2.3・5.6）。項目ごとの検証の理由（3.3・3.4）。`map` の下のキーを知らない項目に数えないこと（3.6）。`map` の項目で、無いキーだけが既定値で補われ、既存のキーの値が変わらないこと（3.5・3.7）。
-- Ledger: 記録の SHA-256 と今の内容の比較（4.6）。記録が無いときの安全側の判定。同じ配置で同じ記録の文字列になること（10.3）。
-- Blocks: 区画の作成・置き換え・削除で区画の外が 1 文字も変わらないこと（7.2・8.4）。片方だけ・2 組・逆順の目印で `MARKERS_BROKEN`（8.5）。CRLF の保持。
-- SettingsHooks: 利用者のフック・許可・プラグインの設定を残すこと（6.2）。前の版の一式の組を置き換え重複させないこと（6.3）。2 回続けて同じ結果（6.4）。読めない JSON（6.5）。
-- Plan: 「ファイルの扱い」の図の各分岐（4.2・4.3・5.2・5.3・5.4・9.3・9.4）。記録の無い init で同名の違うファイルがあると中止し、`--force` で置き換わること。uninstall で `ignoredPresent` があると知らせが出ること。触れてよい道筋の外に変更を出さないこと（4.4・9.7）。
+- **単体（計算）**
+  - `hooks-merge`: Claude Code と Codex の両方で、利用者の組と他の鍵を保ったまま一式の組だけ置き換わる（4.2）。再実行で同じ文字列（4.3）。読めない JSON・形の違う `hooks` で `HooksError`（4.4）。Codex 向けのコマンドがシェルの展開の形になる（4.1）。`removeHooks` で一式の組だけ消える（7.1）。
+  - `plan`: 旧版の `installed.json` などカタログに無い配置先のファイルが `delete` に載る（3.4・9.2）。CLAUDE.md・AGENTS.md が init・update の変更に載らない（5.4）。init で既存の文書があれば案内が付く（5.5）。update の再実行で変更が空（1.5・9.3）。中止の理由があれば変更が空（1.3・1.4・2.4・7.4）。変更の道筋が `ALLOWED_PATHS` に収まる（8.3）。`renderAgentSection` が目印の行で囲んだ 1 つの区画を返し、両ツールで `bootstrap-intro` を先頭に持つ（5.1・5.2）。
+  - `config`: 欠けた項目だけ補い、未知の項目を残す（2.5）。不正な値で `CONFIG_INVALID`（2.3・2.4）。
+  - `blocks`: 片方だけ・逆順・複数組で `BlockError`。区画の外の文章は変わらない（6.2）。
+- **カタログの試験**: カタログのファイルが同梱に実在し `package.json` の `files` と一致する（3.1・8.7）。cc-sdd 本体の道筋（`skills/kiro-*`・`settings/templates`）を含まない（3.5）。`.gitignore` の行が共有物に当たらない（6.4）。区画の文章に cc-sdd の標準の文書の見出し（`# Agentic SDLC and Spec-Driven Development`）が無い（5.3）。
+- **通しの試験（一時の git リポジトリ）**: `init` → 配置先・2 つのフックの設定・`.gitignore`・設定ファイルが揃う（1.1・2.1・4.1・6.1）→ 利用者のフックと `.gitignore` の行を足して `update` → 利用者の分が残る（4.2・6.2）→ 再実行で変更なし（1.5）→ CLAUDE.md・AGENTS.md に区画を足して `uninstall` → 登録と区画だけ外れ、標準の文書の部分・設定・配置物・`.gitignore` が残る（7.1・7.2）。git の最上位でない・シンボリックリンクの経路で何も変わらない（8.1・8.2）。書き込みの途中の失敗（書けないディレクトリ）で表示が出る（8.5）。
+- **実機の確認（PoC 済み）**: Codex のフックのコマンドの形は `poc/codex-hook-path/run.mjs`。自己適用の後に、このリポジトリで `claude -p` と `codex exec` を起動し、登録したフックが動くことを確かめる（9.1、`handoff-self-apply.md` の手順 4）。
 
-### Integration Tests（`test/cli.e2e.test.mjs`。一時ディレクトリに git のリポジトリを作り、`node bin/cc-sdd-bootstrap.mjs` を実行する）
-- 非対話の `init`（引数なし）で既定値が使われ、使った値が表示され、設定ファイル・配置物・記録・3 つの統合が揃う（2.3・2.4）。直後の `update` が「変更はありません」（5.7・10.3）。
-- 既存の `.claude/settings.json`（利用者のフックあり）・`.gitignore`・CLAUDE.md がある状態で `init` → `uninstall` し、元の内容に戻る（6.2・7.2・8.4・9.1・9.2）。
-- 共通部分を書き換えて `update` → 終了コード 1 で何も変わらない。`--force` で置き換わる（5.2・5.3）。同様に `uninstall`（9.3・9.4）。
-- 導入済みの `init` は何も変えずに 0、未導入の `update`・`uninstall` は何も変えずに 1（2.6・5.5・9.6）。git の最上位でない場所では 1（1.5）。未知の指定は 2（1.3）。
-- 書き込みの失敗（書けないディレクトリを用意する）で、変えたもの・失敗したもの・残りが表示される（4.8）。
+## Migration Strategy
 
-### Package Tests（`test/package.test.mjs`）
-- `npm pack --dry-run --json` の一覧に `bin/`・`lib/`・カタログの全てのファイルが含まれ、`installed.json`・`test/`・`poc/`・`.kiro/` が含まれない（下流の spec がカタログにファイルを足したとき、`package.json` の `files` への追記漏れをここで見つける）。
-
-### Self-application Check（自己適用のタスクで確かめる）
-- このリポジトリで `node bin/cc-sdd-bootstrap.mjs init` の後に `update` が「変更はありません」（10.3）。
-- `poc/self-install/run.sh` が新しい道筋で全て OK になる（自己適用の後も cc-sdd が入り、失敗で止まる）。
-- `scripts/agent/` が無く、`.claude/settings.json` に暫定のフックの登録が無い（10.2）。
-
-## Security Considerations
-- 導入コマンドは、カタログに載った道筋と決まった 5 つのファイル（設定・記録・settings・`.gitignore`・CLAUDE.md）以外に書かない。道筋はカタログの不変条件（`DEPLOY_DIR` の下）で縛り、`..` を含む道筋を拒む。
-- 管理対象の道筋は `readSnapshot` と各変更の適用直前に `lstat` で検査し、root から対象までの既存要素にシンボリックリンクがあれば読み取り・書き込み・削除を拒む。表示用の `ignoredPresent` の列挙はこの拒否の対象外とする。
-- 設定ファイルの値をコマンドの文字列に埋め込まない（フックのコマンドはカタログの固定の文字列）。
-
-## Migration Strategy（このリポジトリの自己適用）
-1. 導入コマンド（`package.json`・`bin/`・`lib/`・テスト）を実装する。
-2. 暫定の 2 本を `.agent-hooks/cc-sdd-bootstrap/` に移し、文言を直す。`.claude/settings.json` の暫定の登録、CLAUDE.md の暫定の節と「cc-sdd の標準の決まり」の節、`.gitignore` の重なる行を手で消す。
-3. `node bin/cc-sdd-bootstrap.mjs init` を実行し、`update` で変更が無いことと、`poc/self-install/run.sh` が通ることを確かめる。
-4. steering（structure.md・tech.md）と README を更新する。
-- 2 と 3 は 1 つのコミットにする（途中の状態で cc-sdd が入らないセッションを作らない）。
+- 利用先: 旧版の導入済みのリポジトリでも `update` で揃う（旧版の `installed.json` は 3.4 の片付けで消える）。旧版の設定の項目は使わない項目として残る。CLAUDE.md の旧版の管理区画は、session-install の導入で CLAUDE.md が置き換わるときに消える。
+- このリポジトリ: installer-core と session-install の実装が済んだら、`handoff-self-apply.md` の手順で、決まりを `.kiro/steering/project-rules.md` へ移し、CLAUDE.md の追跡を外し、`node bin/cc-sdd-bootstrap.mjs update` を実行する（9.1〜9.4）。それまでは今の配置物とフックのまま動く。
