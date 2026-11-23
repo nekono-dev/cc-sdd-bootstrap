@@ -5,15 +5,15 @@ import { fileURLToPath } from 'node:url';
 import { pathToFileURL } from 'node:url';
 import { spawnSync } from 'node:child_process';
 import {
-  CONFIG_FILE, UPDATE_COMMAND, FAILURE_RECORD, STATE_PATH, LOCK_PATH, INSTALL_DEADLINE_MS, RECORD_IN_PROGRESS, SECTION_BEGIN_MARKER,
+  CONFIG_FILE, UPDATE_COMMAND, FAILURE_RECORD, STATE_PATH, LOCK_PATH, INSTALL_DEADLINE_MS, SECTION_BEGIN_MARKER,
   RETRY_COMMAND,
   readInstallConfig, parseState, buildState, decideInstall,
-  removalTargets, buildManifest, npxArgs, messageInstalled, messageSkipped,
-  messageGuide, failureRecordText, messageFailed
+  removalTargets, buildManifest, npxArgs, messageInstalled, messageSkipped, messageBlocked, messageUsage
 } from './install-rules.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const absolute = (rel, repoRoot = root) => path.join(repoRoot, rel);
+const writeOutput = (text) => fs.writeSync(1, text);
 const writeRecord = (rel, text) => {
   fs.mkdirSync(path.dirname(absolute(rel)), { recursive: true });
   fs.writeFileSync(absolute(rel), text, 'utf8');
@@ -133,7 +133,7 @@ function performInstall(config) {
   fs.closeSync(lockFd);
   const manifestPaths = [];
   try {
-    writeRecord(FAILURE_RECORD, RECORD_IN_PROGRESS);
+    writeRecord(FAILURE_RECORD, 'cc-sdd の導入中です。');
     const entries = { claude: [], codex: [] };
     for (const [tool, dir] of [['claude', '.claude/skills'], ['codex', '.agents/skills']]) {
       rejectLinkedPath(dir);
@@ -166,9 +166,9 @@ function performInstall(config) {
     fs.writeFileSync(stateTmp, JSON.stringify(state, null, 2), 'utf8');
     fs.renameSync(stateTmp, absolute(STATE_PATH));
     fs.rmSync(absolute(FAILURE_RECORD), { force: true });
-    process.stdout.write(`${messageInstalled(config)}\n${messageGuide()}\n`);
+    writeOutput(`${messageInstalled(config)}\n`);
   } catch (error) {
-    try { writeRecord(FAILURE_RECORD, failureRecordText(error.message)); }
+    try { writeRecord(FAILURE_RECORD, error.message); }
     catch (recordError) { process.stderr.write(`失敗の記録を書けませんでした: ${recordError.message}\n`); }
     const failure = error instanceof Error ? error : new Error(String(error));
     recordedInstallErrors.add(failure);
@@ -180,10 +180,14 @@ function performInstall(config) {
 }
 
 function runCli() {
-const hookMode = process.argv[2] === 'session-start';
-const argsValid = process.argv.length === 2 || (process.argv.length === 3 && hookMode);
-if (!argsValid) {
-  process.stderr.write('使い方: node .agent-hooks/cc-sdd-bootstrap/install-cc-sdd.mjs [session-start]\n');
+const args = process.argv.slice(2);
+if (args.length === 1 && args[0] === '--help') {
+  writeOutput(`${messageUsage()}\n`);
+  process.exitCode = 0;
+  return;
+}
+if (args.length !== 0) {
+  fs.writeSync(2, `${messageUsage()}\n`);
   process.exit(2);
 }
 try {
@@ -193,29 +197,32 @@ try {
   const config = checked.config;
   const decision = decideInstall(facts);
   if (decision.action === 'skip') {
-    process.stdout.write(`${messageSkipped(config)}\n${messageGuide()}\n`);
+    writeOutput(`${messageSkipped(config)}\n`);
   } else if (decision.action === 'install') {
     performInstall(config);
   } else {
-    process.stdout.write(`${decision.action === 'busy' ? '導入中の印があります。' : decision.reason}\n`);
+    writeOutput(`${messageBlocked(decision.action === 'busy'
+      ? { kind: 'busy', stale: decision.stale }
+      : { kind: 'failed', detail: decision.reason })}\n`);
     process.exitCode = 1;
     process.exit();
   }
   process.exitCode = 0;
 } catch (error) {
   if (error instanceof BusyInstallError) {
-    process.stdout.write(`${error.message}\n`);
+    const facts = readInstallFacts();
+    writeOutput(`${messageBlocked({ kind: 'busy', stale: facts.lock.present && facts.lock.ageMs > 660000 })}\n`);
     process.exitCode = 1;
     return;
   }
   const reason = error instanceof Error ? error.message : String(error);
   // 失敗記録は導入中の印を持つ実行だけが更新する。
   if (!(error instanceof Error && recordedInstallErrors.has(error)) && !fs.existsSync(absolute(LOCK_PATH))) {
-    try { writeRecord(FAILURE_RECORD, failureRecordText(reason)); }
+    try { writeRecord(FAILURE_RECORD, reason); }
     catch (recordError) { process.stderr.write(`失敗の記録を書けませんでした: ${recordError.message}\n`); }
   }
-  process.stdout.write(`${messageFailed(reason)}\n`);
-  process.exitCode = hookMode ? 0 : 1;
+  writeOutput(`${messageBlocked({ kind: 'failed', detail: reason })}\n`);
+  process.exitCode = 1;
 }
 }
 

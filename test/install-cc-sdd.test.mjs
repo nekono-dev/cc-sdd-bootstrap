@@ -28,6 +28,7 @@ test('古い印と新しい印を経過時間で区別し、どちらも導入�
     const result = runEntry(repo);
     assert.equal(result.status, 1);
     assert.deepEqual(result.npxCalls, []);
+    assert.match(result.stdout, stale ? /rm \.cache\/cc-sdd-install\.lock/ : /別のセッションで導入中/);
     const facts = readInstallFacts(repo.root);
     assert.ok(facts.lock.ageMs >= age - 1000 && facts.lock.ageMs <= age + 1000);
     assert.equal(facts.lock.ageMs > 660000, stale);
@@ -54,6 +55,33 @@ function awaitDecision(facts) {
   // 判断関数は純粋な規則として既存モジュールから読む。
   return decideInstall(facts);
 }
+
+test('引数なしで導入し結果と版・言語を表示し、再実行は省く', (t) => {
+  const repo = makeRepo(); t.after(repo.cleanup);
+  repo.putSections();
+  const installed = runEntry(repo);
+  assert.equal(installed.status, 0);
+  assert.match(installed.stdout, /導入しました/);
+  assert.match(installed.stdout, /3\.1\.0.*ja/);
+  const skipped = runEntry(repo);
+  assert.equal(skipped.status, 0);
+  assert.match(skipped.stdout, /省きました/);
+  assert.match(skipped.stdout, /3\.1\.0.*ja/);
+  assert.deepEqual(skipped.npxCalls, []);
+});
+
+test('--help は利用手順を表示し、旧引数は使い方と終了コード 2 を返す', (t) => {
+  const repo = makeRepo(); t.after(repo.cleanup);
+  const help = runEntry(repo, ['--help']);
+  assert.equal(help.status, 0);
+  assert.match(help.stdout, /準備スクリプト/);
+  assert.match(help.stdout, /<リポジトリ>/);
+  assert.deepEqual(help.npxCalls, []);
+  const old = runEntry(repo, ['session-start']);
+  assert.equal(old.status, 2);
+  assert.match(old.stderr, /準備スクリプト/);
+  assert.deepEqual(old.npxCalls, []);
+});
 
 test('両文書の区画の有無を読み取り、片方でも無ければ入れ直す', (t) => {
   for (const absent of [null, 'CLAUDE.md', 'AGENTS.md']) {
@@ -163,6 +191,8 @@ test('失敗・期限切れ・区画ファイル不足では失敗記録を残�
     const result = runEntry(repo, [], { mode: scenario.mode, env: scenario.env });
     assert.equal(result.status, 1);
     assert.ok(repo.read(FAILURE_RECORD));
+    assert.match(result.stdout, /理由:|期限|読み取れません|運用の区画/);
+    assert.match(result.stdout, /再試行/);
     assert.equal(repo.read(LOCK_PATH), null);
   }
 });

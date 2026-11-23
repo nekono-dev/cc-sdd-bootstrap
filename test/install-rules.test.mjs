@@ -1,4 +1,4 @@
-import { readInstallConfig, parseState, buildState, FAILURE_RECORD, STATE_PATH, LOCK_PATH, RETRY_COMMAND, NPX_TIMEOUT_MS, STALE_LOCK_MS, decideInstall, removalTargets, buildManifest, npxArgs, RECORD_IN_PROGRESS, messageInstalled, messageSkipped, messageGuide, failureRecordText, messageFailed, messageReadSkillDirectly, messageBlocked, messageUsage } from "../.agent-hooks/cc-sdd-bootstrap/install-rules.mjs";
+import { readInstallConfig, parseState, buildState, FAILURE_RECORD, STATE_PATH, LOCK_PATH, RETRY_COMMAND, NPX_TIMEOUT_MS, STALE_LOCK_MS, decideInstall, removalTargets, buildManifest, npxArgs, messageInstalled, messageSkipped, messageReadSkillDirectly, messageBlocked, messageUsage } from "../.agent-hooks/cc-sdd-bootstrap/install-rules.mjs";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
@@ -272,33 +272,25 @@ test("導入したときの文は、両ツールの導入物と両文書を書�
   assert.doesNotMatch(installed, /変更していません/);
 });
 
-test("利用者向けの省略・案内の文に必要な情報がある", () => {
+test("利用者向けの省略の文に版・言語がある", () => {
   const skipped = messageSkipped(config);
   assert.equal(skipped.split("\n").length, 1);
   for (const part of [config.version, config.lang]) assert.ok(skipped.includes(part));
   assert.match(skipped, /省/);
-  const guide = messageGuide();
-  assert.match(guide, /スキル一覧に載らないスキル/);
-  assert.match(guide, /\.claude\/skills\/<名前>\/SKILL\.md/);
-  assert.match(guide, /Read/);
 });
 
-test("失敗の記録と通知に理由および Claude の外での再試行方法がある", () => {
+test("停止の通知に理由と再試行方法がある", () => {
   const reason = "取得に失敗しました";
-  assert.ok(RECORD_IN_PROGRESS.startsWith("cc-sdd の導入が完了していません（導入中、または中断）。"));
-  assert.ok(RECORD_IN_PROGRESS.includes(RETRY_COMMAND));
-  assert.match(RECORD_IN_PROGRESS, /Claude の外/);
-  const record = failureRecordText(reason);
-  assert.match(record, /^cc-sdd の導入に失敗しました。/);
-  assert.ok(record.includes(`理由: ${reason}`));
-  assert.ok(record.includes(`再試行: ${RETRY_COMMAND}`));
-  assert.match(record, /Claude の外で実行する/);
-  const failed = messageFailed(reason);
+  const failed = messageBlocked({ kind: "failed", detail: reason });
   assert.ok(failed.includes(reason));
   assert.ok(failed.includes(RETRY_COMMAND));
   assert.match(failed, /Claude の外/);
-  assert.match(failed, /次の入力.*止/);
-  assert.match(failed, /新しいセッション.*再試行/);
+  const fresh = messageBlocked({ kind: "busy", stale: false });
+  assert.match(fresh, /別のセッション/);
+  assert.ok(fresh.includes(RETRY_COMMAND));
+  const stale = messageBlocked({ kind: "busy", stale: true });
+  assert.match(stale, /rm \.cache\/cc-sdd-install\.lock/);
+  assert.ok(stale.includes(RETRY_COMMAND));
 });
 
 test("手順書を直接読む文は、ツールごとの手順書の置き場所と読み方を示す", () => {
