@@ -26,3 +26,12 @@
 2. その環境で、`nekono-dev/cc-sdd-bootstrap` の `dev/poc-cloud-first-run` を選んで新しいセッションを始める。
 3. 最初の入力に `/kiro-steering` だけを打つ。
 4. 「Unknown command」にならず、スキルとして手順が進めば成功（比べるなら、準備スクリプトの無い Default 環境で同じことをする）。
+
+## クラウドでの確認結果（2026-11-23、利用者が実施）
+
+準備スクリプトで起動前に導入する環境で、`dev/poc-cloud-first-run`（CLAUDE.md なし）の新しいセッションを開き、最初の入力に `/kiro-steering` だけを打った（session_011TnrtdmKT3BmxAZTxWQhQ8）。
+
+- 起動時のスキル一覧に `kiro-steering` が載った（kiro-* は 17 個）。「Unknown command」にはならず、入力はそのままスキルとして処理された。
+- モデルは SKILL.md を自分で読まずに、手順書に書かれた確認から始めた（`.kiro/settings/templates/steering` と `rules/` の一覧、「All core files exist → Sync mode」）。手順書が指す `rules/steering-principles.md` を読み、同期の手順で `structure.md` を更新した。展開された手順書の本文は、セッションの記録の取得結果（list_events）に出ないため、ここからは間接的な証拠になる。
+- CLAUDE.md が無いことは、実行を妨げなかった。
+- 別に分かったこと: クラウド環境の終了時の確認（Stop フック）が「未コミットの変更がある」として commit・push を求め、セッションは検証用のブランチへ push した（`d3ebe06`）。kiro-gate の終了の停止と同じ時点で動く仕組みが、利用環境の側にもある。
