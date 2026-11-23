@@ -1,10 +1,12 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { computePlan, assertAllowedPath } from "../lib/plan-new.mjs";
 import { catalog } from "../lib/catalog.mjs";
 
 const fields = [{ path: "sample.enabled", kind: "boolean", defaultValue: true, validate: (v) => typeof v === "boolean" ? null : "真偽値で指定してください" }];
-const empty = () => ({ config: null, claudeSettings: null, codexHooks: null, gitignore: null, agentDocs: { claude: null, codex: null }, deployDirFiles: {}, generatedFiles: {}, sourceFiles: {} });
+const sources = Object.fromEntries(catalog.files.map(({ path }) => [path, readFileSync(new URL(`../${path}`, import.meta.url))]));
+const empty = () => ({ config: null, claudeSettings: null, codexHooks: null, gitignore: null, agentDocs: { claude: null, codex: null }, deployDirFiles: {}, generatedFiles: {}, sourceFiles: sources });
 const run = (operation, snapshot) => computePlan({ operation, snapshot, catalog, fields });
 
 test("init は設定があれば中止し変更を返さない", () => {
@@ -40,8 +42,10 @@ test("update は設定の不足項目を補い、設定の誤りも収集する"
 test("同じ状態を再計算すると変更は空", () => {
   const first = run("init", empty());
   const current = { ...empty() };
+  current.deployDirFiles = { ...current.sourceFiles };
   for (const c of first.changes) {
     if (c.kind !== "write") continue;
+    if (c.path.startsWith(".agent-hooks/cc-sdd-bootstrap/")) current.deployDirFiles[c.path] = Buffer.from(c.content);
     if (c.path === ".cc-sdd-bootstrap.json") current.config = c.content;
     else if (c.path === ".claude/settings.json") current.claudeSettings = c.content;
     else if (c.path === ".codex/hooks.json") current.codexHooks = c.content;
@@ -53,7 +57,9 @@ test("同じ状態を再計算すると変更は空", () => {
 test("update は補う項目がなければ設定の書式を変えない", () => {
   const initialized = run("init", empty());
   const snapshot = { ...empty(), config: '{"format":1,"sample":{"enabled":true}}\n' };
+  snapshot.deployDirFiles = { ...snapshot.sourceFiles };
   for (const change of initialized.changes) {
+    if (change.path.startsWith(".agent-hooks/cc-sdd-bootstrap/")) snapshot.deployDirFiles[change.path] = Buffer.from(change.content);
     if (change.path === ".claude/settings.json") snapshot.claudeSettings = change.content;
     else if (change.path === ".codex/hooks.json") snapshot.codexHooks = change.content;
     else if (change.path === ".gitignore") snapshot.gitignore = change.content;
@@ -67,4 +73,61 @@ test("変更の道筋外は例外にする", () => {
   assert.throws(() => assertAllowedPath("outside.txt"), /許可範囲外/);
   assert.throws(() => assertAllowedPath(".agent-hooks/cc-sdd-bootstrap/../../unrelated.txt"), /許可範囲外/);
   assert.doesNotThrow(() => assertAllowedPath(".agent-hooks/cc-sdd-bootstrap/file.mjs"));
+});
+
+test("配置先の古いファイルを削除し、カタログの内容を配置する", () => {
+  const snapshot = {
+    ...empty(),
+    deployDirFiles: {
+      [catalog.files[0].path]: Buffer.from("古い内容"),
+      [`${catalog.files[0].path}.old`]: Buffer.from("旧版"),
+      [".agent-hooks/cc-sdd-bootstrap/installed.json"]: Buffer.from("{}"),
+    },
+    sourceFiles: Object.fromEntries(catalog.files.map(({ path }) => [path, Buffer.from(`内容:${path}`)])),
+  };
+  const result = run("init", snapshot);
+  assert.equal(result.ok, true);
+  assert.ok(result.changes.some((change) => change.kind === "delete" && change.path.endsWith(".old")));
+  assert.ok(result.changes.some((change) => change.kind === "delete" && change.path.endsWith("installed.json")));
+  assert.ok(result.changes.some((change) => change.kind === "write" && change.path === catalog.files[0].path && change.content.equals(snapshot.sourceFiles[catalog.files[0].path])));
+});
+
+test("両ツールの運用区画を配置し、同じ内容なら再配置しない", () => {
+  const first = run("init", empty());
+  assert.equal(first.ok, true);
+  const sectionPaths = ["claude", "codex"].map((tool) => `.agent-hooks/cc-sdd-bootstrap/agent-section-${tool}.md`);
+  const sections = first.changes.filter((change) => change.kind === "write" && sectionPaths.includes(change.path));
+  assert.equal(sections.length, 2);
+  for (const section of sections) {
+    assert.match(section.content, /^<!-- cc-sdd-bootstrap:begin.* -->\n/);
+    assert.match(section.content, /<!-- cc-sdd-bootstrap:end -->\n$/);
+    assert.match(section.content, /この区画は cc-sdd-bootstrap の導入のたびに書き足される/);
+    assert.equal((section.content.match(/<!-- cc-sdd-bootstrap:begin/g) ?? []).length, 1);
+    assert.equal((section.content.match(/<!-- cc-sdd-bootstrap:end/g) ?? []).length, 1);
+  }
+  const current = { ...empty(), config: first.changes.find((c) => c.path === ".cc-sdd-bootstrap.json").content };
+  current.deployDirFiles = { ...current.sourceFiles };
+  for (const change of first.changes) {
+    if (change.path === ".claude/settings.json") current.claudeSettings = change.content;
+    if (change.path === ".codex/hooks.json") current.codexHooks = change.content;
+    if (change.path === ".gitignore") current.gitignore = change.content;
+    if (sectionPaths.includes(change.path)) current.deployDirFiles[change.path] = Buffer.from(change.content);
+  }
+  assert.deepEqual(run("update", current).changes, []);
+});
+
+test("配置先のカタログファイルが同じ内容なら書き込みに載せない", () => {
+  const sourceFiles = Object.fromEntries(catalog.files.map(({ path }) => [path, Buffer.from(`内容:${path}`)]));
+  const result = run("init", { ...empty(), sourceFiles, deployDirFiles: { [catalog.files[0].path]: sourceFiles[catalog.files[0].path] } });
+  assert.equal(result.ok, true);
+  assert.ok(!result.changes.some((change) => change.kind === "write" && change.path === catalog.files[0].path));
+});
+
+test("init は agent 文書を変更せず、存在案内と Codex・既定値の案内を付ける", () => {
+  const result = run("init", { ...empty(), agentDocs: { claude: "既存", codex: "既存" } });
+  assert.equal(result.ok, true);
+  assert.ok(!result.changes.some((change) => ["CLAUDE.md", "AGENTS.md"].includes(change.path)));
+  assert.ok(result.notices.some((notice) => notice.code === "EXISTING_AGENT_DOCS" && notice.files.join(",") === "CLAUDE.md,AGENTS.md"));
+  assert.ok(result.notices.some((notice) => notice.code === "CODEX_TRUST"));
+  assert.ok(result.notices.some((notice) => notice.code === "CONFIG_CREATED"));
 });
