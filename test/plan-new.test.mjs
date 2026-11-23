@@ -169,6 +169,40 @@ test("配置先のカタログファイルが同じ内容なら書き込みに�
   assert.ok(!result.changes.some((change) => change.kind === "write" && change.path === catalog.files[0].path));
 });
 
+test("uninstall はフック登録と運用区画だけを外し、設定や配置物を求めない", () => {
+  const begin = "<!-- cc-sdd-bootstrap:begin（この区画は cc-sdd の導入のたびに書き足される。編集しない） -->";
+  const end = "<!-- cc-sdd-bootstrap:end -->";
+  const claude = `標準文書\n\n${begin}\n運用案内\n${end}\n`;
+  const codex = `標準文書\n\n${begin}\n運用案内\n${end}\n`;
+  const result = run("uninstall", {
+    claudeSettings: JSON.stringify({ other: true, hooks: { Stop: [{ hooks: [{ command: "node /repo/.agent-hooks/cc-sdd-bootstrap/hook.mjs" }] }] } }),
+    codexHooks: JSON.stringify({ hooks: { SessionStart: [{ hooks: [{ command: "node /repo/.agent-hooks/cc-sdd-bootstrap/hook.mjs" }] }] } }),
+    agentDocs: { claude, codex },
+  });
+  assert.equal(result.ok, true);
+  assert.deepEqual(result.changes.map(({ path, kind }) => [path, kind]), [
+    [".claude/settings.json", "write"], [".codex/hooks.json", "delete"], ["CLAUDE.md", "write"], ["AGENTS.md", "write"],
+  ]);
+  assert.deepEqual(result.removed, [".claude/settings.json", ".codex/hooks.json", "CLAUDE.md", "AGENTS.md"]);
+  assert.ok(result.changes.find((c) => c.path === "CLAUDE.md").content.includes("標準文書"));
+  assert.ok(!result.changes.some((c) => c.path.includes(".cc-sdd-bootstrap.json") || c.path.includes(".gitignore") || c.path.includes(".agent-hooks/")));
+});
+
+test("uninstall は区画の無い文書を変更しない", () => {
+  const result = run("uninstall", { ...empty(), config: "壊れているが読まない", agentDocs: { claude: "文書", codex: null } });
+  assert.equal(result.ok, true);
+  assert.deepEqual(result.changes, []);
+  assert.deepEqual(result.removed, []);
+});
+
+test("uninstall は壊れた区画と読めない設定をすべて集めて変更を返さない", () => {
+  const begin = "<!-- cc-sdd-bootstrap:begin（この区画は cc-sdd の導入のたびに書き足される。編集しない） -->";
+  const result = run("uninstall", { ...empty(), claudeSettings: "{", codexHooks: "[]", agentDocs: { claude: `${begin}\n壊れた`, codex: "<!-- cc-sdd-bootstrap:end -->\n" } });
+  assert.equal(result.ok, false);
+  assert.equal(result.aborts.length, 4);
+  assert.deepEqual(result.aborts.map((a) => a.file), [".claude/settings.json", ".codex/hooks.json", "CLAUDE.md", "AGENTS.md"]);
+});
+
 test("init は agent 文書を変更せず、存在案内と Codex・既定値の案内を付ける", () => {
   const result = run("init", { ...empty(), agentDocs: { claude: "既存", codex: "既存" } });
   assert.equal(result.ok, true);
