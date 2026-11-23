@@ -1,122 +1,101 @@
-# Requirements Document
+# 要件文書
 
 ## Project Description (Input)
-**誰が困っているか**: cc-sdd-bootstrap で cc-sdd の運用を導入したリポジトリの開発者と、そのリポジトリで作業する Claude Code。
 
-**今の状況**: cc-sdd のスキルには、`disable-model-invocation: true` のものや導入直後のものがあり、スキル一覧に載らない。そのため `/kiro-*` と入力しても、エージェントが手順書（SKILL.md）を読まずに自己流で進めることがある。また、kiro-discovery で複数の spec に分けたのに、分割を会話の中だけに残し、各 spec の brief.md を書かずに終えることがある。skyshare の `kiro-gate.mjs` はこの 2 つを強制しているが、skyshare 専用で、他のリポジトリには無い。
+**対象となる利用者**：cc-sdd-bootstrap を導入したリポジトリの開発者と、そこで指揮役として作業する Claude Code および Codex。
 
-**何が変わるべきか**:
-- `/kiro-*` で始めたターンでは、対応する SKILL.md を Read するまで他のツールの実行が拒否される。
-- そのセッションで roadmap.md が更新され、最後の「Specs (dependency order)」節に載った spec の brief.md が欠けていれば、ターンの終了が 1 回だけ止まる。
-- 上の 2 つが、導入先のどのリポジトリでも同じに動く。roadmap の判定は付けるが、他のファイルの判定は付けない。
-- 書式が想定と違う（cc-sdd の版で見出しが変わった等）ときは、何もしない。
-- 手順書が無いとき（導入の失敗）は、導入の再試行を案内して止める。
-- 状態は OS の一時ディレクトリに置き、リポジトリに残さない。判定できないときは通し、通常の作業を止めない。
+**解決する問題**：cc-sdd（仕様に沿って開発を進めるための手順集）のスキルには、作業環境のスキル一覧に載らないものや、導入直後で一覧に反映されていないものがある。そのため、`/kiro-*` で作業を依頼しても、エージェントが対応する手順書（SKILL.md）を読まずに自己流で進めることがある。
 
-**範囲外**: spec.json の承認や tasks.md のチェックの判定（cc-sdd のスキル自身が管理する）、自然文の依頼（`/kiro-*` で始まらない）の強制、サブエージェントのモデルの判定（subagent-model-policy）。
+**実現すること**：
 
-詳細は同じディレクトリの `brief.md` を参照。
+- `/kiro-*` で始めた依頼では、対応する手順書を読むまで他の作業ツールの実行を拒否する。
+- Claude Code と Codex の両方で、同じ先読みの規則を適用する。
+- 自然文の依頼には、依頼の種類と使うスキルの対応表を文章で示す。
+- 判定できない場合は作業を通し、先読みの判定に使う状態をリポジトリに残さない。
+
+**対象外**：cc-sdd の導入、手順書が無いことを理由とする停止、成果物の不足や承認状態の検査、開始時の進み具合の通知、自然文の依頼への機械的な強制、子のエージェントのモデルの判定。
+
+詳細な背景は同じディレクトリの brief.md を参照する。
 
 ## Introduction
-cc-sdd のスキルは、スキル一覧に載らないものがあり、`/kiro-*` と入力しても手順書を読まずに進められてしまう。また、discovery で複数の spec に分けても、各 spec の brief.md を書かずに終えられてしまう。この spec は、cc-sdd-bootstrap を導入したリポジトリで、この 2 つを会話の指示ではなくフック（Claude Code の動作の節目で自動実行される処理）で強制する仕組み（以下「kiro-gate」）を定める。
 
-## Boundary Context
-- **In scope**: セッション開始時の spec の状態の知らせ、`/kiro-*` で始まる入力の検出、手順書を読むまでの他のツールの拒否、手順書が無いときの停止と再試行の案内、ターン終了時の未読と roadmap・brief の欠けの判定（1 回だけ止める）、導入・更新・取り除きでの配置と登録、自然文の依頼でのスキルの積極的な利用を促す対応表（CLAUDE.md の管理区画）。
-- **Out of scope**: spec.json の承認や tasks.md のチェックの判定、roadmap.md 以外のファイルの判定、`/kiro-*` で始まらない自然文の依頼のフックによる強制（案内は文章で行い、守らせない）、サブエージェントのモデルの判定（subagent-model-policy）、cc-sdd の導入そのもの（session-install）、cc-sdd のスキルの内容の改変、強制を設定で無効にする仕組み。
-- **Adjacent expectations**:
-  - session-install が、スキルを `.claude/skills/kiro-*/SKILL.md` に導入し、導入の失敗の記録と再試行のコマンドを定める。kiro-gate は手順書が無いとき、その再試行のコマンドを案内する。
-  - installer-core が、kiro-gate のファイルの配置、フックの登録、CLAUDE.md の管理区画、uninstall の仕組みを提供する。この spec はそれに載せるものを定める。
-  - subagent-model-policy も同じツール呼び出しの直前のフックで動く。互いの判定は独立で、一方が通しても他方の拒否は残る。
-  - フックによる強制が働くのは、直近の入力が `/kiro-*` で始まるターンだけである。自然文の依頼では、CLAUDE.md の対応表でスキルの利用を促すだけで、守られることは保証しない。
-  - 一覧に載らないスキル（`kiro-discovery` など）は Skill ツールで呼べないため、対応表は SKILL.md を Read して手順を実行する形で案内する。
+kiro-gate は、`/kiro-*` で始めた依頼について、対応する手順書の先読みを強制する仕組みである。フック（作業環境の動作の節目で自動実行される処理）によって、手順書が未読の間の作業ツールを拒否する。自然文の依頼では、文章によって適切なスキルの利用を促す。
+
+> 改訂（2026-11-23）：旧版から、手順書が無いときの停止、roadmap と brief の不足の検査、開始時の状態通知を外した。未読のまま終えようとする場合の終了の停止は、1 回だけに限って残した。自然文向けの対応表は残し、Codex にも Claude Code と同じ規則と案内を適用する。
+
+## 対象と境界
+
+- **対象**：`/kiro-*` で始まる入力の検出、手順書が未読の間のツールの拒否と終了の 1 回だけの停止、読み取り済みの扱い、自然文向けの対応表、Claude Code と Codex の両方への適用。
+- **対象外**：roadmap.md と brief.md の不足による終了停止、spec.json の承認状態や tasks.md のチェックの判定、開始時の状態通知、自然文の依頼への機械的な強制、cc-sdd 本体の配布・改変。
+- **session-install との関係**：起動前・初回の導入、導入直後の案内、導入失敗時の入力停止と再試行の案内は session-install が扱う。kiro-gate は、手順書が無いことを理由とする独自の停止を加えない。
+- **installer-core との関係**：ファイルの配置、フックの登録、CLAUDE.md と AGENTS.md の管理区画（共通の文章を配置・更新する範囲）は installer-core が扱う。この仕様は、適用する先読みの規則と案内の内容を定める。
+- **subagent-delegation との関係**：子のエージェントのモデルの判定は subagent-delegation が扱う。kiro-gate が操作を通すことは、隣接する仕組みの拒否を解除することを意味しない。
+- **強制の前提**：機械的な強制の対象は、フックが有効で、対象の入力とツール操作を判定できる環境とする。Codex のフックの信頼が承認されていない環境では、AGENTS.md の文章で先読みを促すが、機械的な強制は保証しない。
+
+以下では、利用者の入力から次の入力までの作業の区切りを「ターン」、作業環境で継続する一連の会話を「セッション」と呼ぶ。受け入れ基準の主語はすべて kiro-gate とする。
 
 ## Requirements
 
-### Requirement 1: `/kiro-*` で始めた作業での手順書の先読み
-**Objective:** As a 導入先のリポジトリの開発者, I want `/kiro-*` で始めた作業では、エージェントが対応する手順書を読むまで他の操作をできないようにしたい, so that スキル一覧に載らないスキルでも自己流で進められない
+### Requirement 1: 対象の依頼と手順書の特定
 
-#### Acceptance Criteria
-1. When 利用者が `/kiro-` で始まるコマンド名を先頭に持つプロンプトを送り、対応する手順書（`.claude/skills/<コマンド名>/SKILL.md`）がある, the kiro-gate shall そのターンの作業の前に手順書を Read して手順を最後まで実行するよう、セッションの文脈に入る形で指示する。
-2. While 直近のプロンプトの `/kiro-*` の手順書をまだ読んでいない, when エージェントがツールを呼び出す, the kiro-gate shall そのツールの実行を拒否し、先に読むべき手順書のパスを理由に示す。
-3. While 手順書をまだ読んでいない, when エージェントがその手順書を Read で読む, the kiro-gate shall その呼び出しを拒否せず、読んだことを記録する。
-4. While 手順書をまだ読んでいない, the kiro-gate shall ツールの検索（ToolSearch）の呼び出しを拒否しない。
-5. When 手順書を読んだ後, the kiro-gate shall 以後そのターンのツールの呼び出しを拒否しない。
-6. When 利用者が `/kiro-` で始まらないプロンプトを送る, the kiro-gate shall 以前の `/kiro-*` による強制を解除し、ツールの呼び出しを拒否しない。
-7. When 利用者が `/kiro-` で始まるコマンドを続けて送る, the kiro-gate shall 最新のコマンドの手順書の読了だけを要求する。
-8. The kiro-gate shall `/kiro-` で始まるコマンド名の判定を、プロンプトの先頭（前の空白を除く）に置かれたものに限り、文中に現れる `/kiro-*` では強制を始めない。
+**目的**：開発者として、明示的に指定した cc-sdd の手順書を作業の対象にしたい。これにより、文中の言及を誤って強制の対象にせず、最新の依頼に沿って作業を進められる。
 
-### Requirement 2: 手順書が無いときの停止
-**Objective:** As a 導入先のリポジトリの開発者, I want 手順書が無いときは、読めないまま進めずに導入の再試行を案内してほしい, so that cc-sdd の導入に失敗したまま作業が自己流で進むことがない
+#### 受け入れ基準
 
-#### Acceptance Criteria
-1. If `/kiro-` で始まるコマンドの手順書（`.claude/skills/<コマンド名>/SKILL.md`）が無い, the kiro-gate shall そのプロンプトを止め、そのコマンドが使えないこと、cc-sdd の導入が完了していない可能性があること、および session-install と同じ再試行のコマンドを示す。
-2. If 手順書が無くてプロンプトを止める, the kiro-gate shall 以後のツールの呼び出しを拒否しない状態にする。
-3. The kiro-gate shall 再試行の案内を、Claude の外（通常のターミナル）で実行する形で示す。
+1. When Claude Code または Codex が利用者の入力を受け取り、先頭の空白を除いた入力が `/kiro-*` のコマンド名で始まり、対応する手順書が存在する, the kiro-gate shall その手順書を当該ターンの先読みの対象にする。
+2. The kiro-gate shall コマンド名の直後が空白または入力の末尾である場合に限り、先頭の `/kiro-*` をコマンドとして扱う。
+3. When `/kiro-*` が入力の先頭以外に現れる, the kiro-gate shall その記述を理由として先読みの強制を始めない。
+4. When 利用者が次の `/kiro-*` の依頼を送る, the kiro-gate shall 以前の依頼の読み取り済みの扱いを引き継がず、最新の依頼に対応する手順書だけを先読みの対象にする。
+5. When 利用者が `/kiro-*` で始まらない入力を送る, the kiro-gate shall 以前の依頼による先読みの強制を解除する。
 
-### Requirement 3: ターン終了時の判定（1 回だけ止める）
-**Objective:** As a 導入先のリポジトリの開発者, I want 手順書を読まないまま、または spec の brief.md が欠けたまま作業を終えさせないでほしい, so that 分割の結果が会話の中だけに残らない
+### Requirement 2: 手順書を読むまでの作業の拒否
 
-#### Acceptance Criteria
-1. While 直近の `/kiro-*` の手順書を読んでいない, when エージェントがターンを終えようとする, the kiro-gate shall 終了を止め、読むべき手順書のパスを示して読んで手順を実行するよう求める。
-2. While 直近の `/kiro-*` の手順書を読んでいる, when エージェントがターンを終えようとする, and `.kiro/steering/roadmap.md` が直近の `/kiro-*` の入力の後に更新され、最後の「Specs (dependency order)」節に載った spec のうち `.kiro/specs/<spec 名>/brief.md` が無いものがある, the kiro-gate shall 終了を止め、brief.md が無い spec の名前を示して brief.md を作成してから終えるよう求める。
-3. If 終了を止めた後にエージェントが再度ターンを終えようとする, the kiro-gate shall 2 回目以降は終了を止めない。
-4. When roadmap.md が直近の `/kiro-*` の入力の後に更新されていない, the kiro-gate shall brief.md の欠けを理由に終了を止めない。
-5. When `/kiro-*` による強制が働いていない（直近のプロンプトが `/kiro-` で始まらない、または手順書が無くて止めた）, the kiro-gate shall 終了を止めない。
-6. The kiro-gate shall roadmap.md 以外のファイル（spec.json の承認、tasks.md のチェックなど）の状態を、終了を止める理由にしない。
+**目的**：開発者として、スキル一覧への掲載にかかわらず、エージェントに手順書を先に読ませたい。これにより、手順を読まずに自己流で作業を進めることを防ぐ。
 
-### Requirement 4: roadmap の書式の判定
-**Objective:** As a 導入先のリポジトリの開発者, I want roadmap の書式が想定と違うときは何もしないでほしい, so that cc-sdd の版による書式の変更で、誤った理由で作業が止まらない
+#### 受け入れ基準
 
-#### Acceptance Criteria
-1. The kiro-gate shall roadmap.md の最後の「Specs (dependency order)」の見出し（見出しの水準は 2 または 3）に続く、次の見出しまでの範囲の「`- [ ]` または `- [x]` の後に spec 名と ` --` が続く行」を、spec の一覧として読む。spec 名は英小文字・数字・ハイフンからなる。
-2. If roadmap.md が無い、「Specs (dependency order)」の見出しが無い、または見出しの後に想定の書式の行が 1 つも無い, the kiro-gate shall brief.md の欠けを理由に終了を止めない。
-3. When roadmap.md に「Specs (dependency order)」の見出しが複数ある, the kiro-gate shall 最後の見出しの節だけを spec の一覧として読む。
-4. The kiro-gate shall 一覧に載った spec のうち、完了済み（`- [x]`）のものも、未完了のものと同じく brief.md の有無を調べる。
+1. When 当該ターンの先読みの対象が決まる, the kiro-gate shall エージェントが受け取る指示に、対象の手順書の場所と、作業の前に読んで手順に従うよう求める内容を含める。
+2. While 当該ターンの対象の手順書が未読である, when エージェントがその手順書の読み取り、または読み取りに必要なツールを探す操作を行う, the kiro-gate shall その操作を拒否しない。
+3. While 当該ターンの対象の手順書が未読である, when エージェントが前項以外のツール操作を行う, the kiro-gate shall 実行を拒否し、理由に読むべき手順書の場所と先に読む必要があることを示す。
+4. When 当該ターンの対象の手順書の読み取りが成功したことを確認できる, the kiro-gate shall そのターンについて読み取り済みとして扱う。
+5. While 当該ターンの対象の手順書が読み取り済みである, the kiro-gate shall 手順書の未読を理由とするツールの拒否を行わない。
+6. While 当該ターンの対象の手順書が未読である, when エージェントが応答を終えようとする, the kiro-gate shall 終了を 1 回だけ止め、読むべき手順書の場所と先に読む必要があることを示す。
+7. If 前項により終了を止めた後に、エージェントが再び応答を終えようとする, the kiro-gate shall 2 回目以降の終了を止めない。
 
-### Requirement 5: セッション開始時の spec の状態の知らせ
-**Objective:** As a 導入先のリポジトリで作業を始める開発者, I want セッションの開始時に spec の進み具合と roadmap の有無を知りたい, so that どこから再開するかをすぐに判断できる
+### Requirement 3: 判定できない場合と状態の扱い
 
-#### Acceptance Criteria
-1. When セッションが開始する, the kiro-gate shall `.kiro/specs/` の下の spec ごとに、名前・段階（`phase`）・要件／設計／タスクの承認の済・未を、セッションの文脈に入る形で知らせる。
-2. When セッションが開始する, the kiro-gate shall `.kiro/steering/roadmap.md` の有無と、ある場合は既存の内容を上書きせず追補する旨を知らせる。
-3. If `.kiro/specs/` が無い, the kiro-gate shall 無いことを知らせる。
-4. If spec.json が読めない、または JSON として不正, the kiro-gate shall その spec を「spec.json を読めない」として知らせ、他の spec の知らせを妨げない。
-5. If spec.json が無いディレクトリがある（brief.md だけを持つ等）, the kiro-gate shall そのディレクトリを知らせの対象に含めない。
+**目的**：開発者として、先読みの判定の失敗で通常の作業が止まらず、別の会話の状態が作業に影響しないようにしたい。
 
-### Requirement 6: 失敗時の方針と状態の扱い
-**Objective:** As a 導入先のリポジトリの開発者, I want 判定そのものが失敗しても通常の作業が止まらず、状態がリポジトリに残らないようにしたい, so that 強制の仕組みが作業の妨げやゴミになることがない
+#### 受け入れ基準
 
-#### Acceptance Criteria
-1. If 判定の途中で予期しない誤り（入力の JSON が読めない、状態が読めない等）が起きる, the kiro-gate shall 誤りの内容を標準エラーに出し、プロンプトの停止・ツールの拒否・終了の停止のいずれも行わない。
-2. The kiro-gate shall セッションごとの状態（強制の有無、読むべき手順書、読んだ記録、`/kiro-*` を受けた時刻）を、OS の一時ディレクトリに置き、導入先のリポジトリの中に作らない。
-3. If 状態が無い、または読めない, the kiro-gate shall `/kiro-*` による強制が働いていないものとして扱う。
-4. The kiro-gate shall 導入先のリポジトリのルートを自分の位置から求め、呼び出し元のカレントディレクトリに依らず判定する。
-5. The kiro-gate shall 導入先のリポジトリの中だけで動き、cc-sdd-bootstrap のパッケージやプラグインが無くても動く。
+1. If 入力または判定に使う状態を解釈できず、先読みの要否を判定できない, the kiro-gate shall その判定を理由として入力の停止、ツールの拒否、応答の終了の停止を行わない。
+2. If 判定中に予期しない誤りが起きる, the kiro-gate shall 誤りの内容を日本語で確認できるようにし、その判定を理由として作業を止めない。
+3. If 対応する手順書が存在しない, the kiro-gate shall その不在を理由として独自の停止やツールの拒否を行わない。
+4. The kiro-gate shall 先読みの判定に使う状態をリポジトリに残さない。
+5. The kiro-gate shall あるリポジトリまたはセッションの先読みの対象と読み取り済みの扱いを、別のリポジトリまたはセッションに適用しない。
+6. When 作業中のディレクトリが変わる, the kiro-gate shall その変更によって対象のリポジトリや手順書を取り違えない。
 
-### Requirement 7: 導入・更新・取り除き
-**Objective:** As a cc-sdd-bootstrap の利用者, I want installer-core の導入・更新のコマンドで kiro-gate が配置され、取り除けるようにしたい, so that 導入先ごとに手作業の設定が要らない
+### Requirement 4: 両方の作業環境における自然文向けの案内
 
-#### Acceptance Criteria
-1. When 利用者が installer-core の導入（`init`）または更新（`update`）を実行する, the cc-sdd-bootstrap shall kiro-gate のファイルを配置し、セッション開始・プロンプト送信・ツール呼び出しの直前・ツール呼び出しの直後・ターン終了の各フックを登録した状態にする。
-2. When 利用者が `init` または `update` を実行する, the cc-sdd-bootstrap shall 導入先の既存のフック（利用者が書いたもの、session-install のもの）を残したまま、kiro-gate のフックを足す。
-3. When 利用者が `update` を実行する, the cc-sdd-bootstrap shall kiro-gate のファイルとフックの登録を、このリポジトリの配置物の内容に揃える。
-4. When 利用者が `uninstall` を実行する, the cc-sdd-bootstrap shall kiro-gate のファイルとフックの登録を取り除き、利用者が書いたフックは残す。
-5. The cc-sdd-bootstrap shall CLAUDE.md の管理区画に、`/kiro-*` で始めた作業は手順書を読むまで他の操作が拒否されること、および roadmap に載せた spec の brief.md が欠けたままではターンの終了が止まることを、installer-core の管理区画の仕組みを通して載せる。
+**目的**：開発者として、Claude Code と Codex のどちらでも、自然文の依頼に合う cc-sdd のスキルが使われるようにしたい。
 
-### Requirement 8: 自然文の依頼でのスキルの積極的な利用
-**Objective:** As a 導入先のリポジトリの開発者, I want `/kiro-*` で始めない依頼でも、依頼の種類に合う cc-sdd のスキルが使われるようにしたい, so that 新機能の相談や進み具合の確認でも、手順を飛ばさず cc-sdd の運用に乗る
+#### 受け入れ基準
 
-#### Acceptance Criteria
-1. The kiro-gate shall CLAUDE.md の管理区画に、依頼の種類と使うスキルの対応表を載せる。対応は次のとおりとする。
-   - 新機能・新プロジェクトの相談、分割の検討: `kiro-discovery`
-   - 次にやること・進み具合の確認: `kiro-spec-status`
-   - 既存コードと要件の差の確認: `kiro-validate-gap`
-   - 設計のレビュー: `kiro-validate-design`
-   - 実装後の最終確認: `kiro-validate-impl`
-   - プロジェクトの方針（ステアリング）の整備・更新: `kiro-steering`
-   - 完了・成功と報告する前: `kiro-verify-completion`
-2. The kiro-gate shall 対応表に、依頼がこれらに当たるときは `/kiro-*` で始まっていなくても、対応するスキルの SKILL.md（`.claude/skills/<名前>/SKILL.md`）を Read して手順を最後まで実行するよう書く。
-3. The kiro-gate shall 対応表に、依頼の種類が判断できないときは、スキルを使うか利用者に尋ねるよう書く。
-4. The kiro-gate shall 自然文の依頼に対して、フックによるツールの拒否・プロンプトの停止・終了の停止を行わない。
-5. When 利用者が `update` を実行する, the cc-sdd-bootstrap shall CLAUDE.md の管理区画の対応表を、このリポジトリの配置物の内容に揃える。
-6. When 利用者が `uninstall` を実行する, the cc-sdd-bootstrap shall 対応表を含む管理区画の kiro-gate の記述を取り除く。
+1. The kiro-gate shall CLAUDE.md と AGENTS.md の管理区画に、次の対応表を同じ内容で示す。
+
+| 依頼の種類 | 使うスキル |
+|---|---|
+| 新機能・新プロジェクトの相談、分割の検討 | `kiro-discovery` |
+| 次にやること・進み具合の確認 | `kiro-spec-status` |
+| 既存コードと要件の差の確認 | `kiro-validate-gap` |
+| 設計のレビュー | `kiro-validate-design` |
+| 実装後の最終確認 | `kiro-validate-impl` |
+| プロジェクトの方針の整備・更新 | `kiro-steering` |
+| 完了・成功と報告する前 | `kiro-verify-completion` |
+
+2. The kiro-gate shall 両文書の案内に、表に該当する依頼では `/kiro-*` で始まっていなくても、対応する手順書を読んで手順を最後まで実行するよう記載する。
+3. The kiro-gate shall 両文書の案内に、Claude Code では `.claude/skills/<スキル名>/SKILL.md`、Codex では `.agents/skills/<スキル名>/SKILL.md` を直接読む方法を記載する。
+4. The kiro-gate shall 両文書の案内に、依頼の種類を判断できない場合は、スキルを使うか利用者に尋ねるよう記載する。
+5. The kiro-gate shall 両文書の案内に、`/kiro-*` で始めた依頼では、フックが有効な環境で手順書を読むまで他の作業ツールが拒否されることを記載する。
+6. The kiro-gate shall AGENTS.md の案内に、フックの信頼が承認されていない環境でも、作業前に対応する手順書を読むよう記載する。
+7. When 利用者が自然文の依頼を送る, the kiro-gate shall 対応表への該当を理由として入力の停止、ツールの拒否、応答の終了の停止を行わない。
