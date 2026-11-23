@@ -59,11 +59,19 @@
 - **Rationale**: 目印の定義と、区画を外す処理の持ち主を installer-core 1 つにできる。session-install は中身を解釈しない。
 
 ### Decision: 単純化 — 外すもの
-- 配置記録（`lib/ledger.mjs`）、改変の検出、`--force`、設定の値を引数で渡す指定、対話、`keepTemplates`・`codex.enabled`・`models` の設定の項目（今回の操作で使わない項目として残すだけ）、`.gitignore` の条件つきの行、実行権限の付け直し（フックは `node <スクリプト>` で呼ぶので要らない）。
+- 配置記録（`lib/ledger.mjs`）、改変の検出、`--force`、設定の値を引数で渡す指定、対話、`.gitignore` の条件つきの行、実行権限の付け直し（フックは `node <スクリプト>` で呼ぶので要らない）。
 - CLAUDE.md の管理区画を作る・置き換える処理（区画の文章はファイルとして配置し、文書への書き足しは session-install）。
 
 ### Decision: Build vs Adopt
 - 外部の道具（git の差分、汎用の設定の統合のライブラリ）は使わない。Node.js 22 の標準だけで足り、利用先に依存を持ち込まない（要件 8.7）。
+
+### Decision: 設定の項目定義の形と旧項目は installer-core で変えない（設計レビューの指摘）
+- **Context**: 配置中の `install-rules.mjs` が項目定義の `validate` と `keepTemplates` を使う。
+- **Selected Approach**: 形と項目はそのまま残し、`lib/` が対話用の属性を使わなくなるだけにする。旧項目の整理はそれを使う spec（session-install の雛形の扱い、subagent-delegation の役割表）が行う。
+- **Rationale**: 互換の仕組みを足さずに、session-install の置き換えまで今の導入フックを動かし続けられる。
+
+### Decision: フックの取り外しはコマンド単位（設計レビューの指摘）
+- 同じ組に利用者のコマンドが混ざることがあるので、組ごとではなく一式のコマンドだけを外し、空になった組を捨てる（今の `settings-hooks.mjs` の選別を引き継ぐ）。
 
 ## Risks & Mitigations
 - 利用者が配置先ディレクトリに自分のファイルを置く — 運用の区画とコマンドの案内で「配置先は直接編集しない」を示し、消した対象を必ず表示する。

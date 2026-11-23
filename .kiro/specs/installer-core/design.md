@@ -99,7 +99,7 @@ graph TB
 ### Directory Structure
 ```
 bin/
-└── cc-sdd-bootstrap.mjs        # 入口。Node の版を確かめてから cli を動的に読み込む（変更なし）
+└── cc-sdd-bootstrap.mjs        # 入口。Node の版を確かめてから cli を動的に読み込む（io から interactive を外すだけ）
 lib/
 ├── catalog.mjs                 # データ: 道筋の定数・カタログ・運用の区画の目印
 ├── config-schema.mjs           # 配置先の config-schema.mjs の公開し直し（変更なし）
@@ -111,7 +111,7 @@ lib/
 ├── node-version.mjs            # Node の版の判定（変更なし）
 └── cli.mjs                     # 引数の解析・操作の流れ・表示
 .agent-hooks/cc-sdd-bootstrap/
-├── config-schema.mjs           # 設定の項目定義（配置物。フックからも読む）
+├── config-schema.mjs           # 設定の項目定義（配置物。フックからも読む。installer-core では変えない）
 ├── agent-section-claude.md     # 生成物: CLAUDE.md の末尾に書き足す運用の区画（目印の行を含む）
 └── agent-section-codex.md      # 生成物: AGENTS.md の末尾に書き足す運用の区画（目印の行を含む）
 test/
@@ -130,8 +130,8 @@ test/
 - `lib/config.mjs` — 設定値の引数（`given`）の解決を外す。読み取り・検証・既定値の補い・書き出しだけにする。
 - `lib/plan.mjs` — 記録・改変検出・`force`・CLAUDE.md の管理区画を外す。配置先の片付け、区画のファイルの組み立て、`.codex/hooks.json`、`uninstall` の区画の取り外し、`init` の既存の文書の案内を足す。
 - `lib/target.mjs` — 記録の読み書きを外す。配置先ディレクトリの一覧、`.codex/hooks.json`・CLAUDE.md・AGENTS.md の読み取りを足す。
-- `lib/cli.mjs` — `--force` と設定値の引数と対話を外す。表示に Codex の信頼の承認・既存の文書・共有の方法の案内を足す。
-- `.agent-hooks/cc-sdd-bootstrap/config-schema.mjs` — installer-core の項目を `ccSdd.version`・`ccSdd.lang` にする（`keepTemplates`・`codex.enabled`・`models` を外す。既存の設定にあれば使わない項目として残る）。
+- `lib/cli.mjs` — `--force` と設定値の引数と対話（`promptValues`）を外す。入口の `runCli` の名前は保ち、`io` から `interactive` を外す。表示に Codex の信頼の承認・既存の文書・共有の方法の案内を足す。
+- `.agent-hooks/cc-sdd-bootstrap/config-schema.mjs` — installer-core では変更しない。項目定義の形（`path`・`kind`・`defaultValue`・`validate`）は、配置中の導入スクリプト（`install-rules.mjs`）も使うので保つ。`lib/` は対話用の `flag`・`question`・`mapKeys`・`notice` を使わなくなるだけ。`keepTemplates`・`models` などの項目の見直しは、それを使う spec（session-install・subagent-delegation）が行う。
 - `package.json` — `files` をカタログのスクリプトに合わせる（生成物の区画のファイルは含めない）。
 - 削除: `lib/ledger.mjs`・`lib/settings-hooks.mjs`、`test/ledger.test.mjs`・`test/settings-hooks.test.mjs`・`test/config-keep-templates.test.mjs`・`test/cli-field-notice.test.mjs`・`test/plan-gitignore-make.test.mjs`・`test/target-ignore-lines.test.mjs` など記録・対話・条件つきの行に依る試験。残す試験は新しい振る舞いに合わせて直す。
 - 自己適用（要件 9）: `.kiro/steering/project-rules.md` を新設し、`handoff-self-apply.md` の表どおりに今の CLAUDE.md の決まりを移す。この手順の実施は installer-core と session-install の両方の実装が済んでから行う。
@@ -287,17 +287,20 @@ interface Catalog {
 #### ConfigSchema（`.agent-hooks/cc-sdd-bootstrap/config-schema.mjs`）
 
 ```typescript
-type ConfigValue = string | number | boolean | Record<string, unknown>;
-interface ConfigField {
-  path: string;                 // "ccSdd.version" のような点区切り
-  type: "string" | "boolean" | "object";
+type ConfigValue = string | boolean | Record<string, unknown>;
+interface ConfigField {                       // 今の形を保つ（配置中の導入スクリプトも読む）
+  path: string;                               // "ccSdd.version" のような点区切り
+  kind: "string" | "boolean" | "map";
   defaultValue: ConfigValue;
-  allowed?: RegExp | ConfigValue[];
-  description: string;          // 使い方と作成時の表示に使う
+  validate(value: unknown): string | null;    // 不正なら日本語の理由
+  // flag・question・mapKeys・notice は旧版の対話と引数の名残。lib/ は使わない（項目の持ち主の spec が整理する）
 }
-const configFields: ConfigField[]; // installer-core: ccSdd.version（既定 "3.1.0"）、ccSdd.lang（既定 "ja"）。下流が足す
+const CONFIG_FORMAT = 1;
+function formatProblem(format: unknown): string | null;  // format が無い・1 でないときの理由
+const configFields: ConfigField[];            // 項目は各 spec が持つ（installer-core が初期作成で使うのは全項目の既定値）
 ```
-- 設定ファイルの形: `{ "format": 1, "ccSdd": { "version": "3.1.0", "lang": "ja" } }`（下流の項目が加わる）。`format` は 1 のまま（移行しない）。
+- 設定ファイルの形: `{ "format": 1, "ccSdd": { "version": "3.1.0", "lang": "ja" }, ... }`。`format` は 1 のまま（移行しない）。
+- **必須値**（2.3）: `format` だけを必須とし、無い・1 でなければ `CONFIG_INVALID`。項目定義にある項目は、値があれば `validate` で確かめ、無ければ既定値で補って補った項目を表示する（既定値を持つので欠けても不正にしない）。
 
 ### 計算
 
@@ -307,7 +310,7 @@ const configFields: ConfigField[]; // installer-core: ccSdd.version（既定 "3.
 type ConfigObject = { format: number } & Record<string, unknown>;
 type ConfigError = { code: "CONFIG_UNREADABLE" | "CONFIG_INVALID"; file: string; messages: string[] };
 function parseConfig(text: string): { ok: true; config: ConfigObject } | { ok: false; error: ConfigError };
-function validateConfig(config: ConfigObject, fields: ConfigField[]): ConfigError | null;  // 項目定義にある項目だけ
+function validateConfig(config: ConfigObject, fields: ConfigField[]): ConfigError | null;  // format と、値のある項目の validate
 function fillDefaults(config: ConfigObject, fields: ConfigField[]): { config: ConfigObject; filled: string[] };
 function serializeConfig(config: ConfigObject): string;  // 2 字下げ、末尾改行
 ```
@@ -335,8 +338,8 @@ function mergeHooks(input: { file: string; text: string | null; tool: Tool; hook
 function removeHooks(input: { file: string; text: string | null }): { text: string | null; changed: boolean } | HooksError;
 ```
 - 形: `{ "hooks": { "<イベント>": [ { "matcher"?: string, "hooks": [ { "type": "command", "command": string, "timeout"?: number } ] } ] } }`（両ツール共通）。
-- 一式の組 = `hooks` の中のコマンドに `OWNED_MARKER` を含む組。統合は「一式の組を外し、そのツール向けのカタログの組を各イベントの最後に足す」。利用者の組とその他の鍵は順序も保つ（4.2）。同じ版での再実行は同じ文字列になる（4.3）。
-- JSON として読めない、または `hooks` が期待の形でない場合は `HooksError`（4.4・7.4）。`removeHooks` で空になったイベントの配列は消す。
+- 一式のコマンド = `hooks` の中の `command` に `OWNED_MARKER` を含むもの。統合は「各組から一式のコマンドだけを外し（外して空になった組は捨てる）、そのツール向けのカタログの組を各イベントの最後に足す」。同じ組にある利用者のコマンド、利用者の組、その他の鍵は順序も保つ（4.2。今の `settings-hooks.mjs` の選別を引き継ぐ）。同じ版での再実行は同じ文字列になる（4.3）。
+- JSON として読めない、または `hooks` が期待の形でない場合は `HooksError`（4.4・7.4）。`removeHooks` も同じ選別で一式のコマンドだけを外し、空になった組とイベントの配列は消す。
 
 #### Plan
 
@@ -367,7 +370,7 @@ function renderAgentSection(tool: Tool, sections: AgentSection[]): string; // �
   - 配置先: `deployDirFiles` のうちカタログと 2 つの区画のファイルに無いものを `delete`、カタログのファイルと区画のファイルを内容が違えば `write`（3.1・3.4）。
   - 2 つのフックの設定へ `mergeHooks`、`.gitignore` へ `replaceBlock`。
   - CLAUDE.md・AGENTS.md は変更に載せない（5.4）。`init` でどちらかがあれば `EXISTING_AGENT_DOCS`（5.5）。
-- `uninstall`: 2 つのフックの設定へ `removeHooks`、CLAUDE.md・AGENTS.md があれば `removeBlock`（区画が無ければ変更なし）。それ以外は変更に載せない（7.2）。
+- `uninstall`: 2 つのフックの設定へ `removeHooks`、CLAUDE.md・AGENTS.md があれば `removeBlock`（区画が無ければ変更なし）。それ以外は変更に載せない（7.2）。設定ファイル・配置先は読まない（壊れていても取り外しを妨げない）。
 - 変更の道筋は `ALLOWED_PATHS`（設定ファイル・配置先の下・2 つのフックの設定・`.gitignore`・`uninstall` のときの CLAUDE.md・AGENTS.md）に限る。外れたら実装の誤りとして例外にする（8.3）。
 - 中止の理由はすべて集めてから返す。1 つでもあれば変更は空。
 
@@ -390,13 +393,13 @@ function applyPlan(root: string, changes: FileChange[]): ApplyResult;      // �
 type ParsedArgs = { kind: "help" } | { kind: "usage-error"; message: string } | { kind: "run"; operation: Operation };
 function parseArgs(argv: string[]): ParsedArgs;   // 受け付けるのは init・update・uninstall・help・--help・-h だけ
 function buildUsage(fields: ConfigField[]): string;
-function main(argv: string[], io: { cwd: string; out: (s: string) => void; err: (s: string) => void }): number; // 終了コード
+function runCli(argv: string[], io: { cwd: string; stdout: Writable; stderr: Writable; packageRoot: string }): Promise<number>; // 終了コード。bin が呼ぶ今の入口の名前を保つ
 ```
 - 表示（日本語）:
   - 成功（8.4）: 作成・更新・削除した対象の一覧。設定を作ったら既定値と直接編集の案内（2.2）。配置先は直接編集せず差分は git で確かめる（3.3）。Codex のフックは信頼の承認が要り、未承認なら AGENTS.md の指示に従う（4.5）。設定と配置物はコミットし、cc-sdd 本体は session-install の手順で入る（6.5）。既存の文書の案内（5.5）。
   - `uninstall`（7.3）: 外した登録・区画と、残る設定ファイル・配置物・除外設定。
   - 中止: 理由ごとにファイル名・問題箇所・直し方。
-  - 途中の失敗（8.5）: 失敗した対象と理由、済んだ対象、未処理の対象、再実行する操作。
+  - 途中の失敗（8.5）: 失敗した対象と理由、済んだ対象、未処理の対象、再実行する操作。`init` で設定ファイルを書き終えた後の失敗なら、再実行する操作は `update`（1.3 で `init` は止まるため）。
 
 ## Data Models
 
