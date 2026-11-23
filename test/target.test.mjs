@@ -1,275 +1,329 @@
-// target.mjs の試験: 対象の読み取りと計画の適用
-import { test } from "node:test";
+import test from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import {
-  isGitRoot,
-  readSnapshot,
-  readPackageFiles,
-  applyPlan,
-  readConfigState,
-  readPackageVersion,
-} from "../lib/target.mjs";
-import { CONFIG_PATH, LEDGER_PATH } from "../lib/catalog.mjs";
+import { catalog, CONFIG_PATH, DEPLOY_DIR } from "../lib/catalog.mjs";
+import { applyPlan, checkPathSafety, isGitRoot, readSnapshot } from "../lib/target.mjs";
 
-/** 一時ディレクトリを作り、終わったら消す */
-function withTmp(fn) {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "ccsdd-target-"));
-  try {
-    return fn(dir);
-  } finally {
-    fs.rmSync(dir, { recursive: true, force: true });
-  }
+function temporary(t) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "target-"));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  return dir;
 }
 
-const put = (root, rel, content = "x") => {
-  const p = path.join(root, rel);
-  fs.mkdirSync(path.dirname(p), { recursive: true });
-  fs.writeFileSync(p, content);
-};
+test("導入では計画に必要な項目と型に合う生成物を読む", (t) => {
+  const root = temporary(t);
+  const packageRoot = temporary(t);
+  fs.writeFileSync(path.join(root, CONFIG_PATH), "設定");
+  fs.mkdirSync(path.join(root, DEPLOY_DIR), { recursive: true });
+  fs.writeFileSync(path.join(root, DEPLOY_DIR, "old.mjs"), "配置物");
+  fs.mkdirSync(path.join(root, ".claude/agents"), { recursive: true });
+  fs.writeFileSync(path.join(root, ".claude/agents/cc-sdd-a.md"), "生成物");
+  fs.writeFileSync(path.join(root, ".claude/agents/other.md"), "対象外");
+  for (const file of catalog.files) {
+    fs.mkdirSync(path.dirname(path.join(packageRoot, file.path)), { recursive: true });
+    fs.writeFileSync(path.join(packageRoot, file.path), `同梱:${file.path}`);
+  }
+  const custom = { ...catalog, generated: [{ owns: [".claude/agents/cc-sdd-*.md"] }] };
+  const result = readSnapshot(root, packageRoot, custom, "init");
+  assert.equal(result.config, "設定");
+  assert.deepEqual(Object.keys(result.deployDirFiles), [`${DEPLOY_DIR}/old.mjs`]);
+  assert.deepEqual(Object.keys(result.generatedFiles), [".claude/agents/cc-sdd-a.md"]);
+  assert.deepEqual(Object.keys(result.sourceFiles), catalog.files.map((file) => file.path));
+  assert.deepEqual(result.agentDocs, { claude: null, codex: null });
+});
 
-const w = (p, s, executable = false) => ({ action: "write", path: p, content: Buffer.from(s), executable });
-const plan = (changes, pruneDirs = []) => ({ changes, blocks: [], notices: [], pruneDirs });
+test("取り外しでは設定や配置先に触れず、設定が壊れていても成功する", (t) => {
+  const root = temporary(t);
+  const packageRoot = temporary(t);
+  fs.writeFileSync(path.join(root, CONFIG_PATH), "{");
+  fs.mkdirSync(path.join(root, DEPLOY_DIR), { recursive: true });
+  fs.writeFileSync(path.join(root, DEPLOY_DIR, "broken"), "");
+  fs.mkdirSync(path.join(root, ".claude"), { recursive: true });
+  fs.writeFileSync(path.join(root, ".claude/settings.json"), "Claude");
+  fs.writeFileSync(path.join(root, "AGENTS.md"), "案内");
+  const result = readSnapshot(root, packageRoot, catalog, "uninstall");
+  assert.equal(result.config, null);
+  assert.deepEqual(result.deployDirFiles, {});
+  assert.deepEqual(result.sourceFiles, {});
+  assert.equal(result.claudeSettings, "Claude");
+  assert.deepEqual(result.agentDocs, { claude: null, codex: "案内" });
+});
 
-test("isGitRoot: .git のディレクトリ・ファイル・無し", () => {
-  withTmp((d) => {
-    assert.equal(isGitRoot(d), false);
-    fs.mkdirSync(path.join(d, ".git"));
-    assert.equal(isGitRoot(d), true);
+test("すべての対象道筋を読む前にシンボリックリンクを拒み対象と理由を返す", (t) => {
+  const root = temporary(t);
+  fs.mkdirSync(path.join(root, ".claude"), { recursive: true });
+  fs.symlinkSync(os.tmpdir(), path.join(root, ".claude/settings.json"));
+  assert.deepEqual(checkPathSafety(root, ".claude/settings.json"), {
+    ok: false, reason: "SYMLINK", at: ".claude/settings.json",
   });
-  withTmp((d) => {
-    fs.writeFileSync(path.join(d, ".git"), "gitdir: ../x");
-    assert.equal(isGitRoot(d), true);
+  assert.deepEqual(readSnapshot(root, temporary(t), catalog, "uninstall"), {
+    ok: false, reason: "SYMLINK", at: ".claude/settings.json",
+  });
+  assert.deepEqual(checkPathSafety(root, "../outside"), { ok: false, reason: "OUTSIDE", at: "../outside" });
+});
+
+test("git の最上位は直下の .git の有無で判定する", (t) => {
+  const root = temporary(t);
+  assert.equal(isGitRoot(root), false);
+  fs.writeFileSync(path.join(root, ".git"), "gitdir: elsewhere");
+  assert.equal(isGitRoot(root), true);
+});
+
+test("配置先の祖先リンクは列挙する前に対象付きで拒否する", (t) => {
+  const root = temporary(t);
+  fs.symlinkSync(os.tmpdir(), path.join(root, ".agent-hooks"));
+  assert.deepEqual(readSnapshot(root, temporary(t), catalog, "init"), {
+    ok: false, reason: "SYMLINK", at: DEPLOY_DIR,
   });
 });
 
-test("readSnapshot: 読めるものは文字列・Buffer、無いものは null", () => {
-  withTmp((d) => {
-    put(d, CONFIG_PATH, "{}");
-    put(d, ".gitignore", "a\n");
-    put(d, "f/one.txt", "1");
-    const s = readSnapshot(d, ["f/one.txt", "f/none.txt"], []);
-    assert.equal(s.config, "{}");
-    assert.equal(s.gitignore, "a\n");
-    assert.equal(s.ledger, null);
-    assert.equal(s.settings, null);
-    assert.equal(s.claudeMd, null);
-    assert.ok(Buffer.isBuffer(s.files["f/one.txt"]));
-    assert.equal(s.files["f/one.txt"].toString(), "1");
-    assert.equal(s.files["f/none.txt"], null);
-    assert.equal(s.modes["f/one.txt"], false);
-    assert.equal(s.modes["f/none.txt"], null);
-    fs.chmodSync(path.join(d, "f/one.txt"), 0o755);
-    assert.equal(readSnapshot(d, ["f/one.txt"], []).modes["f/one.txt"], true);
-    assert.deepEqual(s.ignoredPresent, []);
-    put(d, LEDGER_PATH, "L");
-    put(d, ".claude/settings.json", "S");
-    put(d, "CLAUDE.md", "C");
-    const t = readSnapshot(d, [], []);
-    assert.deepEqual([t.ledger, t.settings, t.claudeMd], ["L", "S", "C"]);
+test("根自身がシンボリックリンクなら拒否する", (t) => {
+  const parent = temporary(t);
+  const actual = path.join(parent, "actual");
+  fs.mkdirSync(actual);
+  fs.symlinkSync(actual, path.join(parent, "linked"));
+  assert.deepEqual(checkPathSafety(path.join(parent, "linked"), "CLAUDE.md"), {
+    ok: false, reason: "SYMLINK", at: "CLAUDE.md",
   });
 });
 
-test("readSnapshot: ignoredPresent は実在する道筋だけ（glob・先頭と末尾の区切りの除去）", () => {
-  withTmp((d) => {
-    put(d, ".claude/skills/kiro-a/SKILL.md");
-    put(d, ".claude/skills/kiro-b/SKILL.md");
-    put(d, ".claude/skills/other/SKILL.md");
-    put(d, ".cache/cc-sdd-install.failed");
-    const s = readSnapshot(d, [], [
-      ".claude/skills/kiro-*/",
-      "/.cache/cc-sdd-install.failed",
-      "/.kiro/settings/",
-      ".nothing/*/",
-      "../escape",
-      ".cache/cc-sdd-install.failed",
-    ]);
-    assert.deepEqual(s.ignoredPresent, [
-      ".cache/cc-sdd-install.failed",
-      ".claude/skills/kiro-a",
-      ".claude/skills/kiro-b",
-    ]);
-  });
+test("根直下の generated owns 対象も読み取る", (t) => {
+  const root = temporary(t);
+  const packageRoot = temporary(t);
+  fs.writeFileSync(path.join(root, "package.json"), "既存");
+  const result = readSnapshot(root, packageRoot, { files: [], generated: [{ owns: ["package*.json"] }] }, "update");
+  assert.equal(result.generatedFiles["package.json"].toString(), "既存");
 });
 
-test("readPackageFiles: カタログのファイルを読み、無ければ日本語の誤り", () => {
-  withTmp((d) => {
-    put(d, "a/b.txt", "hello");
-    const cat = { files: [{ path: "a/b.txt" }] };
-    assert.equal(readPackageFiles(d, cat)["a/b.txt"].toString(), "hello");
-    assert.throws(() => readPackageFiles(d, { files: [{ path: "a/none.txt" }] }), /同梱/);
-  });
-});
-
-test("readConfigState: 設定の欠落・通常ファイル・その他・リンクを判定", () => {
-  withTmp((d) => {
-    assert.deepEqual(readConfigState(d), { kind: "missing" });
-    fs.mkdirSync(path.join(d, CONFIG_PATH), { recursive: true });
-    assert.deepEqual(readConfigState(d), { kind: "other" });
-    fs.rmSync(path.join(d, CONFIG_PATH), { recursive: true });
-    put(d, CONFIG_PATH, "{}");
-    assert.deepEqual(readConfigState(d), { kind: "file" });
-    fs.rmSync(path.join(d, CONFIG_PATH));
-    fs.symlinkSync(path.join(d, "missing-target"), path.join(d, CONFIG_PATH));
-    assert.throws(() => readConfigState(d), /シンボリックリンク/);
-  });
-});
-
-test("readPackageVersion: 同梱 package.json の版を返す", () => {
-  withTmp((d) => {
-    put(d, "package.json", JSON.stringify({ version: "2.3.4" }));
-    assert.equal(readPackageVersion(d), "2.3.4");
-  });
-});
-
-test("applyPlan: 固定名の一時リンクのリンク先を変更せず置き換える", () => {
-  withTmp((d) => {
-    const destination = path.join(d, "CLAUDE.md");
-    const outside = path.join(d, "outside.txt");
-    put(d, "outside.txt", "外部の内容\n");
-    fs.chmodSync(outside, 0o640);
-    fs.symlinkSync(outside, path.join(d, ".CLAUDE.md.cc-sdd-bootstrap.tmp"));
-    const result = applyPlan(d, plan([w("CLAUDE.md", "計画内容\n")]));
-    assert.equal(result.ok, true);
-    assert.equal(fs.readFileSync(outside, "utf8"), "外部の内容\n");
-    assert.equal(fs.statSync(outside).mode & 0o777, 0o640);
-    assert.equal(fs.readFileSync(destination, "utf8"), "計画内容\n");
-    assert.equal(fs.lstatSync(destination).isFile(), true);
-    assert.equal(fs.lstatSync(path.join(d, ".CLAUDE.md.cc-sdd-bootstrap.tmp")).isSymbolicLink(), true);
-  });
-});
-
-test("applyPlan: 書き込み・削除・権限・上書き", () => {
-  withTmp((d) => {
-    put(d, "old.txt", "old");
-    put(d, "keep.txt", "k");
-    fs.chmodSync(path.join(d, "keep.txt"), 0o600);
-    const r = applyPlan(d, plan([
-      w("deep/dir/new.txt", "n"),
-      w("deep/run.sh", "#!/bin/sh", true),
-      w("keep.txt", "k2"),
-      { action: "delete", path: "old.txt" },
-      { action: "delete", path: "absent.txt" },
-    ]));
-    assert.equal(r.ok, true);
-    assert.equal(r.done.length, 5);
-    assert.deepEqual(r.pending, []);
-    assert.equal(fs.readFileSync(path.join(d, "deep/dir/new.txt"), "utf8"), "n");
-    assert.equal(fs.statSync(path.join(d, "deep/dir/new.txt")).mode & 0o777, 0o644);
-    assert.equal(fs.statSync(path.join(d, "deep/run.sh")).mode & 0o777, 0o755);
-    assert.equal(fs.statSync(path.join(d, "keep.txt")).mode & 0o777, 0o600);
-    assert.equal(fs.readFileSync(path.join(d, "keep.txt"), "utf8"), "k2");
-    assert.equal(fs.existsSync(path.join(d, "old.txt")), false);
-    // 一時ファイルが残らない
-    assert.deepEqual(fs.readdirSync(d).filter((n) => n.includes("tmp")), []);
-  });
-});
-
-test("同じ内容の実行権限修復で 0o755 に戻す", () => {
-  withTmp((d) => {
-    put(d, "script.sh", "#!/bin/sh\n");
-    fs.chmodSync(path.join(d, "script.sh"), 0o644);
-    const result = applyPlan(d, plan([{
-      action: "write", path: "script.sh", content: Buffer.from("#!/bin/sh\n"), executable: true, note: "permission-restored",
-    }]));
-    assert.equal(result.ok, true);
-    assert.equal(fs.readFileSync(path.join(d, "script.sh"), "utf8"), "#!/bin/sh\n");
-    assert.equal(fs.statSync(path.join(d, "script.sh")).mode & 0o777, 0o755);
-  });
-});
-
-test("applyPlan: pruneDirs は空のときだけ消す", () => {
-  withTmp((d) => {
-    fs.mkdirSync(path.join(d, ".agent-hooks/cc-sdd-bootstrap"), { recursive: true });
-    put(d, ".agent-hooks/other/x");
-    put(d, "full/x");
-    const r = applyPlan(d, plan([], [".agent-hooks/cc-sdd-bootstrap", ".agent-hooks", "full", "missing"]));
-    assert.equal(r.ok, true);
-    assert.deepEqual(r.prunedDirs, [".agent-hooks/cc-sdd-bootstrap"]);
-    assert.equal(fs.existsSync(path.join(d, ".agent-hooks")), true);
-    assert.equal(fs.existsSync(path.join(d, "full")), true);
-  });
-  withTmp((d) => {
-    fs.mkdirSync(path.join(d, ".agent-hooks/cc-sdd-bootstrap"), { recursive: true });
-    const r = applyPlan(d, plan([], [".agent-hooks/cc-sdd-bootstrap", ".agent-hooks"]));
-    assert.deepEqual(r.prunedDirs, [".agent-hooks/cc-sdd-bootstrap", ".agent-hooks"]);
-  });
-});
-
-test("applyPlan: 途中の失敗で done・failed・pending を返し、残りは書かない", () => {
-  withTmp((d) => {
-    put(d, "blocker", "i am a file");
-    const c1 = w("a.txt", "1");
-    const c2 = w("blocker/sub.txt", "2");
-    const c3 = w("c.txt", "3");
-    const r = applyPlan(d, plan([c1, c2, c3], ["a"]));
-    assert.equal(r.ok, false);
-    assert.deepEqual(r.done, [c1]);
-    assert.equal(r.failed.change, c2);
-    assert.match(r.failed.message, /[぀-ヿ一-鿿]/);
-    assert.deepEqual(r.pending, [c3]);
-    assert.deepEqual(r.prunedDirs, []);
-    assert.equal(fs.existsSync(path.join(d, "c.txt")), false);
-    assert.deepEqual(fs.readdirSync(d).sort(), ["a.txt", "blocker"]);
-  });
-});
-
-test("applyPlan: 絶対パス・`..` は失敗として扱う", () => {
-  withTmp((d) => {
-    const outside = path.join(path.dirname(d), "ccsdd-escape.txt");
-    for (const bad of ["../ccsdd-escape.txt", "a/../../ccsdd-escape.txt", outside]) {
-      const c = w(bad, "x");
-      const after = w("ok.txt", "y");
-      const r = applyPlan(d, plan([c, after]));
-      assert.equal(r.ok, false);
-      assert.equal(r.failed.change, c);
-      assert.deepEqual(r.pending, [after]);
-      assert.equal(fs.existsSync(outside), false);
+test("generated owns は親直下だけを調べ、対象外の下位ディレクトリを列挙しない", (t) => {
+  const root = temporary(t);
+  const packageRoot = temporary(t);
+  fs.writeFileSync(path.join(root, "package.json"), "既存");
+  fs.mkdirSync(path.join(root, "test"));
+  const original = fs.readdirSync;
+  fs.readdirSync = function (target, ...args) {
+    if (path.resolve(String(target)) === path.join(root, "test")) {
+      const error = new Error("対象外ディレクトリは読めません");
+      error.code = "EACCES";
+      throw error;
     }
-    const r = applyPlan(d, plan([{ action: "delete", path: "../x" }]));
-    assert.equal(r.ok, false);
+    return original.call(this, target, ...args);
+  };
+  let result;
+  try {
+    result = readSnapshot(root, packageRoot, { files: [], generated: [{ owns: ["package*.json"] }] }, "update");
+  } finally {
+    fs.readdirSync = original;
+  }
+  assert.equal(result.generatedFiles["package.json"].toString(), "既存");
+});
+
+test("owns の型は親直下の通常ファイルだけを読み、リンクは対象付きで拒否する", (t) => {
+  const root = temporary(t);
+  const packageRoot = temporary(t);
+  fs.writeFileSync(path.join(root, "cc-sdd-root.json"), "根のファイル");
+  fs.mkdirSync(path.join(root, "cc-sdd-directory.json"));
+  fs.mkdirSync(path.join(root, "nested"), { recursive: true });
+  fs.writeFileSync(path.join(root, "nested/cc-sdd-child.json"), "階層のファイル");
+  fs.mkdirSync(path.join(root, "nested/cc-sdd-folder.json"));
+  const catalogForTest = { files: [], generated: [{ owns: ["cc-sdd-*.json", "nested/cc-sdd-*.json"] }] };
+  const result = readSnapshot(root, packageRoot, catalogForTest, "update");
+  assert.deepEqual(Object.fromEntries(Object.entries(result.generatedFiles).map(([name, value]) => [name, value.toString()])), {
+    "cc-sdd-root.json": "根のファイル",
+    "nested/cc-sdd-child.json": "階層のファイル",
+  });
+
+  for (const [name, target] of [["cc-sdd-link.json", "cc-sdd-root.json"], ["nested/cc-sdd-link.json", "cc-sdd-child.json"]]) {
+    fs.symlinkSync(target, path.join(root, name));
+    assert.deepEqual(readSnapshot(root, packageRoot, catalogForTest, "update"), {
+      ok: false, reason: "SYMLINK", at: name,
+    });
+    fs.unlinkSync(path.join(root, name));
+  }
+
+  fs.symlinkSync("cc-sdd-folder.json", path.join(root, "nested/cc-sdd-link.json"));
+  assert.deepEqual(readSnapshot(root, packageRoot, catalogForTest, "update"), {
+    ok: false, reason: "SYMLINK", at: "nested/cc-sdd-link.json",
   });
 });
 
-test("readSnapshot: 親ディレクトリのシンボリックリンクを通る管理対象を拒む", () => {
-  withTmp((d) => {
-    const outside = fs.mkdtempSync(path.join(os.tmpdir(), "ccsdd-outside-"));
-    try {
-      put(outside, "user.md", "利用者の文書");
-      fs.symlinkSync(outside, path.join(d, ".agent-hooks"));
-      assert.throws(
-        () => readSnapshot(d, [".agent-hooks/cc-sdd-bootstrap/user.md"], []),
-        (error) => error instanceof Error && error.message.includes(".agent-hooks/cc-sdd-bootstrap/user.md"),
-      );
-    } finally {
-      fs.rmSync(outside, { recursive: true, force: true });
-    }
-  });
+test("計画を所定の段階順に適用し、生成物を作成・更新・削除する", (t) => {
+  const root = temporary(t);
+  fs.mkdirSync(path.join(root, ".claude/agents"), { recursive: true });
+  fs.writeFileSync(path.join(root, ".claude/agents/cc-sdd-old.md"), "旧");
+  fs.writeFileSync(path.join(root, ".claude/agents/cc-sdd-update.md"), "更新前");
+  const changes = [
+    { kind: "write", path: ".gitignore", content: "ignore" },
+    { kind: "write", path: ".claude/agents/cc-sdd-new.md", content: "新", created: true },
+    { kind: "write", path: ".claude/agents/cc-sdd-update.md", content: "更新後", created: false },
+    { kind: "write", path: ".claude/settings.json", content: "hooks" },
+    { kind: "write", path: ".agent-hooks/cc-sdd-bootstrap/deploy", content: "配布" },
+    { kind: "write", path: ".cc-sdd-bootstrap.json", content: "設定" },
+    { kind: "delete", path: ".claude/agents/cc-sdd-old.md" },
+  ];
+  const result = applyPlan(root, changes);
+  assert.equal(result.ok, true);
+  assert.deepEqual(result.done.map(({ path }) => path), [
+    ".cc-sdd-bootstrap.json",
+    ".agent-hooks/cc-sdd-bootstrap/deploy",
+    ".claude/agents/cc-sdd-old.md",
+    ".claude/agents/cc-sdd-new.md",
+    ".claude/agents/cc-sdd-update.md",
+    ".claude/settings.json",
+    ".gitignore",
+  ]);
+  assert.equal(fs.readFileSync(path.join(root, ".claude/agents/cc-sdd-new.md"), "utf8"), "新");
+  assert.equal(fs.readFileSync(path.join(root, ".claude/agents/cc-sdd-update.md"), "utf8"), "更新後");
+  assert.equal(fs.existsSync(path.join(root, ".claude/agents/cc-sdd-old.md")), false);
 });
 
-test("applyPlan: シンボリックリンクを通る変更を失敗にし、リンク先を変えない", () => {
-  withTmp((d) => {
-    const outside = fs.mkdtempSync(path.join(os.tmpdir(), "ccsdd-outside-"));
-    try {
-      put(outside, "user.md", "利用者の文書");
-      fs.symlinkSync(outside, path.join(d, "linked"));
-      const change = w("linked/user.md", "上書きしてはいけない");
-      const later = w("later.txt", "後続");
-      const result = applyPlan(d, plan([change, later]));
-      assert.equal(result.ok, false);
-      assert.equal(result.failed.change, change);
-      assert.match(result.failed.message, /linked\/user\.md/);
-      assert.deepEqual(result.pending, [later]);
-      assert.equal(fs.readFileSync(path.join(outside, "user.md"), "utf8"), "利用者の文書");
-      const deletion = { action: "delete", path: "linked/user.md" };
-      const deleteResult = applyPlan(d, plan([deletion]));
-      assert.equal(deleteResult.ok, false);
-      assert.equal(deleteResult.failed.change, deletion);
-      assert.equal(fs.readFileSync(path.join(outside, "user.md"), "utf8"), "利用者の文書");
-    } finally {
-      fs.rmSync(outside, { recursive: true, force: true });
+test("削除で空になった配置先のディレクトリを根まで残さず消す", (t) => {
+  const root = temporary(t);
+  const file = ".agent-hooks/cc-sdd-bootstrap/old";
+  fs.mkdirSync(path.dirname(path.join(root, file)), { recursive: true });
+  fs.writeFileSync(path.join(root, file), "旧");
+  const result = applyPlan(root, [{ kind: "delete", path: file }]);
+  assert.equal(result.ok, true);
+  assert.equal(fs.existsSync(path.join(root, ".agent-hooks")), false);
+  assert.equal(fs.existsSync(root), true);
+});
+
+test("適用前の安全確認と失敗位置、済んだ変更、未処理変更を返す", (t) => {
+  const root = temporary(t);
+  const first = { kind: "write", path: ".cc-sdd-bootstrap.json", content: "設定" };
+  const failed = { kind: "write", path: "blocked/file", content: "失敗" };
+  const pending = { kind: "write", path: ".gitignore", content: "後続" };
+  fs.writeFileSync(path.join(root, "blocked"), "ファイルが親を塞ぐ");
+  const result = applyPlan(root, [first, failed, pending]);
+  assert.equal(result.ok, false);
+  assert.deepEqual(result.done, [first]);
+  assert.equal(result.failed.change, failed);
+  assert.match(result.failed.message, /blocked\/file/);
+  assert.deepEqual(result.pending, [pending]);
+  assert.equal(fs.existsSync(path.join(root, ".gitignore")), false);
+  const unsafe = applyPlan(root, [{ kind: "write", path: "../outside", content: "禁止" }]);
+  assert.equal(unsafe.ok, false);
+  assert.equal(unsafe.failed.change.path, "../outside");
+});
+
+test("書き込み権限の失敗を記録して後続を適用しない", (t) => {
+  const root = temporary(t);
+  const first = { kind: "write", path: "first", content: "完了" };
+  const denied = { kind: "write", path: "locked/file", content: "拒否" };
+  const pending = { kind: "write", path: "last", content: "未処理" };
+  const original = fs.writeFileSync;
+  fs.writeFileSync = function (file, ...args) {
+    if (path.resolve(String(file)) === path.join(root, "locked/file")) {
+      const error = new Error("書き込み権限がありません");
+      error.code = "EACCES";
+      throw error;
     }
-  });
+    return original.call(this, file, ...args);
+  };
+  let result;
+  try { result = applyPlan(root, [first, denied, pending]); }
+  finally { fs.writeFileSync = original; }
+  assert.equal(result.ok, false);
+  assert.deepEqual(result.done, [first]);
+  assert.equal(result.failed.change, denied);
+  assert.match(result.failed.message, /locked\/file/);
+  assert.deepEqual(result.pending, [pending]);
+  assert.equal(fs.existsSync(path.join(root, "last")), false);
+});
+
+test("生成物を消した後に空になった親ディレクトリも根まで消す", (t) => {
+  const root = temporary(t);
+  const file = ".claude/agents/cc-sdd-old.md";
+  fs.mkdirSync(path.dirname(path.join(root, file)), { recursive: true });
+  fs.writeFileSync(path.join(root, file), "旧");
+  const result = applyPlan(root, [{ kind: "delete", path: file }]);
+  assert.equal(result.ok, true);
+  assert.equal(fs.existsSync(path.join(root, ".claude")), false);
+  assert.equal(fs.existsSync(root), true);
+});
+
+test("空ディレクトリの片付けに失敗したら報告し、後続を止める", (t) => {
+  const root = temporary(t);
+  const file = ".agent-hooks/cc-sdd-bootstrap/old";
+  const failed = { kind: "delete", path: file };
+  const pending = { kind: "write", path: ".gitignore", content: "後続" };
+  fs.mkdirSync(path.dirname(path.join(root, file)), { recursive: true });
+  fs.writeFileSync(path.join(root, file), "旧");
+  const original = fs.rmdirSync;
+  fs.rmdirSync = function (target, ...args) {
+    if (path.resolve(String(target)) === path.join(root, ".agent-hooks/cc-sdd-bootstrap")) {
+      const error = new Error("片付け権限がありません");
+      error.code = "EACCES";
+      throw error;
+    }
+    return original.call(this, target, ...args);
+  };
+  let result;
+  try { result = applyPlan(root, [failed, pending]); }
+  finally { fs.rmdirSync = original; }
+  assert.equal(result.ok, false);
+  assert.deepEqual(result.done, []);
+  assert.equal(result.failed.change, failed);
+  assert.match(result.failed.message, /片付け権限/);
+  assert.deepEqual(result.pending, [pending]);
+  assert.equal(fs.existsSync(path.join(root, ".gitignore")), false);
+});
+
+test("実際に書き込み権限を外したディレクトリで失敗を返す", (t) => {
+  if (typeof process.getuid === "function" && process.getuid() === 0) {
+    t.skip("root では chmod の書き込み制限が効かない");
+    return;
+  }
+  const root = temporary(t);
+  const locked = path.join(root, "locked");
+  fs.mkdirSync(locked);
+  fs.chmodSync(locked, 0o555);
+  const first = { kind: "write", path: "first", content: "完了" };
+  const denied = { kind: "write", path: "locked/file", content: "拒否" };
+  const pending = { kind: "write", path: "last", content: "未処理" };
+  const result = applyPlan(root, [first, denied, pending]);
+  fs.chmodSync(locked, 0o755);
+  assert.equal(result.ok, false);
+  assert.deepEqual(result.done, [first]);
+  assert.equal(result.failed.change, denied);
+  assert.match(result.failed.message, /locked\/file/);
+  assert.deepEqual(result.pending, [pending]);
+  assert.equal(fs.existsSync(path.join(root, "last")), false);
+});
+
+test("導入と取り外しの適用順に両フックと文書を含める", (t) => {
+  const root = temporary(t);
+  const deploy = { kind: "delete", path: `${DEPLOY_DIR}/old` };
+  const deployWrite = { kind: "write", path: `${DEPLOY_DIR}/new`, content: "配置" };
+  const generatedDelete = { kind: "delete", path: ".claude/agents/cc-sdd-old.md" };
+  const generatedWrite = { kind: "write", path: ".claude/agents/cc-sdd-new.md", content: "生成" };
+  const changes = [
+    { kind: "write", path: ".gitignore", content: "ignore" },
+    { kind: "write", path: ".codex/hooks.json", content: "codex" },
+    generatedWrite, deployWrite,
+    { kind: "write", path: ".claude/settings.json", content: "claude" },
+    generatedDelete, deploy,
+    { kind: "write", path: ".cc-sdd-bootstrap.json", content: "設定" },
+  ];
+  const result = applyPlan(root, changes);
+  assert.equal(result.ok, true);
+  assert.deepEqual(result.done.map(({ path }) => path), [
+    ".cc-sdd-bootstrap.json", `${DEPLOY_DIR}/old`, `${DEPLOY_DIR}/new`,
+    ".claude/agents/cc-sdd-old.md", ".claude/agents/cc-sdd-new.md",
+    ".claude/settings.json", ".codex/hooks.json", ".gitignore",
+  ]);
+
+  const uninstall = [
+    { kind: "write", path: "AGENTS.md", content: "agents" },
+    { kind: "write", path: ".codex/hooks.json", content: "codex" },
+    { kind: "write", path: "CLAUDE.md", content: "claude doc" },
+    { kind: "write", path: ".claude/settings.json", content: "claude hooks" },
+  ];
+  const removed = applyPlan(root, uninstall);
+  assert.equal(removed.ok, true);
+  assert.deepEqual(removed.done.map(({ path }) => path), [
+    ".claude/settings.json", ".codex/hooks.json", "CLAUDE.md", "AGENTS.md",
+  ]);
 });

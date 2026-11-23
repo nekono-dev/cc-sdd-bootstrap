@@ -6,7 +6,7 @@ import { buildCommand, mergeHooks, removeHooks } from "../lib/hooks-merge.mjs";
 
 const file = ".claude/settings.json";
 const hooksFor = (tool) => {
-  const hooks = catalog.agentHooks.filter((hook) => hook.tools.includes(tool));
+  const hooks = catalog.hooks.filter((hook) => hook.tools.includes(tool));
   return hooks.length ? hooks : [{ tools: [tool], event: "SessionStart", script: "example.mjs", args: ["start"], matcher: "startup", timeout: 12 }];
 };
 
@@ -38,11 +38,11 @@ for (const tool of ["claude", "codex"]) {
 
   test(`${tool}: 混在カタログから対象のフックだけを登録し hooks の位置を保つ`, () => {
     const input = { before: 1, hooks: { SessionStart: [] }, after: 2 };
-    const result = mergeHooks({ file, text: JSON.stringify(input), tool, hooks: catalog.agentHooks });
+    const result = mergeHooks({ file, text: JSON.stringify(input), tool, hooks: catalog.hooks });
     const output = JSON.parse(result.text);
     assert.deepEqual(Object.keys(output), ["before", "hooks", "after"]);
     const commands = Object.values(output.hooks).flat().flatMap((group) => group.hooks.map((handler) => handler.command));
-    const expected = catalog.agentHooks.filter((hook) => hook.tools.includes(tool));
+    const expected = catalog.hooks.filter((hook) => hook.tools.includes(tool));
     assert.equal(commands.length, expected.length);
     assert.deepEqual(commands, expected.map((hook) => buildCommand(tool, hook)));
   });
