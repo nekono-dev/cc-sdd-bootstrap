@@ -13,7 +13,7 @@
   - 設定の誤りは失敗、導入中の印があれば導入しない（新しい・古いの別を返す）、失敗の記録があれば入れ直し、版・言語の不一致・状態なし・記録した道筋の欠け・区画なしで入れ直し、すべて揃えば省く
   - 単体試験で、上の各場合の判断と、内容だけが変わった導入物では省くことが確かめられる
   - _Requirements: 4.1, 4.2, 4.3, 4.4, 5.5_
-- [ ] 1.3 導入の計画（消す対象・manifest・npx の引数）を両ツール向けにする
+- [x] 1.3 導入の計画（消す対象・manifest・npx の引数）を両ツール向けにする
   - 消す対象を、両ツールのスキルのうち `kiro-` で始まるものと `.kiro/settings` に限る（独自のスキル・仕様・方針・`.codex/agents` を含めない）
   - manifest をツールごとに、スキル・標準の文書（Claude Code は CLAUDE.md、Codex は AGENTS.md をリポジトリの直下へ）・設定の雛形にし、Codex の既定のエージェント定義を含めない
   - npx の引数をツールごとに組み立てる（版・言語・manifest・強制上書き）
@@ -71,3 +71,4 @@
 ## Implementation Notes
 - 1.1: Codex の利用上限の間、実装は Claude Code のサブエージェント（Haiku）、レビューは Sonnet で行った。install-cc-sdd.mjs は試験を通す最小限の付け替え（雛形の保持を false に固定、指紋をやめて道筋の有無で判断）にとどめ、2.x で組み直す。decideInstall の理由名は files-missing を足し templates-missing を消した（1.2 で引き継ぐか確かめる）。読み取りは configFields の全項目を検証する（codex.enabled・models も。subagent-delegation 1.1 で項目定義が変わる）。
 - 1.2: install-cc-sdd.mjs の判断の呼び出しは仮置き（導入中の印は常に無し、区画は常に有り）。CLI の分岐は fail・busy を区別せず導入に進むので、2.1 で材料を読むときに直す。
+- 1.3: 2.2 までの暫定として、install-cc-sdd.mjs は Claude Code 向けの manifest（標準の文書を直下の CLAUDE.md に出す）を使い、運用の区画はまだ書き足さない。この間にこの作業ツリーでセッションを開くと、コミット済みの CLAUDE.md が標準の文書で置き換わる（git で戻せる）。.kiro/settings は丸ごと消して入れ直す（導入物でコミットしない）。

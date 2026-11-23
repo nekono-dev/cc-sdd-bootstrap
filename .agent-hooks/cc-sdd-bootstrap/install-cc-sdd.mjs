@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
 import {
   CONFIG_FILE, UPDATE_COMMAND, FAILURE_RECORD, STATE_PATH, NPX_TIMEOUT_MS, RECORD_IN_PROGRESS,
-  readInstallConfig, parseState, buildState, isFingerprintTarget, decideInstall,
+  readInstallConfig, parseState, buildState, decideInstall,
   removalTargets, buildManifest, npxArgs, messageInstalled, messageSkipped,
   messageGuide, failureRecordText, messageFailed
 } from './install-rules.mjs';
@@ -26,9 +26,11 @@ const writeRecord = (rel, text) => {
 };
 // 雛形の保持は廃止した（installer-core で組み直すまでの間、常に保持しない扱い）
 const KEEP_TEMPLATES = false;
+// 導入物の道筋か（雛形は保持しない扱い）。install-rules の指紋の判定を外したあとの暫定の置き換え。2.2 で組み直す
+const isInstalledFile = (rel) => rel.startsWith('.claude/skills/kiro-') || rel === '.kiro/settings/cc-sdd-guide.md' || rel.startsWith('.kiro/settings/templates/');
 
 /** 今あるファイルの道筋を、道筋をキーにした対応で返す（中身は見ない。4.4） */
-function existingFiles(keepTemplates) {
+function existingFiles() {
   const found = {};
   const walk = (rel) => {
     const full = absolute(rel);
@@ -37,7 +39,7 @@ function existingFiles(keepTemplates) {
     for (const entry of entries) {
       const child = `${rel}/${entry.name}`;
       if (entry.isDirectory()) walk(child);
-      else if (entry.isFile() && isFingerprintTarget(child, keepTemplates)) {
+      else if (entry.isFile() && isInstalledFile(child)) {
         found[child] = true;
       }
     }
@@ -45,17 +47,6 @@ function existingFiles(keepTemplates) {
   walk('.claude/skills');
   walk('.kiro/settings');
   return found;
-}
-
-function templatesMissing() {
-  const dir = absolute('.kiro/settings/templates');
-  try {
-    const walk = (current) => fs.readdirSync(current, { withFileTypes: true }).some((entry) => {
-      const file = path.join(current, entry.name);
-      return entry.isFile() || (entry.isDirectory() && walk(file));
-    });
-    return !walk(dir);
-  } catch { return true; }
 }
 
 function rejectLinkedParents() {
@@ -86,7 +77,7 @@ function collectFiles(keepTemplates) {
     for (const entry of entries) {
       const child = `${rel}/${entry.name}`;
       if (entry.isDirectory()) collect(child);
-      else if (entry.isFile() && isFingerprintTarget(child, keepTemplates)) files.push(child);
+      else if (entry.isFile() && isInstalledFile(child)) files.push(child);
     }
   };
   let skillEntries = [];
@@ -97,28 +88,28 @@ function collectFiles(keepTemplates) {
   }
   const guide = '.kiro/settings/cc-sdd-guide.md';
   try {
-    if (fs.lstatSync(absolute(guide)).isFile() && isFingerprintTarget(guide, keepTemplates)) files.push(guide);
+    if (fs.lstatSync(absolute(guide)).isFile() && isInstalledFile(guide)) files.push(guide);
   } catch (error) { if (error.code !== 'ENOENT') throw error; }
   if (!keepTemplates) collect('.kiro/settings/templates');
   return files;
 }
 
-function performInstall(config, templatesAbsent) {
+function performInstall(config) {
   writeRecord(FAILURE_RECORD, RECORD_IN_PROGRESS);
   rejectLinkedParents();
   let skillEntries = [];
   try { skillEntries = fs.readdirSync(absolute('.claude/skills')); } catch (error) { if (error.code !== 'ENOENT') throw error; }
-  for (const rel of removalTargets({ skillEntries, keepTemplates: KEEP_TEMPLATES })) removeTarget(rel);
+  for (const rel of removalTargets({ claude: skillEntries, codex: [] })) removeTarget(rel);
 
   const cache = absolute('.cache');
   fs.mkdirSync(cache, { recursive: true });
   const manifestPath = absolute(`.cache/cc-sdd-install.manifest.${process.pid}.json`);
-  const manifest = buildManifest({ keepTemplates: KEEP_TEMPLATES, templatesMissing: templatesAbsent });
+  const manifest = buildManifest('claude');
   try {
     fs.writeFileSync(manifestPath, JSON.stringify(manifest), 'utf8');
     const rawTimeout = process.env.CC_SDD_BOOTSTRAP_NPX_TIMEOUT_MS;
     const timeout = /^\d+$/.test(rawTimeout ?? '') && Number(rawTimeout) > 0 ? Number(rawTimeout) : NPX_TIMEOUT_MS;
-    const result = spawnSync('npx', npxArgs(config, manifestPath), {
+    const result = spawnSync('npx', npxArgs(config, 'claude', manifestPath), {
       cwd: root, stdio: ['ignore', 2, 2], timeout, encoding: 'utf8'
     });
     if (result.error?.code === 'ETIMEDOUT') throw new Error(`時間内に取得・導入が終わりませんでした（${Math.ceil(timeout / 1000)}秒）。通信を確かめてから再試行してください`);
@@ -151,8 +142,7 @@ try {
   try { stateText = fs.readFileSync(absolute(STATE_PATH), 'utf8'); } catch { /* 読めない状態は未記録 */ }
   const state = parseState(stateText);
   const failureRecordExists = fs.existsSync(absolute(FAILURE_RECORD));
-  const missing = templatesMissing();
-  const currentFiles = existingFiles(KEEP_TEMPLATES);
+  const currentFiles = existingFiles();
   // 判断の材料の読み取りは 2.1 で組み直す。ここでは従来の判断と同じ結果になるよう、印と区画は無い・ある扱いにする
   const missingFiles = state ? state.files.filter((rel) => !Object.hasOwn(currentFiles, rel)) : [];
   const decision = decideInstall({
@@ -166,7 +156,7 @@ try {
   if (decision.action === 'skip') {
     process.stdout.write(`${messageSkipped(config)}\n${messageGuide()}\n`);
   } else {
-    performInstall(config, missing);
+    performInstall(config);
   }
   process.exit(0);
 } catch (error) {

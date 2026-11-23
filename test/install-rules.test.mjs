@@ -1,4 +1,4 @@
-import { readInstallConfig, parseState, buildState, isFingerprintTarget, FAILURE_RECORD, STATE_PATH, RETRY_COMMAND, NPX_TIMEOUT_MS, STALE_LOCK_MS, decideInstall, removalTargets, buildManifest, npxArgs, RECORD_IN_PROGRESS, messageInstalled, messageSkipped, messageGuide, failureRecordText, messageFailed } from "../.agent-hooks/cc-sdd-bootstrap/install-rules.mjs";
+import { readInstallConfig, parseState, buildState, FAILURE_RECORD, STATE_PATH, RETRY_COMMAND, NPX_TIMEOUT_MS, STALE_LOCK_MS, decideInstall, removalTargets, buildManifest, npxArgs, RECORD_IN_PROGRESS, messageInstalled, messageSkipped, messageGuide, failureRecordText, messageFailed } from "../.agent-hooks/cc-sdd-bootstrap/install-rules.mjs";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
@@ -143,18 +143,6 @@ test("parseState は相対でない道筋を含む記録に対し null", () => {
   }
 });
 
-test("isFingerprintTarget の判定", () => {
-  assert.equal(isFingerprintTarget(".claude/skills/kiro-impl/SKILL.md", true), true);
-  assert.equal(isFingerprintTarget(".claude/skills/kiro-impl/SKILL.md", false), true);
-  assert.equal(isFingerprintTarget(".kiro/settings/cc-sdd-guide.md", true), true);
-  assert.equal(isFingerprintTarget(".kiro/settings/cc-sdd-guide.md", false), true);
-  assert.equal(isFingerprintTarget(".kiro/settings/templates/specs/tasks.md", true), false);
-  assert.equal(isFingerprintTarget(".kiro/settings/templates/specs/tasks.md", false), true);
-  assert.equal(isFingerprintTarget(".claude/skills/other/x.md", true), false);
-  assert.equal(isFingerprintTarget(".kiro/specs/a/spec.json", true), false);
-  assert.equal(isFingerprintTarget("CLAUDE.md", true), false);
-});
-
 const config = { version: "3.1.0", lang: "ja" };
 const KIRO_SKILL = ".claude/skills/kiro-impl/SKILL.md";
 const state = buildState(config, [KIRO_SKILL]);
@@ -229,23 +217,51 @@ test("内容だけが変わった導入物は道筋がある限り省く（内�
   assert.deepEqual(decideInstall(facts({ missingFiles: [] })), { action: "skip" });
 });
 
-test("removalTargets は kiro- のみを順に消し、保持時の雛形を残す", () => {
-  assert.deepEqual(removalTargets({ skillEntries: ["kiro-a", "custom", "kiro-file", "kiro-link"], keepTemplates: false }), [".claude/skills/kiro-a", ".claude/skills/kiro-file", ".claude/skills/kiro-link", ".kiro/settings/cc-sdd-guide.md", ".kiro/settings/templates"]);
-  assert.deepEqual(removalTargets({ skillEntries: ["custom", "kiro-a"], keepTemplates: true }), [".claude/skills/kiro-a", ".kiro/settings/cc-sdd-guide.md"]);
+test("removalTargets は両ツールの kiro- で始まるスキルと .kiro/settings を消す対象にする", () => {
+  assert.deepEqual(
+    removalTargets({ claude: ["kiro-a", "custom", "kiro-file"], codex: ["kiro-b", "mine"] }),
+    [".claude/skills/kiro-a", ".claude/skills/kiro-file", ".agents/skills/kiro-b", ".kiro/settings"]
+  );
 });
 
-test("buildManifest は保持と雛形欠落に応じた3通りの一覧を作る", () => {
-  const skills = { type: "templateDir", fromDir: "templates/agents/{{AGENT}}/skills", toDir: "{{AGENT_COMMANDS_DIR}}" };
-  const doc = { type: "templateFile", from: "templates/agents/{{AGENT}}/docs/CLAUDE.md", toDir: "{{KIRO_DIR}}/settings", rename: "cc-sdd-guide.md" };
-  const templates = { type: "templateDir", fromDir: "templates/shared/settings/templates", toDir: "{{KIRO_DIR}}/settings/templates" };
-  const expected = (withTemplates) => ({ version: 1, artifacts: [{ id: "skills", source: skills }, { id: "doc_main", source: doc }, ...(withTemplates ? [{ id: "settings_templates", source: templates }] : [])] });
-  assert.deepEqual(buildManifest({ keepTemplates: false, templatesMissing: false }), expected(true));
-  assert.deepEqual(buildManifest({ keepTemplates: true, templatesMissing: false }), expected(false));
-  assert.deepEqual(buildManifest({ keepTemplates: true, templatesMissing: true }), expected(true));
+test("removalTargets は独自のスキル・仕様・方針・.codex/agents を消す対象に含めない", () => {
+  assert.deepEqual(removalTargets({ claude: ["custom"], codex: ["other"] }), [".kiro/settings"]);
+  for (const target of removalTargets({ claude: ["kiro-a"], codex: ["kiro-b"] })) {
+    assert.doesNotMatch(target, /\.kiro\/(specs|steering)|\.codex/);
+  }
 });
 
-test("npxArgs はシェルを介さない引数配列を返す", () => {
-  assert.deepEqual(npxArgs(config, ".cache/manifest.json"), ["--yes", "cc-sdd@3.1.0", "--yes", "--overwrite", "force", "--manifest", ".cache/manifest.json", "--claude-skills", "--lang", "ja"]);
+test("removalTargets は空の一覧なら .kiro/settings だけを返す", () => {
+  assert.deepEqual(removalTargets({ claude: [], codex: [] }), [".kiro/settings"]);
+});
+
+test("buildManifest(claude) は Claude Code 向けの出力先と中身を作る（CLAUDE.md を直下へ）", () => {
+  assert.deepEqual(buildManifest("claude"), {
+    version: 1,
+    artifacts: [
+      { id: "skills", source: { type: "templateDir", fromDir: "templates/agents/{{AGENT}}/skills", toDir: "{{AGENT_COMMANDS_DIR}}" } },
+      { id: "doc_main", source: { type: "templateFile", from: "templates/agents/{{AGENT}}/docs/CLAUDE.md", toDir: "." } },
+      { id: "settings_templates", source: { type: "templateDir", fromDir: "templates/shared/settings/templates", toDir: "{{KIRO_DIR}}/settings/templates" } }
+    ]
+  });
+});
+
+test("buildManifest(codex) は Codex 向けの出力先と中身を作り、既定のエージェント定義を含めない", () => {
+  const manifest = buildManifest("codex");
+  assert.deepEqual(manifest, {
+    version: 1,
+    artifacts: [
+      { id: "skills", source: { type: "templateDir", fromDir: "templates/agents/{{AGENT}}/skills", toDir: "{{AGENT_COMMANDS_DIR}}" } },
+      { id: "doc_main", source: { type: "templateFile", from: "templates/agents/{{AGENT}}/docs/AGENTS.md", toDir: "." } },
+      { id: "settings_templates", source: { type: "templateDir", fromDir: "templates/shared/settings/templates", toDir: "{{KIRO_DIR}}/settings/templates" } }
+    ]
+  });
+  assert.equal(manifest.artifacts.some((a) => a.id === "codex_agents"), false);
+});
+
+test("npxArgs は版・言語・manifest・強制上書きを、ツールごとのスキル指定で組み立てる", () => {
+  assert.deepEqual(npxArgs(config, "claude", ".cache/manifest.json"), ["--yes", "cc-sdd@3.1.0", "--yes", "--overwrite", "force", "--manifest", ".cache/manifest.json", "--claude-skills", "--lang", "ja"]);
+  assert.deepEqual(npxArgs(config, "codex", ".cache/manifest.json"), ["--yes", "cc-sdd@3.1.0", "--yes", "--overwrite", "force", "--manifest", ".cache/manifest.json", "--codex-skills", "--lang", "ja"]);
 });
 
 test("利用者向けの成功・省略・案内の文に必要な情報がある", () => {

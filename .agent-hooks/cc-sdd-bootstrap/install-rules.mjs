@@ -120,14 +120,6 @@ function isRelativePath(p) {
   return !p.split("/").some((seg) => seg === "" || seg === "." || seg === "..");
 }
 
-/** isFingerprintTarget: 指紋を取る対象かどうか。保持を選んだときは雛形の下を外す */
-export function isFingerprintTarget(path, keepTemplates) {
-  if (path.startsWith(".claude/skills/kiro-")) return true;
-  if (path === ".kiro/settings/cc-sdd-guide.md") return true;
-  if (path.startsWith(".kiro/settings/templates/")) return !keepTemplates;
-  return false;
-}
-
 /**
  * 判断: 材料（InstallFacts）から、導入するか・省くか・止めるかを返す（内容は比べない。4.4）。
  * 順序: 設定の誤り → 導入中の印 → 失敗の記録 → 状態の欠け → 版・言語 → 記録した道筋の欠け → 運用の区画の欠け → 省く。
@@ -156,39 +148,55 @@ export function decideInstall(facts) {
   return { action: "skip" };
 }
 
-/** 削除する導入物の道筋を順に返す。 */
-export function removalTargets({ skillEntries, keepTemplates }) {
+/**
+ * 消す対象の道筋を返す。両ツールのスキルのうち名前が kiro- で始まるものと、.kiro/settings。
+ * 独自のスキル・.kiro/specs・.kiro/steering・.codex/agents は含めない（3.3）。
+ * @param {{ claude: string[], codex: string[] }} entries ツールごとのスキルの名前（.claude/skills・.agents/skills の下）
+ */
+export function removalTargets(entries) {
+  const kiroOnly = (names) => names.filter((name) => name.startsWith("kiro-"));
   return [
-    ...skillEntries.filter((name) => name.startsWith("kiro-")).map((name) => `.claude/skills/${name}`),
-    ".kiro/settings/cc-sdd-guide.md",
-    ...(!keepTemplates ? [".kiro/settings/templates"] : [])
+    ...kiroOnly(entries.claude).map((name) => `.claude/skills/${name}`),
+    ...kiroOnly(entries.codex).map((name) => `.agents/skills/${name}`),
+    ".kiro/settings"
   ];
 }
 
-/** cc-sdd が解釈する manifest を設定に応じて組み立てる。 */
-export function buildManifest({ keepTemplates, templatesMissing }) {
-  const artifacts = [
-    {
-      id: "skills",
-      source: { type: "templateDir", fromDir: "templates/agents/{{AGENT}}/skills", toDir: "{{AGENT_COMMANDS_DIR}}" }
-    },
-    {
-      id: "doc_main",
-      source: { type: "templateFile", from: "templates/agents/{{AGENT}}/docs/CLAUDE.md", toDir: "{{KIRO_DIR}}/settings", rename: "cc-sdd-guide.md" }
-    }
-  ];
-  if (!keepTemplates || templatesMissing) {
-    artifacts.push({
-      id: "settings_templates",
-      source: { type: "templateDir", fromDir: "templates/shared/settings/templates", toDir: "{{KIRO_DIR}}/settings/templates" }
-    });
-  }
-  return { version: 1, artifacts };
+/**
+ * cc-sdd が解釈する manifest をツールごとに組み立てる。
+ * スキル・標準の文書（Claude Code は CLAUDE.md、Codex は AGENTS.md。リポジトリの直下へ）・設定の雛形。Codex の既定のエージェント定義は含めない。
+ * @param {"claude" | "codex"} tool
+ */
+export function buildManifest(tool) {
+  const doc = tool === "claude" ? "CLAUDE.md" : "AGENTS.md";
+  return {
+    version: 1,
+    artifacts: [
+      {
+        id: "skills",
+        source: { type: "templateDir", fromDir: "templates/agents/{{AGENT}}/skills", toDir: "{{AGENT_COMMANDS_DIR}}" }
+      },
+      {
+        id: "doc_main",
+        source: { type: "templateFile", from: `templates/agents/{{AGENT}}/docs/${doc}`, toDir: "." }
+      },
+      {
+        id: "settings_templates",
+        source: { type: "templateDir", fromDir: "templates/shared/settings/templates", toDir: "{{KIRO_DIR}}/settings/templates" }
+      }
+    ]
+  };
 }
 
-/** npx に渡す引数をシェル展開なしで配列として返す。 */
-export function npxArgs(config, manifestPath) {
-  return ["--yes", `cc-sdd@${config.version}`, "--yes", "--overwrite", "force", "--manifest", manifestPath, "--claude-skills", "--lang", config.lang];
+/**
+ * npx に渡す引数をシェル展開なしで配列として返す。ツールごとにスキルの指定だけが変わる。
+ * @param {{ version: string, lang: string }} config
+ * @param {"claude" | "codex"} tool
+ * @param {string} manifestPath
+ */
+export function npxArgs(config, tool, manifestPath) {
+  const skills = tool === "claude" ? "--claude-skills" : "--codex-skills";
+  return ["--yes", `cc-sdd@${config.version}`, "--yes", "--overwrite", "force", "--manifest", manifestPath, skills, "--lang", config.lang];
 }
 
 /** 導入開始時に失敗の記録へ書く案内文 */
