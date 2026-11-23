@@ -1,4 +1,4 @@
-import { readInstallConfig, parseState, buildState, FAILURE_RECORD, STATE_PATH, RETRY_COMMAND, NPX_TIMEOUT_MS, STALE_LOCK_MS, decideInstall, removalTargets, buildManifest, npxArgs, RECORD_IN_PROGRESS, messageInstalled, messageSkipped, messageGuide, failureRecordText, messageFailed } from "../.agent-hooks/cc-sdd-bootstrap/install-rules.mjs";
+import { readInstallConfig, parseState, buildState, FAILURE_RECORD, STATE_PATH, LOCK_PATH, RETRY_COMMAND, NPX_TIMEOUT_MS, STALE_LOCK_MS, decideInstall, removalTargets, buildManifest, npxArgs, RECORD_IN_PROGRESS, messageInstalled, messageSkipped, messageGuide, failureRecordText, messageFailed, messageReadSkillDirectly, messageBlocked, messageUsage } from "../.agent-hooks/cc-sdd-bootstrap/install-rules.mjs";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
@@ -160,6 +160,7 @@ const facts = (overrides = {}) => ({
 test("導入記録の定数", () => {
   assert.equal(FAILURE_RECORD, ".cache/cc-sdd-install.failed");
   assert.equal(STATE_PATH, ".cache/cc-sdd-install.state.json");
+  assert.equal(LOCK_PATH, ".cache/cc-sdd-install.lock");
   assert.equal(RETRY_COMMAND, "node .agent-hooks/cc-sdd-bootstrap/install-cc-sdd.mjs");
   assert.equal(NPX_TIMEOUT_MS, 540000);
   assert.equal(STALE_LOCK_MS, 660000);
@@ -264,10 +265,14 @@ test("npxArgs は版・言語・manifest・強制上書きを、ツールごと�
   assert.deepEqual(npxArgs(config, "codex", ".cache/manifest.json"), ["--yes", "cc-sdd@3.1.0", "--yes", "--overwrite", "force", "--manifest", ".cache/manifest.json", "--codex-skills", "--lang", "ja"]);
 });
 
-test("利用者向けの成功・省略・案内の文に必要な情報がある", () => {
+test("導入したときの文は、両ツールの導入物と両文書を書き換えたことを含む（旧版の「CLAUDE.md は変更していません」は含めない）", () => {
   const installed = messageInstalled(config);
   assert.ok(installed.split("\n").length >= 1 && installed.split("\n").length <= 3);
-  for (const part of [config.version, config.lang, ".claude/skills/kiro-*", ".kiro/settings/", "CLAUDE.md は変更していません"]) assert.ok(installed.includes(part));
+  for (const part of [config.version, config.lang, ".claude/skills/kiro-*", ".agents/skills/kiro-*", ".kiro/settings/", "CLAUDE.md", "AGENTS.md", "Claude Code", "Codex", "書き換え"]) assert.ok(installed.includes(part));
+  assert.doesNotMatch(installed, /変更していません/);
+});
+
+test("利用者向けの省略・案内の文に必要な情報がある", () => {
   const skipped = messageSkipped(config);
   assert.equal(skipped.split("\n").length, 1);
   for (const part of [config.version, config.lang]) assert.ok(skipped.includes(part));
@@ -295,3 +300,67 @@ test("失敗の記録と通知に理由および Claude の外での再試行方
   assert.match(failed, /次の入力.*止/);
   assert.match(failed, /新しいセッション.*再試行/);
 });
+
+test("手順書を直接読む文は、ツールごとの手順書の置き場所と読み方を示す", () => {
+  const claude = messageReadSkillDirectly("claude", "何か頼む");
+  assert.match(claude, /\.claude\/skills\/<名前>\/SKILL\.md/);
+  assert.doesNotMatch(claude, /\.agents\/skills/);
+  assert.match(claude, /Read/);
+  assert.match(claude, /最後まで/);
+  const codex = messageReadSkillDirectly("codex", "何か頼む");
+  assert.match(codex, /\.agents\/skills\/<名前>\/SKILL\.md/);
+  assert.doesNotMatch(codex, /\.claude\/skills/);
+  assert.match(codex, /Read/);
+  assert.match(codex, /最後まで/);
+});
+
+test("入力が /kiro-xxx または $kiro-xxx で始まるなら、その手順書の道筋を名指しする", () => {
+  assert.match(messageReadSkillDirectly("claude", "/kiro-impl 1.4"), /\.claude\/skills\/kiro-impl\/SKILL\.md/);
+  assert.match(messageReadSkillDirectly("claude", "  \n/kiro-spec-tasks x"), /\.claude\/skills\/kiro-spec-tasks\/SKILL\.md/);
+  assert.match(messageReadSkillDirectly("codex", "$kiro-impl"), /\.agents\/skills\/kiro-impl\/SKILL\.md/);
+  assert.match(messageReadSkillDirectly("codex", "  $kiro-spec-init 説明"), /\.agents\/skills\/kiro-spec-init\/SKILL\.md/);
+});
+
+test("入力が kiro- の依頼で始まらないときは道筋を名指ししない", () => {
+  const t = messageReadSkillDirectly("claude", "文章で頼む /kiro-impl");
+  assert.doesNotMatch(t, /kiro-impl\/SKILL\.md/);
+  assert.doesNotMatch(messageReadSkillDirectly("claude", ""), /kiro-[a-z]+\/SKILL\.md/);
+});
+
+test("止めた理由（失敗）は詳細と再試行のコマンドを示す。詳細が無ければ完了を確認できない旨を示す", () => {
+  const withDetail = messageBlocked({ kind: "failed", detail: "取得に失敗しました" });
+  assert.ok(withDetail.includes("取得に失敗しました"));
+  assert.ok(withDetail.includes(RETRY_COMMAND));
+  assert.match(withDetail, /通常の端末/);
+  const noDetail = messageBlocked({ kind: "failed", detail: null });
+  assert.match(noDetail, /導入の完了を確認できない/);
+  assert.ok(noDetail.includes(RETRY_COMMAND));
+  assert.match(noDetail, /通常の端末/);
+});
+
+test("止めた理由（導入中・新しい印）は別のセッションで導入中の旨と再試行のコマンドを示し、印の削除は示さない", () => {
+  const m = messageBlocked({ kind: "busy", stale: false });
+  assert.match(m, /別のセッションで導入中/);
+  assert.ok(m.includes(RETRY_COMMAND));
+  assert.doesNotMatch(m, /rm /);
+});
+
+test("止めた理由（導入中・古い印）は中断の可能性と、印を消して再試行する 1 行を示す", () => {
+  const m = messageBlocked({ kind: "busy", stale: true });
+  assert.match(m, /中断した可能性/);
+  assert.match(m, /ほかに導入が進んでいないことを確かめてから/);
+  const command = `rm ${LOCK_PATH} && ${RETRY_COMMAND}`;
+  assert.equal(command, "rm .cache/cc-sdd-install.lock && node .agent-hooks/cc-sdd-bootstrap/install-cc-sdd.mjs");
+  assert.ok(m.split("\n").some((line) => line.trim() === command));
+});
+
+test("利用手順は準備スクリプトの 1 行・手元の初回の始め方・未導入の /kiro-* の扱いを含む", () => {
+  const u = messageUsage();
+  assert.ok(u.includes("if [ -d <リポジトリ> ]; then (cd <リポジトリ> && node .agent-hooks/cc-sdd-bootstrap/install-cc-sdd.mjs); fi"));
+  assert.match(u, /最初の入力/);
+  assert.match(u, /起動前/);
+  assert.match(u, /\/kiro-/);
+  assert.match(u, /Unknown command/);
+  assert.match(u, /通常の文章/);
+});
+

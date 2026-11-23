@@ -249,7 +249,8 @@ function messageSkipped(config: InstallConfig): string;
 function messageReadSkillDirectly(tool: Tool, prompt: string): string;
 // 一覧に載らないので手順書を直接読む旨。Claude Code は .claude/skills/<名前>/SKILL.md、Codex は .agents/skills/<名前>/SKILL.md。
 // 入力が /kiro-<名前> または $kiro-<名前> で始まれば、その手順書の道筋を名指しする
-function messageBlocked(detail: string | null): string;  // 未完了の理由（無ければ「完了を確認できない」）と RETRY_COMMAND
+function messageBlocked(input: { kind: "failed"; detail: string | null } | { kind: "busy"; stale: boolean }): string;
+// failed: 未完了の理由（無ければ「完了を確認できない」）と RETRY_COMMAND。busy: 新しい印なら別のセッションで導入中と RETRY_COMMAND、古い印なら中断の可能性と印を消して再試行する 1 行
 function messageUsage(): string;                         // 1.1・2.4・2.5 の利用手順
 const RETRY_COMMAND = "node .agent-hooks/cc-sdd-bootstrap/install-cc-sdd.mjs";
 const LOCK_PATH = ".cache/cc-sdd-install.lock";

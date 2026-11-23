@@ -5,6 +5,8 @@ export const UPDATE_COMMAND = "npx github:nekono-dev/cc-sdd-bootstrap update";
 export const INIT_COMMAND = "npx github:nekono-dev/cc-sdd-bootstrap init";
 export const FAILURE_RECORD = ".cache/cc-sdd-install.failed";
 export const STATE_PATH = ".cache/cc-sdd-install.state.json";
+/** 導入中の印（同時の実行を防ぐ）。作成時に排他的に作り、導入の終わりに消す */
+export const LOCK_PATH = ".cache/cc-sdd-install.lock";
 export const RETRY_COMMAND = "node .agent-hooks/cc-sdd-bootstrap/install-cc-sdd.mjs";
 export const NPX_TIMEOUT_MS = 540000;
 /** 導入中の印が古いとみなす経過時間（導入全体の期限＋120秒。UserPromptSubmit の時間切れ 600 秒より長い） */
@@ -202,9 +204,9 @@ export function npxArgs(config, tool, manifestPath) {
 /** 導入開始時に失敗の記録へ書く案内文 */
 export const RECORD_IN_PROGRESS = `cc-sdd の導入が完了していません（導入中、または中断）。再試行: ${RETRY_COMMAND}（Claude の外で実行する）`;
 
-/** 導入成功を利用者へ知らせる */
+/** 導入成功を利用者へ知らせる。Claude Code 向けと Codex 向けの導入物と両文書を書き換えたことを伝える */
 export function messageInstalled(config) {
-  return `cc-sdd ${config.version}（言語: ${config.lang}）の導入物を更新しました（.claude/skills/kiro-*・.kiro/settings/）。\nCLAUDE.md は変更していません。`;
+  return `cc-sdd ${config.version}（言語: ${config.lang}）を導入しました。Claude Code・Codex の両方について、スキル（.claude/skills/kiro-*・.agents/skills/kiro-*）、.kiro/settings/、CLAUDE.md・AGENTS.md を書き換え、運用の区画を末尾へ書き足しました。`;
 }
 
 /** 入れ直しを省いたことを利用者へ知らせる */
@@ -225,4 +227,55 @@ export function failureRecordText(reason) {
 /** セッション開始時に導入失敗を利用者へ知らせる */
 export function messageFailed(reason) {
   return `cc-sdd の導入に失敗しました。理由: ${reason}\n次の入力は止まります。再試行: ${RETRY_COMMAND}（Claude の外で実行する）。新しいセッションを開くと再試行されます。`;
+}
+
+/** 手順書の置き場所（ツールごと）。Claude Code は .claude/skills、Codex は .agents/skills */
+const SKILL_DIRS = { claude: ".claude/skills", codex: ".agents/skills" };
+
+/**
+ * 一覧に載らないスキルの手順書を直接読む旨を伝える。
+ * 入力の先頭の空白を除いて /kiro-xxx または $kiro-xxx で始まるなら、その手順書の道筋を名指しする。
+ * @param {"claude" | "codex"} tool
+ * @param {string} prompt 利用者の入力
+ */
+export function messageReadSkillDirectly(tool, prompt) {
+  const dir = SKILL_DIRS[tool];
+  if (dir === undefined) throw new TypeError(`未知のツールです: ${tool}`);
+  const generic = `スキル一覧に載らないスキル（kiro-discovery・kiro-impl など）は、依頼に対応する ${dir}/<名前>/SKILL.md を Read して、その手順を最後まで実行してください。`;
+  const named = /^\s*[/$](kiro-[A-Za-z0-9_-]+)/.exec(prompt);
+  if (named === null) return generic;
+  return `${generic}\n今回の依頼は ${named[1]} なので、${dir}/${named[1]}/SKILL.md を Read して手順を最後まで実行してください。`;
+}
+
+/**
+ * 導入が止まった理由と復旧の方法を示す。
+ * 失敗は詳細（無ければ完了を確認できない旨）と再試行のコマンド。導入中は別のセッション、古い印は中断の可能性と、印を消して再試行する 1 行。
+ * @param {{ kind: "failed", detail: string | null } | { kind: "busy", stale: boolean }} input
+ */
+export function messageBlocked(input) {
+  if (input.kind === "failed") {
+    const why = input.detail === null
+      ? "理由の詳細は取得できず、導入の完了を確認できない。"
+      : `理由: ${input.detail}`;
+    return `cc-sdd の導入が完了していないため、入力を止めています。${why}\n通常の端末で次を実行して再試行してください（Claude の外で実行する）: ${RETRY_COMMAND}`;
+  }
+  if (!input.stale) {
+    return `別のセッションで導入中のため、入力を止めています。導入が終わってから、通常の端末で次を実行して再試行してください（Claude の外で実行する）: ${RETRY_COMMAND}`;
+  }
+  return `導入中の印が残っています。中断した可能性があるため、入力を止めています。ほかに導入が進んでいないことを確かめてから、通常の端末で次の 1 行を実行してください（Claude の外で実行する）:\nrm ${LOCK_PATH} && ${RETRY_COMMAND}`;
+}
+
+/** クラウドの準備スクリプトに置く 1 行（<リポジトリ> は導入先のリポジトリのディレクトリ名） */
+const PREPARE_LINE = `if [ -d <リポジトリ> ]; then (cd <リポジトリ> && ${RETRY_COMMAND}); fi`;
+
+/** 利用手順: 準備スクリプトの 1 行、手元での初回の始め方、未導入の /kiro-* が拒否されたときの扱い */
+export function messageUsage() {
+  return [
+    "【クラウド】環境の準備スクリプトに次の 1 行を足すと、Claude Code・Codex の起動前に cc-sdd を導入します。",
+    `  ${PREPARE_LINE}`,
+    "【手元】通常の文章による最初の入力で導入が始まります。",
+    "最初から /kiro-* を使うなら、起動前に次のコマンドで導入を済ませてください。",
+    `  ${RETRY_COMMAND}`,
+    "未導入の /kiro-* が「Unknown command」などで拒否されたら、通常の文章で入力するか、起動前に導入し直してください。"
+  ].join("\n");
 }
