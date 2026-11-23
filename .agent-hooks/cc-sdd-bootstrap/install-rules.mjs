@@ -5,6 +5,8 @@ export const UPDATE_COMMAND = "npx github:nekono-dev/cc-sdd-bootstrap update";
 export const INIT_COMMAND = "npx github:nekono-dev/cc-sdd-bootstrap init";
 export const FAILURE_RECORD = ".cache/cc-sdd-install.failed";
 export const STATE_PATH = ".cache/cc-sdd-install.state.json";
+/** 標準文書に書き足した運用の区画の開始目印（installer-core の値と合わせる） */
+export const SECTION_BEGIN_MARKER = "<!-- cc-sdd-bootstrap:begin（この区画は cc-sdd の導入のたびに書き足される。編集しない） -->";
 /** 導入中の印（同時の実行を防ぐ）。作成時に排他的に作り、導入の終わりに消す */
 export const LOCK_PATH = ".cache/cc-sdd-install.lock";
 export const RETRY_COMMAND = "node .agent-hooks/cc-sdd-bootstrap/install-cc-sdd.mjs";

@@ -31,9 +31,10 @@ const versionArg = args.find((arg) => arg.startsWith('cc-sdd@')) || 'cc-sdd@unkn
 const version = versionArg.slice('cc-sdd@'.length);
 const langIndex = args.indexOf('--lang');
 const lang = langIndex >= 0 ? args[langIndex + 1] : 'unknown';
+const codex = args.includes('--codex-skills');
 const targets = {
-  skills: ['.claude/skills/kiro-fake/SKILL.md', 'skill'],
-  doc_main: ['.kiro/settings/cc-sdd-guide.md', 'guide'],
+  skills: [codex ? '.agents/skills/kiro-fake/SKILL.md' : '.claude/skills/kiro-fake/SKILL.md', 'skill'],
+  doc_main: [codex ? 'AGENTS.md' : 'CLAUDE.md', 'guide'],
   settings_templates: ['.kiro/settings/templates/specs/tasks.md', 'templates'],
 };
 for (const artifact of manifest.artifacts || []) {
@@ -76,6 +77,13 @@ export function makeRepo({ config = { format: 1, ccSdd: { version: '3.1.0', lang
       const target = resolve(rel);
       fs.mkdirSync(path.dirname(target), { recursive: true });
       fs.writeFileSync(target, text);
+    },
+    putSections() {
+      for (const name of ['agent-section-claude.md', 'agent-section-codex.md']) {
+        const source = path.join(projectRoot, '.agent-hooks/cc-sdd-bootstrap', name);
+        if (fs.existsSync(source)) fs.copyFileSync(source, path.join(payloadRoot, name));
+        else fs.writeFileSync(path.join(payloadRoot, name), '区画');
+      }
     },
     exists(rel) {
       return fs.existsSync(resolve(rel));

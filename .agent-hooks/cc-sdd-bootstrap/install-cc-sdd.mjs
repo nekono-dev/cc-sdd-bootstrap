@@ -2,52 +2,52 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { pathToFileURL } from 'node:url';
 import { spawnSync } from 'node:child_process';
 import {
-  CONFIG_FILE, UPDATE_COMMAND, FAILURE_RECORD, STATE_PATH, NPX_TIMEOUT_MS, RECORD_IN_PROGRESS,
+  CONFIG_FILE, UPDATE_COMMAND, FAILURE_RECORD, STATE_PATH, LOCK_PATH, NPX_TIMEOUT_MS, RECORD_IN_PROGRESS, SECTION_BEGIN_MARKER,
   readInstallConfig, parseState, buildState, decideInstall,
   removalTargets, buildManifest, npxArgs, messageInstalled, messageSkipped,
   messageGuide, failureRecordText, messageFailed
 } from './install-rules.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
-const hookMode = process.argv[2] === 'session-start';
-const argsValid = process.argv.length === 2 || (process.argv.length === 3 && hookMode);
-
-if (!argsValid) {
-  process.stderr.write('使い方: node .agent-hooks/cc-sdd-bootstrap/install-cc-sdd.mjs [session-start]\n');
-  process.exit(2);
-}
-
-const absolute = (rel) => path.join(root, rel);
+const absolute = (rel, repoRoot = root) => path.join(repoRoot, rel);
 const writeRecord = (rel, text) => {
   fs.mkdirSync(path.dirname(absolute(rel)), { recursive: true });
   fs.writeFileSync(absolute(rel), text, 'utf8');
 };
+/** 導入判断に使う材料を一度に読み取る */
+export function readInstallFacts(repoRoot = root) {
+  let configText = null;
+  try { configText = fs.readFileSync(absolute(CONFIG_FILE, repoRoot), 'utf8'); }
+  catch (error) {
+    if (error.code !== 'ENOENT') {
+      throw new Error(`${CONFIG_FILE} を読み取れません: ${error.message} ${CONFIG_FILE} を直すか、${UPDATE_COMMAND} で設定を新しくしてください。`);
+    }
+  }
+  const config = readInstallConfig(configText);
+  let stateText = null;
+  try { stateText = fs.readFileSync(absolute(STATE_PATH, repoRoot), 'utf8'); } catch (error) { if (error.code !== 'ENOENT') stateText = ''; }
+  const state = parseState(stateText);
+  let lock = { present: false };
+  try { lock = { present: true, ageMs: Math.max(0, Date.now() - fs.statSync(absolute(LOCK_PATH, repoRoot)).mtimeMs) }; }
+  catch (error) { if (error.code !== 'ENOENT') lock = { present: true, ageMs: 0 }; }
+  let failure = { present: false };
+  try { failure = { present: true, text: fs.readFileSync(absolute(FAILURE_RECORD, repoRoot), 'utf8') }; }
+  catch (error) { if (error.code !== 'ENOENT') failure = { present: true, text: null }; }
+  const missingFiles = state ? state.files.filter((rel) => !fs.existsSync(absolute(rel, repoRoot))) : [];
+  const sectionPresent = Object.fromEntries(['claude', 'codex'].map((tool) => {
+    const doc = tool === 'claude' ? 'CLAUDE.md' : 'AGENTS.md';
+    try { return [tool, fs.readFileSync(absolute(doc, repoRoot), 'utf8').split(/\r?\n/).includes(SECTION_BEGIN_MARKER)]; }
+    catch { return [tool, false]; }
+  }));
+  return { config, state, lock, failure, missingFiles, sectionPresent };
+}
 // 雛形の保持は廃止した（installer-core で組み直すまでの間、常に保持しない扱い）
 const KEEP_TEMPLATES = false;
 // 導入物の道筋か（雛形は保持しない扱い）。install-rules の指紋の判定を外したあとの暫定の置き換え。2.2 で組み直す
 const isInstalledFile = (rel) => rel.startsWith('.claude/skills/kiro-') || rel === '.kiro/settings/cc-sdd-guide.md' || rel.startsWith('.kiro/settings/templates/');
-
-/** 今あるファイルの道筋を、道筋をキーにした対応で返す（中身は見ない。4.4） */
-function existingFiles() {
-  const found = {};
-  const walk = (rel) => {
-    const full = absolute(rel);
-    let entries;
-    try { entries = fs.readdirSync(full, { withFileTypes: true }); } catch { return; }
-    for (const entry of entries) {
-      const child = `${rel}/${entry.name}`;
-      if (entry.isDirectory()) walk(child);
-      else if (entry.isFile() && isInstalledFile(child)) {
-        found[child] = true;
-      }
-    }
-  };
-  walk('.claude/skills');
-  walk('.kiro/settings');
-  return found;
-}
 
 function rejectLinkedParents() {
   for (const rel of ['.claude', '.claude/skills', '.kiro', '.kiro/settings']) {
@@ -127,36 +127,27 @@ function performInstall(config) {
   }
 }
 
+function runCli() {
+const hookMode = process.argv[2] === 'session-start';
+const argsValid = process.argv.length === 2 || (process.argv.length === 3 && hookMode);
+if (!argsValid) {
+  process.stderr.write('使い方: node .agent-hooks/cc-sdd-bootstrap/install-cc-sdd.mjs [session-start]\n');
+  process.exit(2);
+}
 try {
-  let configText = null;
-  try { configText = fs.readFileSync(absolute(CONFIG_FILE), 'utf8'); }
-  catch (error) {
-    if (error.code !== 'ENOENT') {
-      throw new Error(`${CONFIG_FILE} を読めませんでした（${error.message}）。${CONFIG_FILE} を直すか、${UPDATE_COMMAND} で設定を新しくしてください。`);
-    }
-  }
-  const checked = readInstallConfig(configText);
+  const facts = readInstallFacts();
+  const checked = facts.config;
   if (!checked.ok) throw new Error(checked.reason);
   const config = checked.config;
-  let stateText = null;
-  try { stateText = fs.readFileSync(absolute(STATE_PATH), 'utf8'); } catch { /* 読めない状態は未記録 */ }
-  const state = parseState(stateText);
-  const failureRecordExists = fs.existsSync(absolute(FAILURE_RECORD));
-  const currentFiles = existingFiles();
-  // 判断の材料の読み取りは 2.1 で組み直す。ここでは従来の判断と同じ結果になるよう、印と区画は無い・ある扱いにする
-  const missingFiles = state ? state.files.filter((rel) => !Object.hasOwn(currentFiles, rel)) : [];
-  const decision = decideInstall({
-    config: checked,
-    state,
-    lock: { present: false },
-    failure: { present: failureRecordExists, text: null },
-    missingFiles,
-    sectionPresent: { claude: true, codex: true }
-  });
+  const decision = decideInstall(facts);
   if (decision.action === 'skip') {
     process.stdout.write(`${messageSkipped(config)}\n${messageGuide()}\n`);
-  } else {
+  } else if (decision.action === 'install') {
     performInstall(config);
+  } else {
+    process.stdout.write(`${decision.action === 'busy' ? '導入中の印があります。' : decision.reason}\n`);
+    process.exitCode = 1;
+    process.exit();
   }
   process.exit(0);
 } catch (error) {
@@ -164,5 +155,8 @@ try {
   try { writeRecord(FAILURE_RECORD, failureRecordText(reason)); }
   catch (recordError) { process.stderr.write(`失敗の記録を書けませんでした: ${recordError.message}\n`); }
   process.stdout.write(`${messageFailed(reason)}\n`);
-  process.exit(hookMode ? 0 : 1);
+  process.exitCode = hookMode ? 0 : 1;
 }
+}
+
+if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href) runCli();
