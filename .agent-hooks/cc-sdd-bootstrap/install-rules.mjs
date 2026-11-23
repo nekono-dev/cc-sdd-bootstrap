@@ -10,7 +10,9 @@ export const SECTION_BEGIN_MARKER = "<!-- cc-sdd-bootstrap:begin（この区画�
 /** 導入中の印（同時の実行を防ぐ）。作成時に排他的に作り、導入の終わりに消す */
 export const LOCK_PATH = ".cache/cc-sdd-install.lock";
 export const RETRY_COMMAND = "node .agent-hooks/cc-sdd-bootstrap/install-cc-sdd.mjs";
-export const NPX_TIMEOUT_MS = 540000;
+export const INSTALL_DEADLINE_MS = 540000;
+/** 既存の規則試験との互換名。新しい導入処理は INSTALL_DEADLINE_MS を使う */
+export const NPX_TIMEOUT_MS = INSTALL_DEADLINE_MS;
 /** 導入中の印が古いとみなす経過時間（導入全体の期限＋120秒。UserPromptSubmit の時間切れ 600 秒より長い） */
 export const STALE_LOCK_MS = 660000;
 

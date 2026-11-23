@@ -37,6 +37,7 @@ test('古い印と新しい印を経過時間で区別し、どちらも導入�
 
 test('既存の失敗記録は内容を読み、記録だけを理由に入れ直す', (t) => {
   const repo = makeRepo(); t.after(repo.cleanup);
+  repo.putSections();
   prepareComplete(repo);
   for (const doc of ['CLAUDE.md', 'AGENTS.md']) repo.write(doc, SECTION_BEGIN_MARKER);
   repo.write(FAILURE_RECORD, '既存の失敗理由');
@@ -45,7 +46,7 @@ test('既存の失敗記録は内容を読み、記録だけを理由に入れ�
   assert.deepEqual(facts.sectionPresent, { claude: true, codex: true });
   assert.equal(awaitDecision(facts).reason, 'failed');
   const result = runEntry(repo);
-  assert.equal(result.npxCalls.length, 1);
+  assert.equal(result.npxCalls.length, 2);
   assert.equal(repo.read(FAILURE_RECORD), null);
 });
 
@@ -68,7 +69,7 @@ test('両文書の区画の有無を読み取り、片方でも無ければ入�
     });
     assert.equal(awaitDecision(facts).action, absent === null ? 'skip' : 'install');
     const result = runEntry(repo);
-    assert.equal(result.npxCalls.length, absent === null ? 0 : 1);
+    assert.equal(result.npxCalls.length, absent === null ? 0 : 2);
   }
 });
 
@@ -82,19 +83,109 @@ test('状態に記録された Codex 側の欠けた道筋を検出し、入れ�
   assert.deepEqual(facts.missingFiles, [files[1]]);
   assert.equal(awaitDecision(facts).reason, 'files-missing');
   const result = runEntry(repo);
-  assert.equal(result.npxCalls.length, 1);
+  assert.equal(result.npxCalls.length, 2);
   assert.ok(result.npxCalls.some(({ args }) => args.includes('--claude-skills')));
 });
 
-test('偽 npx の Claude 用 manifest 出力先と運用区画を試験土台で扱える', (t) => {
+test('導入で両ツールを順に揃え、標準文書の末尾に運用区画を一つずつ足す', (t) => {
   const repo = makeRepo(); t.after(repo.cleanup);
+  repo.write('CLAUDE.md', '以前の Claude の記述');
+  repo.write('AGENTS.md', '以前の Codex の記述');
+  repo.write('.claude/skills/custom/SKILL.md', '独自スキル');
+  repo.write('.agents/skills/custom/SKILL.md', '独自スキル');
+  repo.write('.kiro/specs/custom/spec.md', '独自仕様');
   repo.putSections();
   const result = runEntry(repo);
-  assert.equal(result.npxCalls.length, 1);
+  assert.equal(result.status, 0);
+  assert.equal(result.npxCalls.length, 2);
   assert.ok(result.npxCalls[0].args.includes('--claude-skills'));
-  assert.equal(repo.read('CLAUDE.md'), 'guide 3.1.0 ja');
-  assert.equal(repo.read('AGENTS.md'), null);
-  // 2.1 の時点では CLI は Claude 用 manifest のみ実行する。道筋読み取りは両ツールを扱う。
+  assert.ok(result.npxCalls[1].args.includes('--codex-skills'));
+  assert.match(result.npxCalls[0].lock, /^\d{4}-\d\d-\d\dT.*\nnode \.agent-hooks\/cc-sdd-bootstrap\/install-cc-sdd\.mjs\n$/);
+  assert.doesNotMatch(result.stdout, /fake npx progress/);
+  assert.ok(repo.read('CLAUDE.md').startsWith('guide 3.1.0 ja\n'));
+  assert.ok(repo.read('AGENTS.md').startsWith('guide 3.1.0 ja\n'));
+  assert.doesNotMatch(repo.read('CLAUDE.md'), /以前の Claude の記述/);
+  assert.doesNotMatch(repo.read('AGENTS.md'), /以前の Codex の記述/);
+  assert.equal(repo.read('.claude/skills/custom/SKILL.md'), '独自スキル');
+  assert.equal(repo.read('.agents/skills/custom/SKILL.md'), '独自スキル');
+  assert.equal(repo.read('.kiro/specs/custom/spec.md'), '独自仕様');
+  assert.equal(repo.read('CLAUDE.md').split(SECTION_BEGIN_MARKER).length - 1, 1);
+  assert.equal(repo.read('AGENTS.md').split(SECTION_BEGIN_MARKER).length - 1, 1);
+  assert.equal(repo.read(LOCK_PATH), null);
+  assert.equal(repo.read(FAILURE_RECORD), null);
+  const state = JSON.parse(repo.read(STATE_PATH));
+  assert.ok(state.files.includes('.claude/skills/kiro-fake/SKILL.md'));
+  assert.ok(state.files.includes('.agents/skills/kiro-fake/SKILL.md'));
+  assert.ok(state.files.includes('.kiro/settings/templates/specs/tasks.md'));
+  assert.ok(state.files.includes('CLAUDE.md'));
+  assert.ok(state.files.includes('AGENTS.md'));
+});
+
+test('入れ直しのたびに標準文書へ区画を一つだけ足す', (t) => {
+  const repo = makeRepo(); t.after(repo.cleanup);
+  repo.putSections();
+  assert.equal(runEntry(repo).status, 0);
+  repo.write(FAILURE_RECORD, '入れ直しを要求');
+  repo.write('CLAUDE.md', '途中で書き換えた Claude 文書');
+  repo.write('AGENTS.md', '途中で書き換えた Codex 文書');
+  const retry = runEntry(repo);
+  assert.equal(retry.status, 0);
+  assert.equal(retry.npxCalls.length, 2);
+  for (const doc of ['CLAUDE.md', 'AGENTS.md']) {
+    assert.doesNotMatch(repo.read(doc), /途中で書き換えた/);
+    assert.equal(repo.read(doc).split(SECTION_BEGIN_MARKER).length - 1, 1);
+  }
+});
+
+test('各 npx は期限内でも二回の合計が導入全体の期限を超えると失敗する', (t) => {
+  const repo = makeRepo(); t.after(repo.cleanup);
+  repo.putSections();
+  const result = runEntry(repo, [], {
+    env: { CC_SDD_BOOTSTRAP_NPX_TIMEOUT_MS: '220', FAKE_NPX_DELAY_MS: '140' },
+    timeoutMs: 5000,
+  });
+  assert.equal(result.status, 1);
+  assert.equal(result.npxCalls.length, 2);
+  assert.ok(repo.read(FAILURE_RECORD)?.includes('期限'));
+  assert.equal(repo.read(LOCK_PATH), null);
+});
+
+test('失敗・期限切れ・区画ファイル不足では失敗記録を残して印を消す', (t) => {
+  for (const scenario of [
+    { mode: 'fail', env: {}, omitSections: false },
+    { mode: 'hang', env: { CC_SDD_BOOTSTRAP_NPX_TIMEOUT_MS: '50' }, omitSections: false },
+    { mode: 'ok', env: {}, omitSections: true },
+    { mode: 'ok', env: {}, omitSections: false, emptySection: true },
+  ]) {
+    const repo = makeRepo({ sections: !scenario.omitSections }); t.after(repo.cleanup);
+    if (!scenario.omitSections) repo.putSections();
+    if (scenario.emptySection) repo.write('.agent-hooks/cc-sdd-bootstrap/agent-section-claude.md', '  \n');
+    const result = runEntry(repo, [], { mode: scenario.mode, env: scenario.env });
+    assert.equal(result.status, 1);
+    assert.ok(repo.read(FAILURE_RECORD));
+    assert.equal(repo.read(LOCK_PATH), null);
+  }
+});
+
+test('導入中の印を排他的に作り、既存の印があれば npx を実行しない', (t) => {
+  const repo = makeRepo(); t.after(repo.cleanup);
+  repo.putSections();
+  repo.write(LOCK_PATH, '別の導入');
+  const result = runEntry(repo);
+  assert.equal(result.status, 1);
+  assert.deepEqual(result.npxCalls, []);
+});
+
+test('消す対象までのシンボリックリンク経路は失敗にする', (t) => {
+  const repo = makeRepo(); t.after(repo.cleanup);
+  repo.putSections();
+  fs.mkdirSync(path.join(repo.root, '.claude'));
+  fs.symlinkSync(path.join(repo.root, '.claude-target'), path.join(repo.root, '.claude/skills'));
+  fs.mkdirSync(path.join(repo.root, '.claude-target'));
+  const result = runEntry(repo);
+  assert.equal(result.status, 1);
+  assert.deepEqual(result.npxCalls, []);
+  assert.ok(repo.read(FAILURE_RECORD));
 });
 
 test('設定パスがディレクトリなら読み取り理由と修正案内を記録して導入しない', (t) => {
@@ -146,7 +237,7 @@ test('旧形式の状態は未記録として入れ直す', (t) => {
   const repo = makeRepo(); t.after(repo.cleanup);
   repo.write(STATE_PATH, JSON.stringify({ format: 1, version: '3.1.0', lang: 'ja', fingerprints: {} }));
   const result = runEntry(repo);
-  assert.equal(result.npxCalls.length, 1);
+  assert.equal(result.npxCalls.length, 2);
 });
 
 test('新しい導入中の印では導入せず失敗する', (t) => {
@@ -169,7 +260,7 @@ test('存在しない導入記録の道筋は入れ直しを起こす', (t) => {
   const repo = makeRepo(); t.after(repo.cleanup);
   repo.write(STATE_PATH, JSON.stringify({ format: 2, version: '3.1.0', lang: 'ja', files: ['.agents/skills/kiro-x/SKILL.md'] }));
   const result = runEntry(repo);
-  assert.equal(result.npxCalls.length, 1);
+  assert.equal(result.npxCalls.length, 2);
 });
 
 test('両ツールの偽 npx 出力先と標準文書の区画なしを試験土台で扱える', (t) => {

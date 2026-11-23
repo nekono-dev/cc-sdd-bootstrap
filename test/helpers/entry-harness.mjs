@@ -16,12 +16,14 @@ import fs from 'node:fs';
 import path from 'node:path';
 const args = process.argv.slice(2);
 const log = process.env.FAKE_NPX_LOG;
-if (log) fs.appendFileSync(log, JSON.stringify({ args, cwd: process.cwd() }) + '\\n');
+if (log) fs.appendFileSync(log, JSON.stringify({ args, cwd: process.cwd(), lock: fs.existsSync('.cache/cc-sdd-install.lock') ? fs.readFileSync('.cache/cc-sdd-install.lock', 'utf8') : null }) + '\\n');
 process.stdout.write('fake npx progress\\n');
 process.stderr.write('fake npx progress\\n');
 const mode = process.env.FAKE_NPX_MODE || 'ok';
 if (mode === 'fail') { process.stderr.write('fake npx failure\\n'); process.exit(7); }
 if (mode === 'hang') { await new Promise((resolve) => setTimeout(resolve, 60000)); process.exit(2); }
+const delay = Number(process.env.FAKE_NPX_DELAY_MS || 0);
+if (delay > 0) await new Promise((resolve) => setTimeout(resolve, delay));
 if (mode !== 'ok' && mode !== 'lock') process.exit(2);
 const manifestIndex = args.indexOf('--manifest');
 const manifestPath = manifestIndex >= 0 ? args[manifestIndex + 1] : null;
@@ -49,7 +51,7 @@ if (mode === 'lock') {
 }
 `;
 
-export function makeRepo({ config = { format: 1, ccSdd: { version: '3.1.0', lang: 'ja' } } } = {}) {
+export function makeRepo({ config = { format: 1, ccSdd: { version: '3.1.0', lang: 'ja' } }, sections = true } = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cc-sdd-entry-repo-'));
   const fakeBin = fs.mkdtempSync(path.join(os.tmpdir(), 'cc-sdd-entry-bin-'));
   const payloadRoot = path.join(root, '.agent-hooks/cc-sdd-bootstrap');
@@ -61,6 +63,13 @@ export function makeRepo({ config = { format: 1, ccSdd: { version: '3.1.0', lang
   fs.writeFileSync(path.join(fakeBin, 'npx'), fakeNpxSource, { mode: 0o755 });
   if (config !== null) {
     fs.writeFileSync(path.join(root, '.cc-sdd-bootstrap.json'), typeof config === 'string' ? config : JSON.stringify(config, null, 2));
+  }
+  if (sections) {
+    for (const name of ['agent-section-claude.md', 'agent-section-codex.md']) {
+      const source = path.join(projectRoot, '.agent-hooks/cc-sdd-bootstrap', name);
+      if (fs.existsSync(source)) fs.copyFileSync(source, path.join(payloadRoot, name));
+      else fs.writeFileSync(path.join(payloadRoot, name), '<!-- cc-sdd-bootstrap:begin（この区画は cc-sdd の導入のたびに書き足される。編集しない） -->\n区画\n<!-- cc-sdd-bootstrap:end -->\n');
+    }
   }
   const resolve = (rel) => path.join(root, rel);
   return {
@@ -82,7 +91,7 @@ export function makeRepo({ config = { format: 1, ccSdd: { version: '3.1.0', lang
       for (const name of ['agent-section-claude.md', 'agent-section-codex.md']) {
         const source = path.join(projectRoot, '.agent-hooks/cc-sdd-bootstrap', name);
         if (fs.existsSync(source)) fs.copyFileSync(source, path.join(payloadRoot, name));
-        else fs.writeFileSync(path.join(payloadRoot, name), '区画');
+        else fs.writeFileSync(path.join(payloadRoot, name), '<!-- cc-sdd-bootstrap:begin（この区画は cc-sdd の導入のたびに書き足される。編集しない） -->\n区画\n<!-- cc-sdd-bootstrap:end -->\n');
       }
     },
     exists(rel) {
