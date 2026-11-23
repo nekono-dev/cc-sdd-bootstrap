@@ -234,7 +234,9 @@ function messageSpawnDenied(kind: "missing" | "inherit" | "same-model" | "higher
 
 type Definition = { path: string; content: string };
 function renderDefinitions(cfg: SubagentsConfig): { files: Definition[]; notices: string[] };
-// 提供元ごとに、その提供元が受け持つ役割の設定を集める: 自分が指揮役で provider=same の役割と、相手が指揮役で provider=other の役割（既定では Claude Code は 4 つ、Codex も 4 つ）。
+// 提供元 V の定義は roles[V]（V が指揮役のときの設定）だけから作る。ファイルは提供元 × 役割で 1 つずつ（衝突しない）。
+//   provider=same の役割: model・effort・permission を書く（組み込みの子の通常の使い方）。
+//   provider=other の役割: 別の提供元が使えないとき（5.7）の予備。model を書かず（起動時に明示が必要。明示しなければ Check が未指定として拒否する）、effort・permission を書く。
 // Claude Code: frontmatter に name・description・model・effort、読み取り専用は tools: Read, Grep, Glob
 // Codex: permission が write の役割だけ（name・description・model・model_reasoning_effort・developer_instructions）。
 //        read-only の役割は作らず、「Codex の組み込みの子では読み取り専用を適用できない（<役割>）」を notices に入れる（2.3）
@@ -298,7 +300,7 @@ function buildCliCommand(target: Vendor, setting: RoleSetting, root: string): { 
   - 指揮役が Opus のとき実装は Sonnet、レビューは `gpt-6.2-astra`。Haiku のとき実装は `selfImplement`、レビューは Luna（1.4・1.5）。指揮役ごとに同じ役割へ別の推論量を設定できる（1.1）。
   - `familyOf`: `claude-sonnet-5-5`・`sonnet` → sonnet、`gpt-6.1-sol` → sol、知らない ID → null（1.2）。
   - `decideSpawn`: 未指定・`inherit` は拒否、Sonnet の指揮役で `sonnet` の子は拒否、Opus の子は拒否、Haiku は通す、指揮役が不明で子が明示なら通す（3.2–3.4・3.6）。理由の文言に明示の必要が入る（3.7）。
-  - `renderDefinitions`: Claude Code は 4 つ、読み取り専用の役割に `tools: Read, Grep, Glob`。Codex は `implement` だけで、読み取り専用の役割は notices に出る（2.1–2.3）。
+  - `renderDefinitions`: Claude Code は 4 つ（`implement` は `model: haiku`、`provider=other` の 3 つは `model` 無し）、読み取り専用の役割に `tools: Read, Grep, Glob`。Codex は書き込み可の `implement` だけで、読み取り専用の役割は notices に出る（2.1–2.3）。`roles.claude` と `roles.codex` に同じ役割で別の設定を書いても、別のファイルになり衝突しない（1.1）。
   - `buildCliCommand`: 両ツール・両権限の引数（4.2・4.4・4.5）。
   - `validateSubagents`: 知らない役割・不正な権限・推論量で問題の道筋を返す（1.8）。
 - **入口（Check）**: 標準入力の JSON・一時の会話の記録・一時の定義ファイルで、`tool_input.model` が無く定義に `model: haiku` があれば Sonnet の指揮役で通る、定義が無ければ拒否、定義の `inherit` は拒否、会話の記録が無ければ子が明示なら通す、Codex の `model` で比べる。何も出さないときに `allow` を出さない（3.1–3.8）。

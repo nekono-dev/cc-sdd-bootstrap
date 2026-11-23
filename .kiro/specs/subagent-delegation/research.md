@@ -32,7 +32,7 @@
 
 ### Decision: 役割表は「指揮役の提供元 × 役割」で持つ（設計レビューの指摘）
 - **Context**: 要件 1.1（指揮役の提供元ごとに、同じ・別とモデル・推論量・権限を指定）・1.3。
-- **Selected Approach**: `roles[指揮役の提供元][役割] = { provider: same|other, model, effort, permission }`。既定値は 1.3 の表そのもの。役割定義のファイルは、提供元ごとに「自分が指揮役で same の役割」と「相手が指揮役で other の役割」を集めて作る。
+- **Selected Approach**: `roles[指揮役の提供元][役割] = { provider: same|other, model, effort, permission }`。既定値は 1.3 の表そのもの。役割定義のファイルは、提供元 V については `roles[V]` だけから作る（V が指揮役のときの組み込みの子）。`provider=other` の役割は、別の提供元が使えないときの予備としてモデル無しで作る。2 人の指揮役の設定を 1 つのファイルに集めると衝突するため（設計レビューの再指摘）。
 - **Rationale**: 最初の案（受け持ちの `assign` と提供元ごとの `roles` に分ける）では、「Claude Code が指揮役のときの Codex の実装」と「Codex が指揮役のときの Codex の実装」に別の推論量を設定できなかった。
 
 ### Decision: Astra の既定のモデル
