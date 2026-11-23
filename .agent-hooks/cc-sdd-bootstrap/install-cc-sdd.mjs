@@ -179,8 +179,36 @@ function performInstall(config) {
   }
 }
 
+async function runSessionStart(tool) {
+  try {
+    // SessionStart の入力 JSON は仕様上使わないが、標準入力を最後まで読み捨てる。
+    for await (const _chunk of process.stdin) { /* 内容は使わず読み捨てる */ }
+    const facts = readInstallFacts();
+    const decision = decideInstall(facts);
+    const context = decision.action === 'skip'
+      ? messageSkipped(facts.config.config)
+      : decision.action === 'busy'
+        ? 'cc-sdd の導入中、または前回の導入が中断されています。導入が完了するまで入力は止まります。'
+        : decision.action === 'fail'
+          ? `cc-sdd の導入は未完了です。最初の入力で導入を試み、完了するまで入力は止まります。理由: ${decision.reason}`
+          : 'cc-sdd はまだ揃っていません。最初の入力で導入します。';
+    writeOutput(`${JSON.stringify({ hookSpecificOutput: { hookEventName: 'SessionStart', additionalContext: context } })}\n`);
+  } catch {
+    // SessionStart の例外は知らせず、入力時のフックに判断を任せる。
+  }
+  process.exitCode = 0;
+}
+
 function runCli() {
 const args = process.argv.slice(2);
+if (args[0] === 'session-start') {
+  if (args.length !== 3 || args[1] !== '--tool' || !['claude', 'codex'].includes(args[2])) {
+    fs.writeSync(2, `使い方: session-start --tool <claude|codex>\n${messageUsage()}\n`);
+    process.exit(2);
+  }
+  void runSessionStart(args[2]);
+  return;
+}
 if (args.length === 1 && args[0] === '--help') {
   writeOutput(`${messageUsage()}\n`);
   process.exitCode = 0;

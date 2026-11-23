@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
+import { spawnSync } from 'node:child_process';
 import { makeRepo, runEntry } from './helpers/entry-harness.mjs';
 import { FAILURE_RECORD, LOCK_PATH, STATE_PATH, SECTION_BEGIN_MARKER, decideInstall } from '../.agent-hooks/cc-sdd-bootstrap/install-rules.mjs';
 import { AGENT_SECTION_MARKERS } from '../lib/catalog.mjs';
@@ -55,6 +56,61 @@ function awaitDecision(facts) {
   // 判断関数は純粋な規則として既存モジュールから読む。
   return decideInstall(facts);
 }
+
+function runSessionStart(repo, tool, input = '{"session_id":"test"}') {
+  const logPath = path.join(repo.fakeBin, `npx-calls-session-${process.pid}-${Date.now()}-${Math.random().toString(16).slice(2)}.jsonl`);
+  const result = spawnSync(process.execPath, [repo.entry, 'session-start', '--tool', tool], {
+    cwd: repo.root, encoding: 'utf8', input,
+    env: { ...process.env, PATH: `${repo.fakeBin}${path.delimiter}${process.env.PATH ?? ''}`, FAKE_NPX_LOG: logPath },
+  });
+  try { result.npxLog = fs.readFileSync(logPath, 'utf8'); }
+  catch (error) { if (error.code !== 'ENOENT') throw error; result.npxLog = ''; }
+  fs.rmSync(logPath, { force: true });
+  return result;
+}
+
+test('SessionStart は両ツールで状態を知らせ、導入を始めない', (t) => {
+  for (const tool of ['claude', 'codex']) {
+    for (const scenario of [
+      { name: '揃っている', setup(repo) { prepareComplete(repo); repo.write('CLAUDE.md', SECTION_BEGIN_MARKER); repo.write('AGENTS.md', SECTION_BEGIN_MARKER); }, expected: [/揃っている/, /3\.1\.0/, /ja/] },
+      { name: '未導入', setup() {}, expected: /最初の入力.*導入/ },
+      { name: '導入中', setup(repo) { repo.write(LOCK_PATH, '導入中'); }, expected: /導入中|未完了/ },
+      { name: '失敗の記録', setup(repo) { repo.write(FAILURE_RECORD, '前回失敗'); }, expected: /未完了|入力.*止|最初の入力.*導入/ },
+      { name: '設定がない', setup(repo) { fs.rmSync(path.join(repo.root, '.cc-sdd-bootstrap.json')); }, expected: /設定.*ありません|設定ファイル.*ありません|\.cc-sdd-bootstrap\.json.*ありません/ },
+      { name: 'JSON でない設定', setup(repo) { repo.write('.cc-sdd-bootstrap.json', '{broken'); }, expected: /JSON/ },
+      { name: '項目が不正な設定', setup(repo) { repo.write('.cc-sdd-bootstrap.json', JSON.stringify({ format: 1, ccSdd: { version: '3.1.0', lang: 42 } })); }, expected: /lang/ },
+    ]) {
+      const repo = makeRepo(); t.after(repo.cleanup);
+      scenario.setup(repo);
+      const result = runSessionStart(repo, tool, JSON.stringify({ unused: '入力される' }));
+      assert.equal(result.status, 0, `${tool}: ${scenario.name}: ${result.stderr}`);
+      const output = JSON.parse(result.stdout);
+      assert.equal(output.hookSpecificOutput.hookEventName, 'SessionStart');
+      if (Array.isArray(scenario.expected)) {
+        for (const expected of scenario.expected) assert.match(output.hookSpecificOutput.additionalContext, expected, `${tool}: ${scenario.name}`);
+      } else assert.match(output.hookSpecificOutput.additionalContext, scenario.expected, `${tool}: ${scenario.name}`);
+      assert.equal(result.npxLog, '', `${tool}: ${scenario.name} で npx が呼ばれました`);
+    }
+  }
+});
+
+test('SessionStart の設定読み取り例外では何も出さず終了 0', (t) => {
+  for (const tool of ['claude', 'codex']) {
+    const repo = makeRepo({ config: null }); t.after(repo.cleanup);
+    fs.mkdirSync(path.join(repo.root, '.cc-sdd-bootstrap.json'));
+    const result = runSessionStart(repo, tool);
+    assert.equal(result.status, 0);
+    assert.equal(result.stdout, '');
+    assert.equal(result.npxLog, '');
+  }
+});
+
+test('session-start の未知のツールは使い方と終了コード 2 を返す', (t) => {
+  const repo = makeRepo(); t.after(repo.cleanup);
+  const result = runSessionStart(repo, 'other');
+  assert.equal(result.status, 2);
+  assert.match(result.stderr, /claude.*codex/);
+});
 
 test('引数なしで導入し結果と版・言語を表示し、再実行は省く', (t) => {
   const repo = makeRepo(); t.after(repo.cleanup);
