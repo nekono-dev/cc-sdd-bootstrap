@@ -9,9 +9,55 @@ const sources = Object.fromEntries(catalog.files.map(({ path }) => [path, readFi
 const empty = () => ({ config: null, claudeSettings: null, codexHooks: null, gitignore: null, agentDocs: { claude: null, codex: null }, deployDirFiles: {}, generatedFiles: {}, sourceFiles: sources });
 const run = (operation, snapshot) => computePlan({ operation, snapshot, catalog, fields });
 
+const generatedCatalog = (render, owns = [".claude/agents/cc-sdd-*.md"]) => ({
+  ...catalog,
+  generated: [{ id: "agents", owns, render }],
+});
+
 test("init は設定があれば中止し変更を返さない", () => {
   const result = run("init", { ...empty(), config: '{"format":1}' });
   assert.deepEqual(result, { ok: false, aborts: [{ code: "CONFIG_EXISTS" }] });
+});
+
+test("設定から作るファイルを違う内容だけ書き、知らせを計画に載せる", () => {
+  const custom = generatedCatalog((config) => ({ files: [
+    { path: ".claude/agents/cc-sdd-one.md", content: `設定:${config.sample.enabled}` },
+    { path: ".claude/agents/cc-sdd-same.md", content: "同じ" },
+  ], notices: ["役割を作りました"] }));
+  const result = computePlan({ operation: "init", catalog: custom, snapshot: {
+    ...empty(), generatedFiles: { ".claude/agents/cc-sdd-same.md": Buffer.from("同じ") },
+  }, fields });
+  assert.equal(result.ok, true);
+  assert.ok(result.changes.some((change) => change.kind === "write" && change.path === ".claude/agents/cc-sdd-one.md" && change.content === "設定:true"));
+  assert.ok(!result.changes.some((change) => change.path === ".claude/agents/cc-sdd-same.md"));
+  assert.ok(result.notices.some((notice) => notice.code === "GENERATED_NOTICE" && notice.id === "agents" && notice.messages[0] === "役割を作りました"));
+});
+
+test("設定から作るファイルは型に当たり、返されなかった既存ファイルだけ削除する", () => {
+  const custom = generatedCatalog(() => ({ files: [{ path: ".claude/agents/cc-sdd-kept.md", content: "新" }], notices: [] }));
+  const result = computePlan({ operation: "update", catalog: custom, snapshot: {
+    ...empty(), config: '{"format":1}', generatedFiles: {
+      ".claude/agents/cc-sdd-old.md": Buffer.from("旧"),
+      ".claude/agents/other.md": Buffer.from("残す"),
+    },
+  }, fields });
+  assert.equal(result.ok, true);
+  assert.ok(result.changes.some((change) => change.kind === "write" && change.path === ".claude/agents/cc-sdd-kept.md"));
+  assert.ok(result.changes.some((change) => change.kind === "delete" && change.path === ".claude/agents/cc-sdd-old.md"));
+  assert.ok(!result.changes.some((change) => change.path === ".claude/agents/other.md"));
+});
+
+test("設定から作るファイルが型の外の道筋を返したら例外にする", () => {
+  const custom = generatedCatalog(() => ({ files: [{ path: ".claude/agents/other.md", content: "誤り" }], notices: [] }));
+  assert.throws(() => computePlan({ operation: "init", catalog: custom, snapshot: empty(), fields }), /許可範囲外/);
+});
+
+test("設定が不正なら設定から作るファイルの作成関数を呼ばない", () => {
+  let called = false;
+  const custom = generatedCatalog(() => { called = true; return { files: [], notices: [] }; });
+  const result = computePlan({ operation: "update", catalog: custom, snapshot: { ...empty(), config: '{"format":1,"sample":{"enabled":"誤り"}}' }, fields });
+  assert.equal(result.ok, false);
+  assert.equal(called, false);
 });
 
 test("update は設定が無ければ中止し変更を返さない", () => {
