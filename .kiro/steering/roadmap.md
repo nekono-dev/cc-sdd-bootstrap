@@ -12,7 +12,7 @@ cc-sdd（Kiro 方式の仕様駆動開発のスキル集）の運用一式を、
 
 ## Approach Decision
 
-- **Chosen**: 配置方式を続け、各部品を最小の核に削る（2026-11-22 の単純化の discovery で決定）。「何を使わせるか」は短い文章（CLAUDE.md・AGENTS.md の管理区画）と役割表、「使い漏らしを止める箇所」は薄いフック、「別ベンダの実行」は既存の CLI（`codex exec`・`claude -p`）に任せる。初回の確実な導入は、クラウドでは環境の準備スクリプト（起動前）、手元では最初の入力時のフックで行う。
+- **Chosen**: 配置方式を続け、各部品を最小の核に削る（2026-11-22 の単純化の discovery で決定）。「何を使わせるか」は短い文章（cc-sdd の標準の文書として作り直す CLAUDE.md・AGENTS.md の末尾に書き足す運用の区画）と役割表、「使い漏らしを止める箇所」は薄いフック、「別ベンダの実行」は既存の CLI（`codex exec`・`claude -p`）に任せる。初回の確実な導入は、クラウドでは環境の準備スクリプト（起動前）、手元では最初の入力時のフックで行う。
 - **Why**: 2026-11-18 の方針で進めた結果、厳密さのための仕組みが膨らんだ（下の「単純化の決定」）。手作業の運用（CLAUDE.md の `codex exec` の直呼び）は問題なく回っており、機械化はその形を写せば足りる。
 - **Rejected alternatives**:
   - プラグイン方式（フックをプラグインに持たせる）: 環境の準備直後から動く保証が無い（このリポジトリでも、プロジェクトの設定で有効にしただけのプラグインは未導入のままだった。2026-11-22 に確認）。Codex 側の配布も統一できない。
@@ -37,7 +37,7 @@ cc-sdd（Kiro 方式の仕様駆動開発のスキル集）の運用一式を、
 
 ## Scope
 
-- **In**: 導入・更新のコマンドと小さな設定ファイル、Claude Code と Codex の両方への配置（フックの登録・管理区画・`.gitignore`）、起動前と初回の cc-sdd の固定版の導入と失敗時の停止、`/kiro-*` の手順書の先読みの強制、役割表とエージェント定義の生成・子のモデルの拒否・別ベンダの CLI を起動する入口、それぞれの前提を確かめる PoC。
+- **In**: 導入・更新のコマンドと小さな設定ファイル、Claude Code と Codex の両方への配置（フックの登録・運用の区画の文章・`.gitignore`）、起動前と初回の cc-sdd の固定版の導入と失敗時の停止、`/kiro-*` の手順書の先読みの強制、役割表とエージェント定義の生成・子のモデルの拒否・別ベンダの CLI を起動する入口、それぞれの前提を確かめる PoC。
 - **Out**: cc-sdd 本体（スキル・雛形）の配布や改変、BRW（branch-release-workflow）の導入、skyshare 固有の仕組み、skyshare の移行手順、プラグインとしての配布、MCP の探査・自作の MCP サーバー・ジョブの管理、入口の認証（合言葉・引数の照合）、配置したファイルの改変の検出。
 
 ## Constraints
@@ -56,12 +56,12 @@ cc-sdd（Kiro 方式の仕様駆動開発のスキル集）の運用一式を、
 - **Shared seams to watch**:
   - 設定ファイル（`.cc-sdd-bootstrap.json`）: installer-core が作り、session-install（版・言語）と subagent-delegation（役割表）がキーを読む。キーは小さく保ち、汎用の拡張点は作らない。
   - フックの登録: Claude Code（`.claude/settings.json`）と Codex のフックの設定の両方に、installer-core が自分の印のある項目だけを書く。
-  - 管理区画: CLAUDE.md と AGENTS.md に同じ趣旨の文章を置く。cc-sdd が AGENTS.md に書く標準の文書との関係に注意する。
+  - 運用の区画: CLAUDE.md と AGENTS.md は cc-sdd の導入で標準の文書として作り直し、コミットしない。installer-core が区画の文章を配置し、session-install が導入のたびに末尾へ書き足す。中身は session-install・kiro-gate・subagent-delegation の案内と、プロジェクト独自の決まり（`.kiro/steering/`）を読む案内（2026-11-23、利用者の指示）。
   - ツール起動前のフック: kiro-gate と subagent-delegation が同じ時点で動く。
 
 ## Existing Spec Updates
 
-- [ ] installer-core -- 要件に戻して削る（記録・改変検出・汎用の取り除き計画・対話・汎用の契約を外す）。Codex への配置（フックの設定・AGENTS.md の管理区画）を足す. Dependencies: none
+- [ ] installer-core -- 要件に戻して削る（記録・改変検出・汎用の取り除き計画・対話・汎用の契約を外す）。Codex への配置（フックの設定・運用の区画の文章）を足す。利用者の CLAUDE.md を保つ管理区画はやめる. Dependencies: none
 - [ ] session-install -- 要件に戻して削る（keepTemplates・全ファイルの内容照合を外す）。起動前（準備スクリプト）と手元の初回の導入、Codex 向けの導入を足す. Dependencies: installer-core
 - [ ] kiro-gate -- 要件に戻して先読みの強制だけに削る。Codex への対応を足す. Dependencies: session-install
 

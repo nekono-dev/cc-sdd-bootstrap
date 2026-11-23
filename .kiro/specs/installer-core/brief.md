@@ -12,21 +12,21 @@ cc-sdd の運用を始めるには、フックの登録・スクリプト・`.gi
 
 ## Desired Outcome
 - 1 コマンドで、利用先に一式が配置・更新される。再実行で共通部分が新しい版に置き換わる。
-- 指揮役として Claude Code と Codex の両方に配置する: フックの登録（`.claude/settings.json` と Codex のフックの設定）、文章の管理区画（CLAUDE.md と AGENTS.md）、`.gitignore`。
+- 指揮役として Claude Code と Codex の両方に配置する: フックの登録（`.claude/settings.json` と Codex のフックの設定）、CLAUDE.md と AGENTS.md の末尾に書き足す運用の区画の文章（書き足しは session-install。2026-11-23 の改訂で、利用者の CLAUDE.md を保つ管理区画はやめた）、`.gitignore`。
 - 共通の配置物は「生成物・直接編集しない」と定め、更新の差分は git で確かめる運用にする。配置したファイルの記録・改変の検出・強制上書きの指定は持たない。
 - 設定は小さな 1 ファイル（`.cc-sdd-bootstrap.json`）。対話の聞き取りはせず、既定値で作り、利用者がファイルを直接直す。
 - クラウド環境の準備スクリプトから呼べる入口を、session-install と合わせて用意する（後述）。
 
 ## Approach
-配置物はこのリポジトリ内に利用先と同じ相対パスで持ち、固定の一覧を写す。既存ファイルとの統合は、フックの登録（自分の印のある項目だけを置き換える）と管理区画（目印の行で囲んだ範囲だけを書き換える）の 2 つに絞る。
+配置物はこのリポジトリ内に利用先と同じ相対パスで持ち、固定の一覧を写す。既存ファイルとの統合は、フックの登録（自分の印のある項目だけを置き換える）と `.gitignore` に絞る。
 
 ## Scope
-- **In**: 固定の配置一覧の写し、設定ファイルの初期作成と最小の検証、Claude Code と Codex のフックの登録の統合、CLAUDE.md と AGENTS.md の管理区画、`.gitignore`、自己適用。
+- **In**: 固定の配置一覧の写し、設定ファイルの初期作成と最小の検証、Claude Code と Codex のフックの登録の統合、運用の区画の文章、`.gitignore`、自己適用。
 - **Out**: 配置したファイルの記録と改変の検出、`--force`、汎用の取り除き計画、対話の聞き取り、下流が項目を足せる汎用の契約（カタログ・項目定義の拡張点）。
 
 ## Boundary Candidates
 - 配置（固定の一覧を写す）
-- 既存ファイルとの統合（フックの登録・管理区画・.gitignore）
+- 既存ファイルとの統合（フックの登録・.gitignore）
 - 設定ファイルの初期作成
 
 ## Out of Boundary
@@ -35,7 +35,7 @@ cc-sdd の運用を始めるには、フックの登録・スクリプト・`.gi
 
 ## Upstream / Downstream
 - **Upstream**: なし
-- **Downstream**: session-install・kiro-gate・subagent-delegation（配置物と管理区画の文章を足す）
+- **Downstream**: session-install・kiro-gate・subagent-delegation（配置物と運用の区画の文章を足す）
 
 ## Existing Spec Touchpoints
 - **Extends**: installer-core 自身（要件から改訂）
@@ -43,7 +43,7 @@ cc-sdd の運用を始めるには、フックの登録・スクリプト・`.gi
 
 ## Constraints
 - Node.js 22 以上、外部パッケージなし。
-- 残す安全策: 利用者が書いたフック・管理区画の外の文章を壊さない、配置先をリポジトリの中に限る、シンボリックリンクの先へ書かない。
-- 要件で決めること: `uninstall` を残すか（残すならフックの登録と管理区画を外す程度の単純なもの）、廃止した配置物を更新でどう片付けるか（固定の「廃止一覧」で足りるか）。
+- 残す安全策: 利用者が書いたフックを壊さない、配置先をリポジトリの中に限る、シンボリックリンクの先へ書かない。
+- 要件で決めること: `uninstall` を残すか（残すならフックの登録と運用の区画を外す程度の単純なもの）、廃止した配置物を更新でどう片付けるか（固定の「廃止一覧」で足りるか）。
 - Codex のフックは信頼の承認が要る（BRW の Codex 対応の記述）。設計前に PoC で、Codex のフックの設定の置き場所・形式・承認の扱いを確かめる。
 - 自己適用で、既存の配置記録（`.agent-hooks/cc-sdd-bootstrap/installed.json`）を片付ける。

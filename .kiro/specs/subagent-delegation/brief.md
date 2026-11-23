@@ -16,7 +16,7 @@ cc-sdd の作業では、実装・レビュー・設計・調査・デバッグ�
 ## Desired Outcome
 - **役割表**: 設定に「役割 → ベンダ・モデル・推論量・権限（読み取り専用／書き込み可）」の小さな表を置く。既定値は指揮役より賢いモデルにしない。
 - **ネイティブの子**: 役割表から Claude Code と Codex のエージェント定義を生成する。Agent（Codex は `spawn_agent`）の起動前フックで、モデルの未指定（引き継ぎ）と指揮役と同じモデルを拒否する。
-- **別ベンダの子**: 役割と指示のファイルを渡すと、役割表のモデル・推論量・権限で別ベンダの CLI を起動する薄い入口を置く（Claude Code が指揮役なら `codex exec`、Codex が指揮役なら `claude -p`）。指示のファイルの置き場所、結果を未確認として差分とテストで確かめる手順は、CLAUDE.md・AGENTS.md の管理区画の文章にする。
+- **別ベンダの子**: 役割と指示のファイルを渡すと、役割表のモデル・推論量・権限で別ベンダの CLI を起動する薄い入口を置く（Claude Code が指揮役なら `codex exec`、Codex が指揮役なら `claude -p`）。指示のファイルの置き場所、結果を未確認として差分とテストで確かめる手順は、CLAUDE.md・AGENTS.md の運用の区画の文章にする。
 - Claude Code のトークンを使い切ったときに、Codex を指揮役にして同じ運用を続けられる。
 
 ## Approach
@@ -36,7 +36,7 @@ cc-sdd の作業では、実装・レビュー・設計・調査・デバッグ�
 - cc-sdd 本体のスキルの改変
 
 ## Upstream / Downstream
-- **Upstream**: installer-core（設定・配置・フックの登録・管理区画）
+- **Upstream**: installer-core（設定・配置・フックの登録・運用の区画の文章）
 - **Downstream**: なし
 
 ## Existing Spec Touchpoints

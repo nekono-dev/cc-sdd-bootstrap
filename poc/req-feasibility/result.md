@@ -9,6 +9,7 @@
 | `install.sh` | 両ベンダへの cc-sdd の導入 | OK 20・NG 0 |
 | `claude.sh` | Claude Code を指揮役にした初回の導入と子の起動の拒否 | OK 9・NG 0 |
 | `codex.sh` | Codex を指揮役にした初回の導入・手順書の強制・子の起動の拒否・`claude -p` の起動 | OK 17・NG 0 |
+| `doc-append.sh` | CLAUDE.md・AGENTS.md を cc-sdd の標準の文書として書き出し、運用の区画を書き足す | OK 26・NG 0 |
 | `../kiro-gate/run.sh`（再実行） | Claude Code の手順書の強制（拒否・Read の観測・終了を 1 回止める） | OK 12・NG 0 |
 
 Codex の PoC は一時の `CODEX_HOME` を使い、フックの信頼の承認は `--dangerously-bypass-hook-trust` で省いた（実際の利用では承認が要る）。
@@ -18,6 +19,7 @@ Codex の PoC は一時の `CODEX_HOME` を使い、フックの信頼の承認�
 | 要件 | 確かめたこと | 結果 |
 |---|---|---|
 | session-install 1.2・3.1〜3.3、installer-core 5 | 独自の manifest（導入の計画を書いた JSON）で、Claude Code（`--claude-skills`）と Codex（`--codex-skills`）へ非対話で続けて導入できる。標準の文書は `.kiro/settings/cc-sdd-guide.md`・`cc-sdd-guide-codex.md` に出せ、既存の CLAUDE.md・AGENTS.md（管理区画と利用者の記述）は変わらない。cc-sdd 既定の `.codex/agents/spec-reviewer.toml`（モデル固定）は入れずに済む。入れ直しても同じ | 実現できる |
+| session-install 3.7〜3.9、installer-core 5・6（2026-11-23 の改訂） | 標準の文書の出力先を既定（リポジトリの直下）にすると、`--overwrite force` で既存の CLAUDE.md・AGENTS.md（利用者の記述・古い区画）は丸ごと置き換わる。Claude Code 向けと Codex 向けを続けて入れても互いの文書は壊れず、導入の後に末尾へ区画を足すだけで、入れ直しても区画は 1 つになる | 実現できる。`install.sh` の標準の文書を `.kiro/settings` へ出す形は、この改訂で使わなくなった |
 | session-install 1.3 | 起動前に導入すると、最初のセッションで使える。Claude Code は起動時のスキル一覧に kiro-* が載る。Codex は `$kiro-spec-status` と明示すると手順書の本文がモデルに渡る | 実現できる |
 | session-install 2.1〜2.3 | セッション中（Claude Code の SessionStart、Codex の SessionStart）に入れたスキルは、同じセッションでは使えない（対照）。最初の入力時のフック（UserPromptSubmit）で導入し、追加の文脈で「手順書を直接読む」よう伝えると、Claude Code も Codex も SKILL.md を読んでから作業した | 実現できる（要件どおり、手順書を直接読ませる形） |
 | session-install 5 | Codex の UserPromptSubmit で `decision: block` を返すと、入力が止まりモデルの応答が無い（Claude Code は session-install の PoC で確認済み） | 実現できる |
@@ -31,7 +33,7 @@ Codex の PoC は一時の `CODEX_HOME` を使い、フックの信頼の承認�
 ## 設計に引き継ぐこと
 
 - Codex 向けの cc-sdd のスキルは、ほとんどが `allow_implicit_invocation: false` で、モデルが自分からは使わず一覧にも出さない。利用者が `$kiro-*` と明示して呼ぶ前提になる。
-- AGENTS.md には `@` の取り込みが無いため、管理区画からは標準の文書（`cc-sdd-guide-codex.md`）を読むよう文章で指示する必要がある。
+- CLAUDE.md・AGENTS.md は導入のたびに丸ごと作り直されるので、運用の区画は「導入の後に末尾へ足す」だけでよい（区画の置き換えや目印の検査は要らない）。入れ直しを省くときは、区画があることも確かめる。
 - Codex の子の定義（`.codex/agents/*.toml`）のモデルは、`tool_input` に出ない。`agent_type` から定義のモデルを引くか、明示を求めるかを設計で決める（Claude Code の `subagent_type` も同じ）。
 - モデル名は別名と正式な ID が混ざる（Claude Code の子は `sonnet`、記録の指揮役は `claude-haiku-5-5`）。一致の判定には別名の対応が要る。
 - 手順書の強制は、Codex で `cat SKILL.md && 別のコマンド` のように 1 つのコマンドにまとめられると、読んだ扱いで一緒に通る。厳密さのためにコードを増やさない方針なので、許容するかを設計で決める。

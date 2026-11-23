@@ -13,7 +13,7 @@ cc-sdd のスキルは、`disable-model-invocation: true` のものや導入直�
 
 ## Desired Outcome
 - `/kiro-*` で始めた依頼では、対応する手順書を読むまで他の作業ツールを拒否する。Claude Code と Codex の両方で同じ規則で動く。
-- 自然文の依頼は、依頼の種類と使うスキルの対応表を CLAUDE.md・AGENTS.md の管理区画に書いて促す（フックで止めない）。
+- 自然文の依頼は、依頼の種類と使うスキルの対応表を CLAUDE.md・AGENTS.md の運用の区画に書いて促す（フックで止めない）。
 - 判定できないときは通す（通常の作業を止めない）。状態はリポジトリに残さない。
 
 ## Approach
@@ -32,7 +32,7 @@ cc-sdd のスキルは、`disable-model-invocation: true` のものや導入直�
 - サブエージェントのモデルの判定（subagent-delegation）
 
 ## Upstream / Downstream
-- **Upstream**: session-install（スキルの場所、導入の失敗の扱い）、installer-core（フックの登録・管理区画）
+- **Upstream**: session-install（スキルの場所、導入の失敗の扱い）、installer-core（フックの登録・運用の区画の文章）
 - **Downstream**: なし
 
 ## Existing Spec Touchpoints

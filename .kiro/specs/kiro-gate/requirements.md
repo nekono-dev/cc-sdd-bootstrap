@@ -28,7 +28,7 @@ kiro-gate は、`/kiro-*` で始めた依頼について、対応する手順書
 - **対象**：`/kiro-*` で始まる入力の検出、手順書が未読の間のツールの拒否と終了の 1 回だけの停止、読み取り済みの扱い、自然文向けの対応表、Claude Code と Codex の両方への適用。
 - **対象外**：roadmap.md と brief.md の不足による終了停止、spec.json の承認状態や tasks.md のチェックの判定、開始時の状態通知、自然文の依頼への機械的な強制、cc-sdd 本体の配布・改変。
 - **session-install との関係**：起動前・初回の導入、導入直後の案内、導入失敗時の入力停止と再試行の案内は session-install が扱う。kiro-gate は、手順書が無いことを理由とする独自の停止を加えない。
-- **installer-core との関係**：ファイルの配置、フックの登録、CLAUDE.md と AGENTS.md の管理区画（共通の文章を配置・更新する範囲）は installer-core が扱う。この仕様は、適用する先読みの規則と案内の内容を定める。
+- **installer-core との関係**：ファイルの配置、フックの登録、CLAUDE.md と AGENTS.md の末尾に書き足す運用の区画の文章の配置は installer-core が、導入のたびの書き足しは session-install が扱う。この仕様は、適用する先読みの規則と案内の内容を定める。
 - **subagent-delegation との関係**：子のエージェントのモデルの判定は subagent-delegation が扱う。kiro-gate が操作を通すことは、隣接する仕組みの拒否を解除することを意味しない。
 - **強制の前提**：機械的な強制の対象は、フックが有効で、対象の入力とツール操作を判定できる環境とする。Codex のフックの信頼が承認されていない環境では、AGENTS.md の文章で先読みを促すが、機械的な強制は保証しない。
 
@@ -81,7 +81,7 @@ kiro-gate は、`/kiro-*` で始めた依頼について、対応する手順書
 
 #### 受け入れ基準
 
-1. The kiro-gate shall CLAUDE.md と AGENTS.md の管理区画に、次の対応表を同じ内容で示す。
+1. The kiro-gate shall CLAUDE.md と AGENTS.md の運用の区画に、次の対応表を同じ内容で示す。
 
 | 依頼の種類 | 使うスキル |
 |---|---|
