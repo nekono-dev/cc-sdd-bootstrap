@@ -9,7 +9,6 @@ const payloadFiles = [
   'install-cc-sdd.mjs',
   'install-rules.mjs',
   'config-schema.mjs',
-  'install-gate.mjs',
 ];
 const fakeNpxSource = `#!/usr/bin/env node
 import fs from 'node:fs';

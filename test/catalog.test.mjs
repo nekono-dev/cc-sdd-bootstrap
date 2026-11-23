@@ -25,8 +25,7 @@ test("カタログには記録や旧形式のファイル指定がない", () =>
   for (const file of catalog.files) assert.deepEqual(Object.keys(file), ["path"]);
 });
 
-test("フック・除外設定・区画は両方の運用文書に必要な内容を持つ", () => {
-  assert.ok(catalog.hooks.length);
+test("区画の文章は導入・手順書・独自の決まりを案内する", () => {
   assert.ok(catalog.gitignore.includes("/CLAUDE.md"));
   assert.ok(catalog.gitignore.includes("/AGENTS.md"));
   for (const tool of ["claude", "codex"]) {
@@ -55,8 +54,10 @@ test("配置物は lib/ を読み込まない", () => {
 
 test("新しいフックと除外行が設計どおりで、共有物や設定を除外しない", () => {
   assert.deepEqual(catalog.hooks, [
-    { tools: ["claude"], event: "SessionStart", script: "install-cc-sdd.mjs", args: ["session-start"], timeout: 600 },
-    { tools: ["claude"], event: "UserPromptSubmit", script: "install-gate.mjs", args: ["user-prompt-submit"], timeout: 10 },
+    { tools: ["claude"], event: "SessionStart", script: "install-cc-sdd.mjs", args: ["session-start", "--tool", "claude"], timeout: 30 },
+    { tools: ["codex"], event: "SessionStart", script: "install-cc-sdd.mjs", args: ["session-start", "--tool", "codex"], timeout: 30 },
+    { tools: ["claude"], event: "UserPromptSubmit", script: "install-cc-sdd.mjs", args: ["user-prompt-submit", "--tool", "claude"], timeout: 600 },
+    { tools: ["codex"], event: "UserPromptSubmit", script: "install-cc-sdd.mjs", args: ["user-prompt-submit", "--tool", "codex"], timeout: 600 },
   ]);
   assert.deepEqual(catalog.gitignore, [
     ".claude/skills/kiro-*/", ".agents/skills/kiro-*/", ".kiro/settings/", "/CLAUDE.md", "/AGENTS.md", "/.cache/",
@@ -70,6 +71,27 @@ test("新しいフックと除外行が設計どおりで、共有物や設定�
       assert.ok(!excludedBy(line, file), line + " -> " + file);
     }
   }
+  for (const file of [".claude/skills/kiro-x/SKILL.md", ".agents/skills/kiro-x/SKILL.md", ".kiro/settings/config.json", "CLAUDE.md", "AGENTS.md", ".cache/cc-sdd-install.failed"]) {
+    assert.ok(catalog.gitignore.some((line) => excludedBy(line, file)), file);
+  }
+  for (const file of [".claude/skills/my-skill/SKILL.md", ".agents/skills/my-skill/SKILL.md", ".kiro/specs/x.md", ".kiro/steering/product.md", ".claude/settings.json", ".codex/hooks.json"]) {
+    assert.ok(!catalog.gitignore.some((line) => excludedBy(line, file)), file);
+  }
+});
+
+test("session-install の区画は両ツールの導入案内を持ち Codex だけに信頼の注意を含む", () => {
+  const section = catalog.agentSections.find((item) => item.id === "session-install");
+  assert.ok(section);
+  for (const tool of ["claude", "codex"]) {
+    const body = section[tool];
+    for (const phrase of ["起動前", "最初の入力", "省", "kiro-", "未完了", "node .agent-hooks/cc-sdd-bootstrap/install-cc-sdd.mjs", tool === "claude" ? ".claude/skills/<名前>/SKILL.md" : ".agents/skills/<名前>/SKILL.md", "手順書", "開発作業を進めない", ".kiro/steering/"]) {
+      assert.ok(body.includes(phrase), `${tool}: ${phrase}`);
+    }
+  }
+  assert.match(section.codex, /信頼/);
+  assert.match(section.codex, /機械的/);
+  assert.match(section.codex, /失敗・未完了/);
+  assert.doesNotMatch(section.claude, /信頼|機械的/);
 });
 
 test("運用区画に標準文書の見出しを複製せず、道筋と目印がそろう", () => {
