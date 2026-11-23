@@ -6,6 +6,7 @@
 //   a. コマンドを相対の道筋（node .agent-hooks/cc-sdd-bootstrap/probe.mjs）で書くと、リポジトリの最上位で起動した Codex から呼べるか
 //   b. 下のディレクトリ（--cd sub）で起動したとき、.codex/hooks.json が見つかるか、相対の道筋で呼べるか、フックの作業場所はどこか
 //   c. コマンドをシェルの展開で根から書く形（node "$(<版管理の CLI> rev-parse --show-toplevel)/..."）なら、どちらの起動場所でも呼べるか
+//   e. フックの入力に、セッションを見分ける値（session_id）と、シェルのツール名・コマンドが入るか（kiro-gate の状態の置き場所の前提）
 //   d. フックの環境変数に、プロジェクトの根を表すもの（CLAUDE_PROJECT_DIR 相当）があるか（観測）
 //
 // 使い方: node poc/codex-hook-path/run.mjs
@@ -33,7 +34,7 @@ fs.writeFileSync(
   `import fs from "node:fs";
 let input = {}; try { input = JSON.parse(fs.readFileSync(0, "utf8") || "{}"); } catch {}
 const env = Object.fromEntries(Object.entries(process.env).filter(([k]) => /CODEX|PROJECT|ROOT|PWD/.test(k)));
-fs.appendFileSync(${JSON.stringify(log)}, JSON.stringify({ tag: process.argv[2], event: input.hook_event_name, cwd: process.cwd(), inputCwd: input.cwd, env }) + "\\n");
+fs.appendFileSync(${JSON.stringify(log)}, JSON.stringify({ tag: process.argv[2], event: input.hook_event_name, cwd: process.cwd(), inputCwd: input.cwd, env, keys: Object.keys(input), sessionId: input.session_id ?? null, turnId: input.turn_id ?? null, toolName: input.tool_name ?? null, toolInput: input.tool_input ?? null, stopHookActive: input.stop_hook_active ?? null }) + "\\n");
 `,
 );
 const probe = path.join(repo, ".agent-hooks/cc-sdd-bootstrap/probe.mjs");
@@ -45,13 +46,16 @@ const commands = {
 };
 const entry = (tag) => ({ type: "command", command: commands[tag], timeout: 30 });
 // 相対の道筋・絶対の道筋・シェルの展開の 3 つを登録し、「設定が見つからない」と「相対の道筋が解けない」を見分ける
-fs.writeFileSync(path.join(repo, ".codex/hooks.json"), JSON.stringify({ hooks: { SessionStart: [{ hooks: [entry("rel"), entry("abs"), entry("top")] }], UserPromptSubmit: [{ hooks: [entry("rel"), entry("abs"), entry("top")] }] } }, null, 1));
+// e の観測用に、ツールの前後と終了にも絶対の道筋のフックを登録する
+const absOnly = [{ hooks: [entry("abs")] }];
+fs.writeFileSync(path.join(repo, ".codex/hooks.json"), JSON.stringify({ hooks: { SessionStart: [{ hooks: [entry("rel"), entry("abs"), entry("top")] }], UserPromptSubmit: [{ hooks: [entry("rel"), entry("abs"), entry("top")] }], PreToolUse: [{ matcher: ".*", hooks: [entry("abs")] }], PostToolUse: [{ matcher: ".*", hooks: [entry("abs")] }], Stop: absOnly } }, null, 1));
+fs.writeFileSync(path.join(repo, "note.txt"), "PoC のメモ\n");
 
 const run = (cd) => {
   fs.copyFileSync(path.join(os.homedir(), ".codex/auth.json"), path.join(home, "auth.json"));
   fs.writeFileSync(path.join(home, "config.toml"), `[projects.${JSON.stringify(repo)}]\ntrust_level = "trusted"\n`);
   try {
-    const r = spawnSync("codex", ["-a", "never", "exec", "--json", "--dangerously-bypass-hook-trust", "-s", "read-only", "--model", "gpt-6-luna", "-c", 'model_reasoning_effort="low"', "--cd", cd, "「はい」とだけ答えてください。"], {
+    const r = spawnSync("codex", ["-a", "never", "exec", "--json", "--dangerously-bypass-hook-trust", "-s", "read-only", "--model", "gpt-6-luna", "-c", 'model_reasoning_effort="low"', "--cd", cd, "シェルで cat note.txt を 1 回だけ実行し、その出力をそのまま答えてください。"], {
       env: { ...process.env, CODEX_HOME: home }, input: "", encoding: "utf8", timeout: 300000,
     });
     return r.status;
@@ -69,6 +73,12 @@ const a = read();
 check("a. 相対の道筋で SessionStart のフックが呼ばれる", a.some((e) => e.tag === "rel" && e.event === "SessionStart"));
 check("a. 相対の道筋で UserPromptSubmit のフックが呼ばれる", a.some((e) => e.tag === "rel" && e.event === "UserPromptSubmit"));
 check("a. シェルの展開（版管理の CLI で根を求める）で呼ばれる", a.some((e) => e.tag === "top"));
+const sids = new Set(a.map((e) => e.sessionId));
+check("e. すべてのフックの入力に session_id があり、1 回の起動の中で同じ値", a.length > 0 && a.every((e) => typeof e.sessionId === "string" && e.sessionId) && sids.size === 1);
+for (const ev of ["UserPromptSubmit", "PreToolUse", "PostToolUse", "Stop"]) {
+  const e = a.find((x) => x.event === ev);
+  console.log(`     観測: ${ev} の入力のキー=${e ? e.keys.join(",") : "（呼ばれない）"}${e?.toolName ? ` tool_name=${e.toolName} tool_input=${JSON.stringify(e.toolInput).slice(0, 120)}` : ""}${ev === "Stop" && e ? ` stop_hook_active=${e.stopHookActive}` : ""}`);
+}
 if (a[0]) console.log(`     観測: フックの作業場所=${a[0].cwd}、入力の cwd=${a[0].inputCwd}、環境変数=${JSON.stringify(a[0].env)}`);
 
 console.log("== b. 下のディレクトリ（sub）で起動");
