@@ -5,10 +5,10 @@ import { fileURLToPath } from 'node:url';
 import { pathToFileURL } from 'node:url';
 import { spawnSync } from 'node:child_process';
 import {
-  CONFIG_FILE, UPDATE_COMMAND, FAILURE_RECORD, STATE_PATH, LOCK_PATH, INSTALL_DEADLINE_MS, SECTION_BEGIN_MARKER,
+  CONFIG_FILE, UPDATE_COMMAND, FAILURE_RECORD, STATE_PATH, LOCK_PATH, INSTALL_DEADLINE_MS, STALE_LOCK_MS, SECTION_BEGIN_MARKER,
   RETRY_COMMAND,
   readInstallConfig, parseState, buildState, decideInstall,
-  removalTargets, buildManifest, npxArgs, messageInstalled, messageSkipped, messageBlocked, messageUsage
+  removalTargets, buildManifest, npxArgs, messageInstalled, messageSkipped, messageReadSkillDirectly, messageBlocked, messageUsage
 } from './install-rules.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
@@ -118,7 +118,7 @@ function appendSection(tool, doc) {
 
 class BusyInstallError extends Error {}
 
-function performInstall(config) {
+function performInstall(config, { writeResult = true } = {}) {
   fs.mkdirSync(absolute(path.dirname(LOCK_PATH)), { recursive: true });
   let lockFd;
   try {
@@ -166,7 +166,9 @@ function performInstall(config) {
     fs.writeFileSync(stateTmp, JSON.stringify(state, null, 2), 'utf8');
     fs.renameSync(stateTmp, absolute(STATE_PATH));
     fs.rmSync(absolute(FAILURE_RECORD), { force: true });
-    writeOutput(`${messageInstalled(config)}\n`);
+    const installedMessage = messageInstalled(config);
+    if (writeResult) writeOutput(`${installedMessage}\n`);
+    return installedMessage;
   } catch (error) {
     try { writeRecord(FAILURE_RECORD, error.message); }
     catch (recordError) { process.stderr.write(`失敗の記録を書けませんでした: ${recordError.message}\n`); }
@@ -199,8 +201,61 @@ async function runSessionStart(tool) {
   process.exitCode = 0;
 }
 
+async function runUserPromptSubmit(tool) {
+  let installing = false;
+  try {
+    let input = '';
+    for await (const chunk of process.stdin) input += chunk;
+    const event = JSON.parse(input);
+    if (typeof event.prompt !== 'string') throw new Error('入力 JSON に prompt 文字列がありません。');
+    const facts = readInstallFacts();
+    const decision = decideInstall(facts);
+    if (decision.action === 'skip') {
+      process.exitCode = 0;
+      return;
+    }
+    if (decision.action === 'fail') {
+      writeOutput(`${JSON.stringify({ decision: 'block', reason: messageBlocked({ kind: 'failed', detail: decision.reason }) })}\n`);
+      process.exitCode = 0;
+      return;
+    }
+    if (decision.action === 'busy') {
+      writeOutput(`${JSON.stringify({ decision: 'block', reason: messageBlocked({ kind: 'busy', stale: decision.stale }) })}\n`);
+      process.exitCode = 0;
+      return;
+    }
+    installing = true;
+    const installedMessage = performInstall(facts.config.config, { writeResult: false });
+    const additionalContext = `${installedMessage}\n${messageReadSkillDirectly(tool, event.prompt)}`;
+    writeOutput(`${JSON.stringify({ hookSpecificOutput: { hookEventName: 'UserPromptSubmit', additionalContext } })}\n`);
+  } catch (error) {
+    if (error instanceof BusyInstallError) {
+      let stale = false;
+      try {
+        const facts = readInstallFacts();
+        stale = facts.lock.present && facts.lock.ageMs > STALE_LOCK_MS;
+      } catch { /* 印を読めない場合も、止める理由を下で示す */ }
+      writeOutput(`${JSON.stringify({ decision: 'block', reason: messageBlocked({ kind: 'busy', stale }) })}\n`);
+    } else if (installing || (error instanceof Error && recordedInstallErrors.has(error))) {
+      writeOutput(`${JSON.stringify({ decision: 'block', reason: messageBlocked({ kind: 'failed', detail: error.message }) })}\n`);
+    } else {
+      const detail = error instanceof Error ? error.message : String(error);
+      writeOutput(`${JSON.stringify({ decision: 'block', reason: `入力を止めています。判定できなかった理由: ${detail}\n通常の端末で次を実行して再試行してください: ${RETRY_COMMAND}` })}\n`);
+    }
+  }
+  process.exitCode = 0;
+}
+
 function runCli() {
 const args = process.argv.slice(2);
+if (args[0] === 'user-prompt-submit') {
+  if (args.length !== 3 || args[1] !== '--tool' || !['claude', 'codex'].includes(args[2])) {
+    fs.writeSync(2, `使い方: user-prompt-submit --tool <claude|codex>\n${messageUsage()}\n`);
+    process.exit(2);
+  }
+  void runUserPromptSubmit(args[2]);
+  return;
+}
 if (args[0] === 'session-start') {
   if (args.length !== 3 || args[1] !== '--tool' || !['claude', 'codex'].includes(args[2])) {
     fs.writeSync(2, `使い方: session-start --tool <claude|codex>\n${messageUsage()}\n`);

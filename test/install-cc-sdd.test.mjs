@@ -2,9 +2,9 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { makeRepo, runEntry } from './helpers/entry-harness.mjs';
-import { FAILURE_RECORD, LOCK_PATH, STATE_PATH, SECTION_BEGIN_MARKER, decideInstall } from '../.agent-hooks/cc-sdd-bootstrap/install-rules.mjs';
+import { FAILURE_RECORD, LOCK_PATH, STATE_PATH, SECTION_BEGIN_MARKER, RETRY_COMMAND, decideInstall } from '../.agent-hooks/cc-sdd-bootstrap/install-rules.mjs';
 import { AGENT_SECTION_MARKERS } from '../lib/catalog.mjs';
 import { readInstallFacts } from '../.agent-hooks/cc-sdd-bootstrap/install-cc-sdd.mjs';
 
@@ -69,6 +69,110 @@ function runSessionStart(repo, tool, input = '{"session_id":"test"}') {
   return result;
 }
 
+function runPromptHook(repo, tool, prompt = '最初の依頼', { mode = 'ok', env = {}, input = null } = {}) {
+  const logPath = path.join(repo.fakeBin, `npx-calls-prompt-${process.pid}-${Date.now()}-${Math.random().toString(16).slice(2)}.jsonl`);
+  const result = spawnSync(process.execPath, [repo.entry, 'user-prompt-submit', '--tool', tool], {
+    cwd: repo.root, encoding: 'utf8', input: input ?? JSON.stringify({ prompt }),
+    env: { ...process.env, ...env, PATH: `${repo.fakeBin}${path.delimiter}${process.env.PATH ?? ''}`, FAKE_NPX_MODE: mode, FAKE_NPX_LOG: logPath },
+  });
+  try { result.npxCalls = fs.readFileSync(logPath, 'utf8').split(/\r?\n/).filter(Boolean).map((line) => JSON.parse(line)); }
+  catch (error) { if (error.code !== 'ENOENT') throw error; result.npxCalls = []; }
+  fs.rmSync(logPath, { force: true });
+  return result;
+}
+
+test('最初の入力で導入し、追加文脈で手順書を直接読む道筋を伝える', (t) => {
+  for (const [tool, dir] of [['claude', '.claude/skills'], ['codex', '.agents/skills']]) {
+    const repo = makeRepo(); t.after(repo.cleanup); repo.putSections();
+    const prompt = '/kiro-x 続けて';
+    const result = runPromptHook(repo, tool, prompt);
+    assert.equal(result.status, 0, result.stderr);
+    const output = JSON.parse(result.stdout);
+    assert.equal(output.hookSpecificOutput.hookEventName, 'UserPromptSubmit');
+    assert.match(output.hookSpecificOutput.additionalContext, /導入しました/);
+    assert.match(output.hookSpecificOutput.additionalContext, new RegExp(`${dir}/kiro-x/SKILL\\.md`));
+    assert.equal(result.npxCalls.length, 2);
+  }
+});
+
+test('揃った状態の最初の入力は何も出さず通す', (t) => {
+  const repo = makeRepo(); t.after(repo.cleanup); repo.putSections();
+  const installed = runEntry(repo);
+  assert.equal(installed.status, 0);
+  const result = runPromptHook(repo, 'claude');
+  assert.equal(result.status, 0);
+  assert.equal(result.stdout, '');
+  assert.equal(result.npxCalls.length, 0);
+});
+
+test('導入失敗は入力を止め、再試行成功後は通す', (t) => {
+  const repo = makeRepo(); t.after(repo.cleanup); repo.putSections();
+  const failed = runPromptHook(repo, 'claude', '依頼', { mode: 'fail' });
+  assert.equal(failed.status, 0);
+  const blocked = JSON.parse(failed.stdout);
+  assert.equal(blocked.decision, 'block');
+  assert.match(blocked.reason, /fake npx failure|終了コード/);
+  assert.ok(blocked.reason.includes(RETRY_COMMAND));
+  assert.ok(repo.read(FAILURE_RECORD));
+  const recovered = runPromptHook(repo, 'claude');
+  assert.equal(recovered.status, 0);
+  assert.equal(JSON.parse(recovered.stdout).hookSpecificOutput.hookEventName, 'UserPromptSubmit');
+  assert.equal(repo.read(FAILURE_RECORD), null);
+});
+
+test('壊れた設定と判定例外は理由と再試行方法を示して止める', (t) => {
+  for (const input of ['{"prompt":"x"}', 'not json']) {
+    const repo = makeRepo({ config: '{broken' }); t.after(repo.cleanup);
+    const result = runPromptHook(repo, 'codex', '', { input });
+    assert.equal(result.status, 0);
+    const output = JSON.parse(result.stdout);
+    assert.equal(output.decision, 'block');
+    assert.match(output.reason, /JSON|判定できなかった/);
+    assert.ok(output.reason.includes(RETRY_COMMAND));
+    assert.equal(result.npxCalls.length, 0);
+  }
+});
+
+test('導入中の新しい印と古い印はいずれも止め、古い印の解除方法を示す', (t) => {
+  for (const stale of [false, true]) {
+    const repo = makeRepo(); t.after(repo.cleanup);
+    repo.write(LOCK_PATH, '導入中');
+    if (stale) {
+      const lockPath = path.join(repo.root, LOCK_PATH);
+      const mtime = new Date(Date.now() - 700000); fs.utimesSync(lockPath, mtime, mtime);
+    }
+    const result = runPromptHook(repo, 'codex');
+    assert.equal(result.status, 0);
+    const output = JSON.parse(result.stdout);
+    assert.equal(output.decision, 'block');
+    assert.match(output.reason, stale ? /rm \.cache\/cc-sdd-install\.lock/ : /別のセッションで導入中/);
+    assert.equal(result.npxCalls.length, 0);
+  }
+});
+
+test('ほぼ同時の入力では一つだけ導入し、もう一方を止める', async (t) => {
+  const repo = makeRepo(); t.after(repo.cleanup); repo.putSections();
+  const logPath = path.join(repo.fakeBin, `npx-calls-race-${process.pid}-${Date.now()}.jsonl`);
+  const run = () => new Promise((resolve, reject) => {
+    const child = spawn(process.execPath, [repo.entry, 'user-prompt-submit', '--tool', 'claude'], {
+      cwd: repo.root, env: { ...process.env, PATH: `${repo.fakeBin}${path.delimiter}${process.env.PATH ?? ''}`, FAKE_NPX_LOG: logPath, FAKE_NPX_DELAY_MS: '150' },
+      stdio: ['pipe', 'pipe', 'pipe'],
+    });
+    let stdout = '', stderr = '';
+    child.stdout.setEncoding('utf8').on('data', (chunk) => stdout += chunk);
+    child.stderr.setEncoding('utf8').on('data', (chunk) => stderr += chunk);
+    child.on('error', reject);
+    child.on('close', (status) => resolve({ status, stdout, stderr }));
+    child.stdin.end(JSON.stringify({ prompt: '並行入力' }));
+  });
+  const results = await Promise.all([run(), run()]);
+  assert.ok(results.every(({ status }) => status === 0));
+  assert.equal(results.filter(({ stdout }) => JSON.parse(stdout).decision === 'block').length, 1);
+  const calls = fs.readFileSync(logPath, 'utf8').trim().split(/\r?\n/);
+  assert.equal(calls.length, 2);
+  fs.rmSync(logPath, { force: true });
+});
+
 test('SessionStart は両ツールで状態を知らせ、導入を始めない', (t) => {
   for (const tool of ['claude', 'codex']) {
     for (const scenario of [
@@ -110,6 +214,14 @@ test('session-start の未知のツールは使い方と終了コード 2 を返
   const result = runSessionStart(repo, 'other');
   assert.equal(result.status, 2);
   assert.match(result.stderr, /claude.*codex/);
+});
+
+test('user-prompt-submit の未知のツールは使い方と終了コード 2 を返す', (t) => {
+  const repo = makeRepo(); t.after(repo.cleanup);
+  const result = runPromptHook(repo, 'other');
+  assert.equal(result.status, 2);
+  assert.match(result.stderr, /claude.*codex/);
+  assert.equal(result.npxCalls.length, 0);
 });
 
 test('引数なしで導入し結果と版・言語を表示し、再実行は省く', (t) => {
