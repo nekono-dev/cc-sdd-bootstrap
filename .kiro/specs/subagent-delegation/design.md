@@ -174,6 +174,8 @@ sequenceDiagram
 | 5.10 | 書き込みは 1 つずつ | 区画の文章 | `agentSections.subagent-delegation` | — |
 | 5.11 | Codex から claude -p の通信の許可 | 区画の文章 | `agentSections.subagent-delegation` | — |
 | 5.12 | フックが未承認のときの手順 | 区画の文章 | `agentSections.subagent-delegation` | — |
+| 5.13 | 子の起動が許可の判定で拒否されたときの手順 | 区画の文章 | `agentSections.subagent-delegation` | — |
+| 5.14 | 許可を前もって与えないこと・提供元の切り替えに許可を求めないこと | 区画の文章 | `agentSections.subagent-delegation` | — |
 
 ## Components and Interfaces
 
@@ -286,6 +288,7 @@ function buildCliCommand(target: Vendor, setting: RoleSetting, modelName: string
   - 別の提供元が使えないとき（5.7）: すべての役割を同じ提供元の、指揮役と異なり指揮役の格以下のモデルで行い、レビューは 1 回。Claude Code は役割定義（読み取り専用は道具を制限済み）に `model` を明示して起動する。Codex の組み込みの子は読み取り専用にできないので、読み取り専用の役割は `delegate.mjs --to same --role review --model <指揮役と異なるモデル>`（`codex exec --sandbox read-only`）で行う。
   - 指示のファイル（5.8・5.9）: `~/.cache/cc-sdd-bootstrap-scratch/` に置く（リポジトリ内と `/tmp` には置かない）。範囲・必要な決まり・禁止する操作・成果物の形式を書き、子が CLAUDE.md・AGENTS.md を読むことに頼らない。
   - 書き込みは 1 つずつ（5.10）: 書き込み可の子の実行中は、読み取り専用の子も重ねない。
+  - 子の起動が拒否されたとき（5.13・5.14）: 利用環境の許可の判定（Claude Code の auto モードなど）で組み込みの子の起動が拒否されたら、依頼の範囲・決まり・成果物の形式を依頼文に直接書いて 1 度だけ起動し直す（外部の指示のファイルを読ませるだけの依頼にしない）。それでも拒否されたら、子の作業を指揮役が代わりに進めず、状況と選べる進め方（利用者が許可する・別の提供元が使えるまで待つ・指揮役が直接進めることを利用者が認める）を示して止まる。導入時に許可の決まりは置かない（auto モードでは子の起動の許可の決まりが外され、保証にならない）。別の提供元の子が使えないときに指揮役の提供元の子へ切り替えることには、利用者の許可を求めない。
   - Codex の文章だけ（5.11・5.12）: Codex から `claude -p` の子を使うには、シェルに通信の許可（`sandbox_workspace_write.network_access=true` など）が要り、無いと子は応答を返せない。フックの信頼が承認されていないと起動前の確認は働かないので、役割表に従い `model` を明示し、指揮役と同じモデル・上の格を避ける。
 
 ### installer-core への追加（このspecの設計で決め、installer-core の設計に反映する）
