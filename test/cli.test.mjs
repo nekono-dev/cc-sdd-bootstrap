@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { parseArgs, buildUsage, runCli } from "../lib/cli.mjs";
+import { parseArgs, buildUsage, runCli, formatSuccess, formatAbort, formatApplyFailure } from "../lib/cli.mjs";
 import { configFields } from "../lib/config-schema.mjs";
 
 function temporary(t) {
@@ -100,4 +100,60 @@ test("help は終了コード 0 で案内を出し、対象を変更しない", 
   assert.match(streams.output().stdout, /\.cc-sdd-bootstrap\.json/);
   assert.match(streams.output().stdout, /直接編集/);
   assert.deepEqual(fs.readdirSync(root), [".git"]);
+});
+
+test("導入成功は変更一覧と通知を日本語で表示する", () => {
+  const output = formatSuccess("init", {
+    changes: [
+      { kind: "write", path: ".cc-sdd-bootstrap.json", created: true },
+      { kind: "write", path: ".agent-hooks/cc-sdd-bootstrap/a.mjs", created: false },
+      { kind: "delete", path: ".agent-hooks/cc-sdd-bootstrap/old.mjs" },
+    ],
+    notices: [
+      { code: "CONFIG_CREATED", defaults: ["ccSdd.version", "ccSdd.lang"] },
+      { code: "CODEX_TRUST" },
+      { code: "EXISTING_AGENT_DOCS", files: ["CLAUDE.md", "AGENTS.md"] },
+      { code: "GENERATED_NOTICE", id: "agents", messages: ["設定から役割のファイルを作りました"] },
+    ],
+  });
+  for (const text of ["作成: .cc-sdd-bootstrap.json", "更新: .agent-hooks/cc-sdd-bootstrap/a.mjs", "削除: .agent-hooks/cc-sdd-bootstrap/old.mjs", "ccSdd.version=3.1.0", "ccSdd.lang=ja", "直接編集", ".agent-hooks/cc-sdd-bootstrap/", "git", "信頼", "AGENTS.md", "CLAUDE.md", ".kiro/steering/", "追跡", "コミット", "session-install", "設定から役割のファイルを作りました"]) assert.ok(output.includes(text), text);
+});
+
+test("取り外しを再実行しても残る対象を runCli で表示する", async (t) => {
+  const root = temporary(t);
+  const streams = io(root);
+  assert.equal(await runCli(["init"], streams.value), 0);
+  assert.equal(await runCli(["uninstall"], streams.value), 0);
+  const second = io(root);
+  assert.equal(await runCli(["uninstall"], second.value), 0);
+  for (const text of ["取り外す登録・区画はありません", ".cc-sdd-bootstrap.json", ".agent-hooks/cc-sdd-bootstrap/", ".gitignore"]) assert.ok(second.output().stdout.includes(text), text);
+});
+
+test("変更なしと取り外し成功が状態と残る対象を表示する", () => {
+  const unchanged = formatSuccess("update", { changes: [], notices: [] });
+  assert.match(unchanged, /変更はありません/);
+  const removed = formatSuccess("uninstall", { changes: [{ kind: "delete", path: ".claude/settings.json" }], notices: [], removed: [".claude/settings.json", "CLAUDE.md"] });
+  for (const text of ["外した", ".claude/settings.json", "CLAUDE.md", ".cc-sdd-bootstrap.json", ".agent-hooks/cc-sdd-bootstrap/", ".gitignore"]) assert.ok(removed.includes(text), text);
+});
+
+test("中止理由ごとにファイル・問題・直し方を表示する", () => {
+  for (const abort of [
+    { code: "CONFIG_EXISTS" }, { code: "CONFIG_MISSING" },
+    { code: "CONFIG_INVALID", file: ".cc-sdd-bootstrap.json", messages: ["language: 値が不正です"] },
+    { code: "HOOKS_INVALID", file: ".codex/hooks.json", messages: ["JSON を読めません"] },
+    { code: "BLOCK_INVALID", file: "AGENTS.md", messages: ["終了の目印がありません"] },
+  ]) {
+    const output = formatAbort(abort);
+    assert.ok(output.length > 0);
+    if (abort.file) for (const text of [abort.file, abort.messages[0], "直してください"]) assert.ok(output.includes(text), `${abort.code}: ${text}`);
+  }
+});
+
+test("途中失敗は失敗・済み・未処理・再実行する操作を表示する", () => {
+  const output = formatApplyFailure("init", {
+    done: [{ path: ".cc-sdd-bootstrap.json" }],
+    failed: { change: { path: ".codex/hooks.json" }, message: "書き込みに失敗しました: 権限がありません" },
+    pending: [{ path: ".gitignore" }],
+  });
+  for (const text of [".codex/hooks.json", "権限がありません", ".cc-sdd-bootstrap.json", ".gitignore", "update"]) assert.ok(output.includes(text), text);
 });
