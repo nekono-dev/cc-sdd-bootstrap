@@ -25,7 +25,7 @@
 ### This Spec Owns
 - 導入のスクリプト `install-cc-sdd.mjs`（起動前・再試行の CLI、SessionStart と UserPromptSubmit のフック）と、純粋な判断の `install-rules.mjs`。
 - 導入物: `.claude/skills/kiro-*/`、`.agents/skills/kiro-*/`、`.kiro/settings/`、CLAUDE.md・AGENTS.md の書き出しと、運用の区画のファイルの書き足し。
-- 導入の状態と失敗の記録（`.cache/cc-sdd-install.state.json`・`.cache/cc-sdd-install.failed`）。
+- 導入の状態・導入中の印・失敗の記録（`.cache/cc-sdd-install.state.json`・`.cache/cc-sdd-install.lock`・`.cache/cc-sdd-install.failed`）。
 - カタログの session-install の項目（スクリプト・両ツールのフック・運用の区画の `session-install` の文章）と、設定の項目 `ccSdd.version`・`ccSdd.lang` の検証規則の利用。
 - 導入方法の利用手順（README の節と `--help` の表示）。
 
@@ -51,7 +51,8 @@
 
 ### Existing Architecture Analysis
 - 旧版: SessionStart で `install-cc-sdd.mjs session-start` が導入し、`install-gate.mjs` が失敗の記録を見て UserPromptSubmit を止める。入れ直しの判断に導入物の全ファイルの指紋を使う。Claude Code 向けだけ。
-- 保つもの: 純粋な判断（`install-rules.mjs`）と入出力（`install-cc-sdd.mjs`）の分け方、失敗の記録を「導入中」の印に兼ねる形、npx の時間切れ、根を自分の位置から求める形。
+- 保つもの: 純粋な判断（`install-rules.mjs`）と入出力（`install-cc-sdd.mjs`）の分け方、npx の時間切れ、根を自分の位置から求める形。
+- 変えるもの: 旧版は失敗の記録を「導入中」の印に兼ねていた。排他を確かにするため、導入中の印（`.lock`）と失敗の記録（`.failed`）を分ける。
 
 ### Architecture Pattern & Boundary Map
 
@@ -121,18 +122,18 @@ sequenceDiagram
     Hook->>Hook: 設定と状態と印を読み 判断する
     alt 揃っている
         Hook-->>Tool: 何も返さない 通す
-    else 別のセッションが導入中 または 失敗が未解消で再試行しない
+    else 導入中の印がある 別のセッションが導入中 または 中断
         Hook-->>Tool: 止める 理由と再試行のコマンド
     else 入れ直しが必要
-        Hook->>Hook: 印を排他的に作る
+        Hook->>Hook: 導入中の印を排他的に作る 作れなければ止める
         Hook->>Npx: Claude Code 向け
         Hook->>Npx: Codex 向け
-        Hook->>Hook: 両文書の末尾に区画を書き足す 状態を書く 印を消す
+        Hook->>Hook: 両文書の末尾に区画を書き足す 状態を書く 失敗の記録と印を消す
         Hook-->>Tool: 追加の文脈 手順書を直接読む
     end
 ```
 
-- 入れ直しに失敗・時間切れしたら、印に理由を書いて残し、入力を止める（5.1・5.2）。
+- 入れ直しに失敗・時間切れしたら、失敗の記録に理由を書き、導入中の印を消して、入力を止める（5.1・5.2）。次の入力やセッションでは、失敗の記録を見て入れ直す。
 - 判断の途中の例外も入力を止める（5.6）。
 
 ### 判断（`decideInstall`）
@@ -141,17 +142,18 @@ sequenceDiagram
 stateDiagram-v2
     [*] --> ConfigCheck
     ConfigCheck --> Fail: 設定が無い 読めない 不正
-    ConfigCheck --> MarkCheck
-    MarkCheck --> Busy: 印が新しい 導入中
-    MarkCheck --> Install: 印が古い または 失敗の記録
-    MarkCheck --> StateCheck: 印なし
-    StateCheck --> Install: 版 言語の不一致 状態なし 必要なファイルの欠け 区画なし
+    ConfigCheck --> LockCheck
+    LockCheck --> Busy: 導入中の印がある
+    LockCheck --> FailCheck: 印なし
+    FailCheck --> Install: 失敗の記録がある
+    FailCheck --> StateCheck: 記録なし
+    StateCheck --> Install: 版 言語の不一致 状態なし 記録したファイルの欠け 区画なし
     StateCheck --> Skip: すべて揃う
 ```
 
 - `Fail`: 導入しない。CLI は失敗で終わり、フックは止める（3.4）。
-- `Busy`: 導入しない。フックは止める（5.5）。CLI は「別の導入が進行中」として失敗で終わる。
-- 印が「古い」= 印の更新時刻から npx の時間切れ（540 秒）＋ 60 秒を過ぎたもの。失敗の記録（中身が「失敗」）は古さに関係なく入れ直しの対象（新しいセッション・再試行で回復できる）。
+- `Busy`: 導入しない。フックは止める（5.5）。印が新しければ「別のセッションで導入中」、古ければ（`STALE_LOCK_MS` を過ぎていれば）「中断した可能性がある」と示し、どちらも通常の端末での再試行のコマンドを示す。フックは印を回収しない（同時に回収して排他が破れるのを避ける）。
+- CLI（利用者が明示して実行する再試行）だけが、古い印を消してから導入する。新しい印なら「別の導入が進行中」として失敗で終わる。
 
 ## Requirements Traceability
 
@@ -179,11 +181,11 @@ stateDiagram-v2
 | 4.2 | 不一致・欠け・区画なしは省かない | InstallRules | `decideInstall` | 判断 |
 | 4.3 | 未解消の失敗中は省かない | InstallRules | `decideInstall` | 判断 |
 | 4.4 | 内容の変更は判断に使わない | InstallRules | `InstallFacts` に内容が無い | — |
-| 5.1 | 失敗・中断を判別できる | InstallCore | 印（失敗の記録） | — |
+| 5.1 | 失敗・中断を判別できる | InstallCore | 失敗の記録、残った導入中の印 | — |
 | 5.2 | 未完了なら止めて理由と再試行 | PromptHook | `messageBlocked` | 最初の入力時 |
 | 5.3 | 詳細が無いときの案内 | InstallRules | `messageBlocked` | — |
-| 5.4 | 再試行の成功で停止を解く | InstallCore | 印を消す | — |
-| 5.5 | 同時のセッションは導入済み扱いしない | InstallCore, InstallRules | 印の排他的な作成、`busy` | 判断 |
+| 5.4 | 再試行の成功で停止を解く | InstallCore | 失敗の記録と印を消す | — |
+| 5.5 | 同時のセッションは導入済み扱いしない | InstallCore, InstallRules | 導入中の印の排他的な作成、`busy` | 判断 |
 | 5.6 | 判定できない誤りは止める | PromptHook | 例外時の `block` | — |
 | 6.1 | 手順書の場所と読み方 | InstallRules | `messageReadSkillDirectly` | — |
 | 6.2 | 運用の区画の説明 | Catalog の `session-install` の文章 | — | — |
@@ -214,25 +216,26 @@ type InstallConfig = { version: string; lang: string };
 type ConfigCheck = { ok: true; config: InstallConfig } | { ok: false; reason: string };   // 理由に設定ファイル名と直し方を含む
 function readInstallConfig(text: string | null): ConfigCheck;   // config-schema の validate と formatProblem を使う
 
-type InstallState = { format: 2; version: string; lang: string };
+type InstallState = { format: 2; version: string; lang: string; files: string[] };  // files: 導入に成功したときの導入物の相対の道筋（中身は持たない）
 function parseState(text: string | null): InstallState | null;  // 読めない・形が違う・format が違うときは null
-function buildState(config: InstallConfig): InstallState;
+function buildState(config: InstallConfig, files: string[]): InstallState;
 
 type InstallFacts = {
   config: ConfigCheck;
   state: InstallState | null;
-  mark: { kind: "none" } | { kind: "in-progress"; ageMs: number } | { kind: "failed"; text: string | null };
-  skillsPresent: Record<Tool, boolean>;     // .claude/skills/kiro-*/SKILL.md・.agents/skills/kiro-*/SKILL.md が 1 つ以上
-  templatesPresent: boolean;                // .kiro/settings/templates がある
+  lock: { present: false } | { present: true; ageMs: number };
+  failure: { present: false } | { present: true; text: string | null };
+  missingFiles: string[];                   // state.files のうち今は無いもの（state が無ければ空）
   sectionPresent: Record<Tool, boolean>;    // CLAUDE.md・AGENTS.md に運用の区画の開始の目印の行がある
 };
 type Decision =
   | { action: "skip" }
-  | { action: "install"; reason: "config-changed" | "no-state" | "files-missing" | "section-missing" | "failed" | "stale" }
-  | { action: "busy" }
+  | { action: "install"; reason: "config-changed" | "no-state" | "files-missing" | "section-missing" | "failed" }
+  | { action: "busy"; stale: boolean }
   | { action: "fail"; reason: string };
 function decideInstall(facts: InstallFacts): Decision;
-const STALE_MARK_MS = 600_000;              // NPX_TIMEOUT_MS（540 秒）＋ 60 秒
+const INSTALL_DEADLINE_MS = 540_000;        // 2 回の npx を合わせた導入全体の期限（各回は残り時間で打ち切る）
+const STALE_LOCK_MS = 660_000;              // 導入全体の期限＋ 120 秒。UserPromptSubmit のフックの時間切れ（600 秒）より長い
 
 function removalTargets(entries: Record<Tool, string[]>): string[];
 // .claude/skills/kiro-*・.agents/skills/kiro-*（名前が kiro- で始まるものだけ）と .kiro/settings。仕様・方針・他のスキル・.codex/agents は含めない（3.3）
@@ -249,11 +252,14 @@ function messageReadSkillDirectly(tool: Tool, prompt: string): string;
 function messageBlocked(detail: string | null): string;  // 未完了の理由（無ければ「完了を確認できない」）と RETRY_COMMAND
 function messageUsage(): string;                         // 1.1・2.4・2.5 の利用手順
 const RETRY_COMMAND = "node .agent-hooks/cc-sdd-bootstrap/install-cc-sdd.mjs";
+const LOCK_PATH = ".cache/cc-sdd-install.lock";
 const FAILURE_RECORD = ".cache/cc-sdd-install.failed";
 const STATE_PATH = ".cache/cc-sdd-install.state.json";
 ```
 - 判断の順は上の状態図のとおり。内容の照合はしない（4.4）。
 - `state.format` は 2 にする（旧版の指紋つきの状態は読めない扱いになり、一度だけ入れ直す）。
+- `state.files` は、導入の後に `.claude/skills/kiro-*`・`.agents/skills/kiro-*`・`.kiro/settings` の下のファイルと CLAUDE.md・AGENTS.md の道筋を集めたもの。次回は存在だけを確かめる（4.1・4.2。中身は比べない 4.4）。
+- `readInstallConfig` の欠けた項目の扱いは installer-core と同じ（必須は `format` だけ。項目定義にある項目は値があれば `validate`、無ければ既定値）。
 
 ### 入出力と入口（`install-cc-sdd.mjs`）
 
@@ -262,12 +268,12 @@ const STATE_PATH = ".cache/cc-sdd-install.state.json";
 ##### Batch / Job Contract
 - **Trigger**: InstallCli、PromptHook（判断が `install` のとき）。
 - **手順**:
-  1. 印（`FAILURE_RECORD`）を排他的に作る（`wx`）。中身は「導入中」と再試行のコマンド。古い印・失敗の記録は消してから作る。作れなければ `busy`（5.5）。
+  1. 導入中の印（`LOCK_PATH`）を排他的に作る（`wx`。中身は作成時刻と再試行のコマンド）。作れなければ導入せず `busy`（5.5）。CLI だけは、印が古ければ消してから 1 回だけ作り直す。印を持つ実行だけが、以下の手順と失敗の記録・印の削除を行う。
   2. `removalTargets` を消す（シンボリックリンクの経路は拒否して失敗）。
-  3. Claude Code 向け → Codex 向けの順に `npx` を実行（各 540 秒で打ち切り、`stdio` はフックの出力を汚さないよう標準エラーへ）。
+  3. Claude Code 向け → Codex 向けの順に `npx` を実行する。2 回を合わせて `INSTALL_DEADLINE_MS` で打ち切る（各回の時間切れは残り時間）。`stdio` はフックの出力を汚さないよう標準エラーへ。
   4. `AGENT_SECTION_FILES` の 2 つを読み、CLAUDE.md・AGENTS.md の末尾に書き足す（`appendSection`。文書の末尾が改行で終わらなければ改行を足す）。ファイルが無い・書けないなら失敗（3.8・3.9）。
-  5. 状態を一時ファイルに書いて置き換え、印を消す（5.4）。
-- **失敗**: 途中の例外は、印に「失敗」と理由を書いて残す（5.1）。
+  5. 導入物の道筋を集めて状態を一時ファイルに書いて置き換え、失敗の記録を消す（5.4）。最後に導入中の印を消す。
+- **失敗**: 途中の例外は、失敗の記録に理由を書き、導入中の印を消す（5.1）。強制終了で印が残った場合は、次の入力で `busy`（中断）として止まり、CLI の再試行で回復する。
 - **冪等性**: 何度実行しても、揃った導入物＋区画 1 つの状態になる（cc-sdd が両文書を作り直すため、区画は重ならない）。
 
 #### InstallCli（引数なし、`--help`）
@@ -297,7 +303,7 @@ const STATE_PATH = ".cache/cc-sdd-install.state.json";
 
 #### カタログの項目（installer-core の `lib/catalog.mjs` に足す）
 - `files`: `install-cc-sdd.mjs`・`install-rules.mjs`（`config-schema.mjs` は installer-core の項目）。
-- `hooks`: 次の 4 つ（timeout は SessionStart 30 秒、UserPromptSubmit 600 秒）。UserPromptSubmit は kiro-gate の項目より前に並べる。
+- `hooks`: 次の 4 つ（timeout は SessionStart 30 秒、UserPromptSubmit 600 秒。導入全体の期限 540 秒より長い）。UserPromptSubmit は kiro-gate の項目より前に並べる。
   - `{ tools: ["claude"], event: "SessionStart", script: "install-cc-sdd.mjs", args: ["session-start", "--tool", "claude"] }`
   - `{ tools: ["codex"], event: "SessionStart", script: "install-cc-sdd.mjs", args: ["session-start", "--tool", "codex"] }`
   - `{ tools: ["claude"], event: "UserPromptSubmit", script: "install-cc-sdd.mjs", args: ["user-prompt-submit", "--tool", "claude"] }`
@@ -314,16 +320,16 @@ const STATE_PATH = ".cache/cc-sdd-install.state.json";
 | 状況 | CLI | PromptHook | StartHook |
 |---|---|---|---|
 | 設定が無い・読めない・不正 | 理由と直し方、終了 1 | 止める（理由と直し方） | 知らせる |
-| 別の導入が進行中 | 理由、終了 1 | 止める | 知らせる |
-| npx の失敗・時間切れ・通信できない | 印に理由、終了 1 | 印に理由、止める | — |
-| 区画のファイルが無い・文書に書けない | 印に理由、終了 1 | 印に理由、止める | — |
-| シンボリックリンクの経路 | 印に理由、終了 1 | 印に理由、止める | — |
-| 予期しない例外 | 印に理由、終了 1 | 止める（5.6） | 何もしない |
+| 導入中の印がある（進行中・中断） | 新しい印なら理由と終了 1、古い印なら消して導入 | 止める（進行中か中断かと再試行のコマンド） | 知らせる |
+| npx の失敗・時間切れ・通信できない | 失敗の記録に理由、終了 1 | 失敗の記録に理由、止める | — |
+| 区画のファイルが無い・文書に書けない | 失敗の記録に理由、終了 1 | 失敗の記録に理由、止める | — |
+| シンボリックリンクの経路 | 失敗の記録に理由、終了 1 | 失敗の記録に理由、止める | — |
+| 予期しない例外 | 失敗の記録に理由、終了 1 | 止める（5.6） | 何もしない |
 
 ## Testing Strategy
 
 - **単体（`install-rules`）**:
-  - `decideInstall`: 版・言語の一致と両ツールの手順書・雛形・区画が揃えば `skip`（4.1）。版の違い・状態なし・片方の手順書の欠け・区画なしでそれぞれ `install`（4.2）。失敗の記録で `install`（4.3）。新しい「導入中」で `busy`、古い印で `install`（5.5）。設定の誤りで `fail`（3.4）。
+  - `decideInstall`: 版・言語の一致、記録したファイルがすべてある、両文書に区画がある、で `skip`（4.1）。版の違い・状態なし・記録したファイルの 1 つの欠け・区画なしでそれぞれ `install`（4.2）。失敗の記録で `install`（4.3）。導入中の印で `busy`（新しい・古いの別を持つ）（5.5）。設定の誤りで `fail`（3.4）。
   - `removalTargets`: `kiro-` で始まらないスキル・`.kiro/specs`・`.kiro/steering`・`.codex/agents` を含まない（3.3）。
   - `buildManifest`: 両ツールで `doc_main` の出力先が `.`、Codex に `codex_agents` が無い（3.1・3.7）。
   - `messageReadSkillDirectly`: ツールごとの道筋、`/kiro-x`・`$kiro-x` の名指し（2.3・6.1）。
@@ -332,7 +338,9 @@ const STATE_PATH = ".cache/cc-sdd-install.state.json";
   - 既存の CLAUDE.md の利用者の記述が消え、`kiro-` で始まらない独自のスキル・`.kiro/specs` が残る（3.3・3.7）。
   - npx の失敗で印が残り、PromptHook が止め、再試行の成功で止まらなくなる（5.1・5.2・5.4）。
   - 区画のファイルが無いと失敗（3.9）。
-  - 2 つの PromptHook をほぼ同時に起動すると、片方だけが npx を呼び、もう片方は止める（5.5）。
+  - 2 つの PromptHook をほぼ同時に起動すると、片方だけが npx を呼び、もう片方は止める（5.5）。失敗の記録が残った状態から 2 つを同時に起動しても同じ（印の作成で 1 つに絞られる）。
+  - 強制終了で印が残ると PromptHook は止め、CLI の再試行は古い印を消して導入する（5.1・5.4）。
+  - 偽の npx を遅くして、2 回の合計が導入全体の期限で打ち切られ、失敗として止まる（2.2・5.2）。
   - PromptHook で例外（設定が JSON でない）が止める（5.6）。
 - **実機（PoC）**: `poc/req-feasibility/`（両ツールの最初の入力時の導入、Codex の停止）、`poc/first-kiro-command/`（起動前の導入で最初の `/kiro-steering`）。実装後に `poc/self-install/run.sh` を Codex 込みに更新し、このリポジトリで導入と停止を確かめる。
 
