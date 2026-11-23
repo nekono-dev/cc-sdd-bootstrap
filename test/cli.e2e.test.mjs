@@ -8,38 +8,145 @@ import { fileURLToPath } from "node:url";
 
 const packageRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const entry = path.join(packageRoot, "bin/cc-sdd-bootstrap.mjs");
+
 function temporary(t) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "cli-e2e-new-"));
-  fs.mkdirSync(path.join(root, ".git"));
+  const initialized = spawnSync("git", ["init", "--quiet"], { cwd: root, encoding: "utf8" });
+  assert.equal(initialized.status, 0, initialized.stderr);
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   return root;
 }
+
 function run(root, args) {
   return spawnSync(process.execPath, [entry, ...args], { cwd: root, encoding: "utf8" });
 }
 
-test("入口から init・変更なしの update・uninstall を実行できる", (t) => {
+function runOrSkip(t, root, args) {
+  const result = run(root, args);
+  if (result.error) {
+    t.skip(`子プロセスを起動できません: ${result.error.code}`);
+    return null;
+  }
+  return result;
+}
+
+function readJson(file) {
+  return JSON.parse(fs.readFileSync(file, "utf8"));
+}
+
+test("一時の git リポジトリで init・利用者設定を保つ update・uninstall を通して実行できる", (t) => {
   const root = temporary(t);
-  const initialized = run(root, ["init"]);
-  if (initialized.error) { t.skip(`子プロセスを起動できません: ${initialized.error.code}`); return; }
+  const initialized = runOrSkip(t, root, ["init"]);
+  if (!initialized) return;
   assert.equal(initialized.status, 0, initialized.stderr);
-  assert.ok(fs.existsSync(path.join(root, ".cc-sdd-bootstrap.json")));
-  assert.ok(fs.existsSync(path.join(root, ".claude/settings.json")));
-  assert.ok(fs.existsSync(path.join(root, ".codex/hooks.json")));
-  const updated = run(root, ["update"]);
-  if (updated.error) { t.skip(`子プロセスを起動できません: ${updated.error.code}`); return; }
+
+  const config = path.join(root, ".cc-sdd-bootstrap.json");
+  const claudeSettings = path.join(root, ".claude/settings.json");
+  const codexHooks = path.join(root, ".codex/hooks.json");
+  const ignore = path.join(root, ".gitignore");
+  const deploy = path.join(root, ".agent-hooks/cc-sdd-bootstrap");
+  for (const file of [config, claudeSettings, codexHooks, ignore,
+    path.join(deploy, "install-cc-sdd.mjs"), path.join(deploy, "install-rules.mjs"),
+    path.join(deploy, "config-schema.mjs"), path.join(deploy, "install-gate.mjs"),
+    path.join(deploy, "agent-section-claude.md"), path.join(deploy, "agent-section-codex.md")]) {
+    assert.ok(fs.existsSync(file), `${path.relative(root, file)} がありません`);
+  }
+
+  const claude = readJson(claudeSettings);
+  claude.hooks.UserPromptSubmit.push({ hooks: [{ type: "command", command: "利用者の同じ組のフック" }] });
+  claude.hooks.UserPromptSubmit.push({ matcher: "利用者の組", hooks: [{ type: "command", command: "利用者の別の組" }] });
+  claude.userSetting = "保持する値";
+  fs.writeFileSync(claudeSettings, `${JSON.stringify(claude, null, 2)}\n`);
+
+  const codex = readJson(codexHooks);
+  // Codex 向けの登録が 0 件のとき、init は hooks の鍵の無い設定を作る（利用者が足す前提で形を用意する）
+  codex.hooks ??= {};
+  codex.hooks.SessionStart ??= [];
+  codex.hooks.SessionStart.push({ hooks: [{ type: "command", command: "利用者の同じ組のフック" }] });
+  codex.hooks.SessionStart.push({ matcher: "利用者の組", hooks: [{ type: "command", command: "利用者の別の組" }] });
+  codex.userSetting = "保持する値";
+  fs.writeFileSync(codexHooks, `${JSON.stringify(codex, null, 2)}\n`);
+
+  const userIgnoreLine = "# 利用者の除外設定";
+  fs.appendFileSync(ignore, `${userIgnoreLine}\n`);
+  const updated = runOrSkip(t, root, ["update"]);
+  if (!updated) return;
   assert.equal(updated.status, 0, updated.stderr);
-  assert.match(updated.stdout, /変更はありません/);
-  const removed = run(root, ["uninstall"]);
-  if (removed.error) { t.skip(`子プロセスを起動できません: ${removed.error.code}`); return; }
+  for (const [file, event] of [[claudeSettings, "UserPromptSubmit"], [codexHooks, "SessionStart"]]) {
+    const hooks = readJson(file);
+    assert.equal(hooks.userSetting, "保持する値");
+    assert.ok(hooks.hooks[event].some((group) => group.hooks?.some((hook) => hook.command === "利用者の同じ組のフック")));
+    assert.ok(hooks.hooks[event].some((group) => group.matcher === "利用者の組"));
+  }
+  assert.match(fs.readFileSync(ignore, "utf8"), /^# 利用者の除外設定$/m);
+  const repeated = runOrSkip(t, root, ["update"]);
+  if (!repeated) return;
+  assert.equal(repeated.status, 0, repeated.stderr);
+  assert.match(repeated.stdout, /変更はありません/);
+
+  const claudeDoc = "# 標準の Claude 文書\n\n標準部分を残す。\n";
+  const agentsDoc = "# 標準の Codex 文書\n\n標準部分を残す。\n";
+  const claudeSection = fs.readFileSync(path.join(deploy, "agent-section-claude.md"), "utf8");
+  const codexSection = fs.readFileSync(path.join(deploy, "agent-section-codex.md"), "utf8");
+  fs.writeFileSync(path.join(root, "CLAUDE.md"), `${claudeDoc}\n${claudeSection}`);
+  fs.writeFileSync(path.join(root, "AGENTS.md"), `${agentsDoc}\n${codexSection}`);
+
+  const removed = runOrSkip(t, root, ["uninstall"]);
+  if (!removed) return;
   assert.equal(removed.status, 0, removed.stderr);
-  assert.ok(fs.existsSync(path.join(root, ".cc-sdd-bootstrap.json")));
+  for (const [file, event] of [[claudeSettings, "UserPromptSubmit"], [codexHooks, "SessionStart"]]) {
+    const hooks = readJson(file);
+    assert.equal(hooks.userSetting, "保持する値");
+    assert.ok(hooks.hooks[event].some((group) => group.hooks?.some((hook) => hook.command === "利用者の同じ組のフック")));
+    assert.ok(hooks.hooks[event].some((group) => group.matcher === "利用者の組"));
+    assert.ok(!JSON.stringify(hooks).includes(".agent-hooks/cc-sdd-bootstrap/"));
+  }
+  for (const [file, standard, markers] of [
+    [path.join(root, "CLAUDE.md"), claudeDoc, "cc-sdd-bootstrap:"],
+    [path.join(root, "AGENTS.md"), agentsDoc, "cc-sdd-bootstrap:"],
+  ]) {
+    const content = fs.readFileSync(file, "utf8");
+    assert.ok(content.includes(standard));
+    assert.ok(!content.includes(markers));
+  }
+  assert.ok(fs.existsSync(config));
+  assert.ok(fs.existsSync(path.join(deploy, "install-cc-sdd.mjs")));
+  assert.ok(fs.existsSync(ignore));
+  assert.match(fs.readFileSync(ignore, "utf8"), /^# 利用者の除外設定$/m);
+});
+
+test("git の最上位でない場所では何も変更しない", (t) => {
+  const root = temporary(t);
+  const nested = path.join(root, "subdir");
+  fs.mkdirSync(nested);
+  const before = fs.readdirSync(root).sort();
+  const result = runOrSkip(t, nested, ["init"]);
+  if (!result) return;
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /git リポジトリの最上位/);
+  assert.deepEqual(fs.readdirSync(root).sort(), before);
+  assert.deepEqual(fs.readdirSync(nested), []);
+});
+
+test("シンボリックリンクを通る変更先では何も変更しない", (t) => {
+  const root = temporary(t);
+  const outside = fs.mkdtempSync(path.join(os.tmpdir(), "cli-e2e-outside-"));
+  t.after(() => fs.rmSync(outside, { recursive: true, force: true }));
+  fs.symlinkSync(outside, path.join(root, ".claude"), "dir");
+  const before = fs.readdirSync(root).sort();
+  const result = runOrSkip(t, root, ["init"]);
+  if (!result) return;
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /\.claude\/settings\.json/);
+  assert.match(result.stderr, /シンボリックリンク/);
+  assert.deepEqual(fs.readdirSync(root).sort(), before);
+  assert.deepEqual(fs.readdirSync(outside), []);
 });
 
 test("未対応の指定は変更せず、問題と使い方を表示して失敗する", (t) => {
   const root = temporary(t);
-  const result = run(root, ["init", "--force"]);
-  if (result.error) { t.skip(`子プロセスを起動できません: ${result.error.code}`); return; }
+  const result = runOrSkip(t, root, ["init", "--force"]);
+  if (!result) return;
   assert.equal(result.status, 1);
   assert.match(result.stderr, /--force/);
   assert.match(result.stderr, /使い方/);
