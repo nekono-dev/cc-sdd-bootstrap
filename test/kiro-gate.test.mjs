@@ -93,6 +93,33 @@ test("壊れた JSON は出力せず日本語の理由を標準エラーに出�
   assert.match(result.stderr, /入力|JSON/);
 });
 
+test("判定できない PreToolUse 入力は出力せず日本語の理由を出す", (t) => {
+  const f = fixture(t);
+  hook(f, "session-start", "claude", { session_id: "invalid-call" });
+  skill(f.root, "claude", "kiro-new");
+  hook(f, "user-prompt-submit", "claude", { session_id: "invalid-call", prompt: "/kiro-new" });
+  for (const call of [
+    { tool_name: "", tool_input: {} },
+    { tool_name: "Bash", tool_input: null },
+  ]) {
+    const result = hook(f, "pre-tool-use", "claude", { session_id: "invalid-call", ...call });
+    assert.equal(result.status, 0);
+    assert.equal(result.stdout, "");
+    assert.match(result.stderr, /日本語|判定|ツール/);
+  }
+});
+
+test("不正な turn 状態の終了は止めずに出力なしで理由を出す", (t) => {
+  const f = fixture(t);
+  hook(f, "session-start", "claude", { session_id: "invalid-state" });
+  const statePath = stateFile(f, f.root, "invalid-state");
+  writeFileSync(statePath, JSON.stringify({ listed: [], turn: {} }));
+  const result = hook(f, "stop", "claude", { session_id: "invalid-state", stop_hook_active: false });
+  assert.equal(result.status, 0);
+  assert.equal(result.stdout, "");
+  assert.match(result.stderr, /状態/);
+});
+
 test("状態の保存に失敗したときも日本語の理由を出して通す", (t) => {
   if (typeof process.getuid === "function" && process.getuid() === 0) {
     t.skip("root では読み取り専用の権限を再現できません");
@@ -139,4 +166,58 @@ test("同じ一時領域でも別セッションと別の根の状態を混ぜ�
   assert.deepEqual(otherSessionState, { listed: [], turn: { skill: "kiro-first", skillPath: ".claude/skills/kiro-first/SKILL.md", read: false, stopBlocked: false } });
   assert.equal(JSON.parse(readFileSync(firstState)).turn.skill, "kiro-first");
   assert.equal(JSON.parse(readFileSync(secondState)).turn.skill, "kiro-second");
+});
+
+test("Claude Code は手順書を読むまで拒否し、読んだ後は通す", (t) => {
+  const f = fixture(t);
+  hook(f, "session-start", "claude", { session_id: "flow" });
+  const file = skill(f.root, "claude", "kiro-new", "\n\n# 最初の見出し\n手順\n");
+  const prompt = hook(f, "user-prompt-submit", "claude", { session_id: "flow", prompt: "/kiro-new" });
+  assert.notEqual(prompt.stdout, "");
+  const denied = hook(f, "pre-tool-use", "claude", { session_id: "flow", tool_name: "Bash", tool_input: { command: "echo hello" } });
+  assert.deepEqual(JSON.parse(denied.stdout), { hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "deny", permissionDecisionReason: "先に手順書 .claude/skills/kiro-new/SKILL.md を読んでから、作業を進めてください。" } });
+  const read = hook(f, "post-tool-use", "claude", { session_id: "flow", tool_name: "Read", tool_input: { file_path: file }, tool_response: "# 最初の見出し\n手順\n" });
+  assert.equal(read.stdout, "");
+  const allowed = hook(f, "pre-tool-use", "claude", { session_id: "flow", tool_name: "Bash", tool_input: { command: "echo hello" } });
+  assert.equal(allowed.stdout, "");
+  assert.equal(JSON.parse(readFileSync(stateFile(f, f.root, "flow"))).turn.read, true);
+});
+
+test("Codex は手順書の cat の成功後に Bash を通す", (t) => {
+  const f = fixture(t);
+  const file = skill(f.root, "codex", "kiro-new", "\n# Codex の手順\n");
+  hook(f, "session-start", "codex", { session_id: "codex-flow" });
+  hook(f, "user-prompt-submit", "codex", { session_id: "codex-flow", prompt: "/kiro-new" });
+  const read = hook(f, "post-tool-use", "codex", { session_id: "codex-flow", cwd: f.root, tool_name: "Bash", tool_input: { command: `cat ${file}` }, tool_response: "# Codex の手順\n" });
+  assert.equal(read.stdout, "");
+  const allowed = hook(f, "pre-tool-use", "codex", { session_id: "codex-flow", cwd: f.root, tool_name: "Bash", tool_input: { command: "echo hello" } });
+  assert.equal(allowed.stdout, "");
+  assert.equal(JSON.parse(readFileSync(stateFile(f, f.root, "codex-flow"))).turn.read, true);
+});
+
+test("未読の終了は一度止め、二度目は通して turn だけ消す", (t) => {
+  const f = fixture(t);
+  skill(f.root, "claude", "kiro-old");
+  hook(f, "session-start", "claude", { session_id: "stop-flow" });
+  assert.deepEqual(JSON.parse(readFileSync(stateFile(f, f.root, "stop-flow"))), { listed: ["kiro-old"], turn: null });
+  skill(f.root, "claude", "kiro-new");
+  hook(f, "user-prompt-submit", "claude", { session_id: "stop-flow", prompt: "/kiro-new" });
+  assert.equal(JSON.parse(readFileSync(stateFile(f, f.root, "stop-flow"))).turn.read, false);
+  const first = hook(f, "stop", "claude", { session_id: "stop-flow", stop_hook_active: false });
+  assert.deepEqual(JSON.parse(first.stdout), { decision: "block", reason: "手順書 .claude/skills/kiro-new/SKILL.md を先に読んでから、作業を続けてください。" });
+  assert.equal(JSON.parse(readFileSync(stateFile(f, f.root, "stop-flow"))).turn.stopBlocked, true);
+  const second = hook(f, "stop", "claude", { session_id: "stop-flow", stop_hook_active: false });
+  assert.equal(second.stdout, "");
+  assert.deepEqual(JSON.parse(readFileSync(stateFile(f, f.root, "stop-flow"))), { listed: ["kiro-old"], turn: null });
+});
+
+test("未読でも stop_hook_active が真なら通して turn を消す", (t) => {
+  const f = fixture(t);
+  hook(f, "session-start", "claude", { session_id: "active-stop" });
+  skill(f.root, "claude", "kiro-new");
+  hook(f, "user-prompt-submit", "claude", { session_id: "active-stop", prompt: "/kiro-new" });
+  assert.equal(JSON.parse(readFileSync(stateFile(f, f.root, "active-stop"))).turn.read, false);
+  const result = hook(f, "stop", "claude", { session_id: "active-stop", stop_hook_active: true });
+  assert.equal(result.stdout, "");
+  assert.deepEqual(JSON.parse(readFileSync(stateFile(f, f.root, "active-stop"))), { listed: [], turn: null });
 });

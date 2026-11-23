@@ -3,7 +3,7 @@ import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { detectCommand, isExpandedInvocation, messageAdditionalContext, skillPath } from "./kiro-gate-rules.mjs";
+import { decidePreToolUse, decideStop, detectCommand, isExpandedInvocation, isSkillRead, messageAdditionalContext, skillPath } from "./kiro-gate-rules.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 
@@ -40,7 +40,12 @@ function stateFile(sessionId) {
 async function loadState(file) {
   try {
     const value = JSON.parse(await fs.readFile(file, "utf8"));
-    if (!Array.isArray(value.listed) || !(value.turn === null || (value.turn && typeof value.turn === "object"))) {
+    const turn = value.turn;
+    const validTurn = turn === null || (turn && typeof turn === "object" && !Array.isArray(turn)
+      && typeof turn.skill === "string" && turn.skill.length > 0
+      && typeof turn.skillPath === "string" && turn.skillPath.length > 0
+      && typeof turn.read === "boolean" && typeof turn.stopBlocked === "boolean");
+    if (!Array.isArray(value.listed) || !value.listed.every((name) => typeof name === "string") || !validTurn) {
       throw new Error("状態の形が正しくありません。");
     }
     return value;
@@ -81,7 +86,6 @@ async function listedSkills(tool) {
 
 async function run() {
   const { event, tool } = argumentsOf(process.argv.slice(2));
-  if (["pre-tool-use", "post-tool-use", "stop"].includes(event)) return;
   const input = await readInput();
   const file = stateFile(input.session_id);
   const state = await loadState(file);
@@ -89,6 +93,52 @@ async function run() {
   if (event === "session-start") {
     if (!(tool === "claude" && input.source === "compact")) {
       state.listed = await listedSkills(tool);
+      await saveState(file, state);
+    }
+    return;
+  }
+
+  if (["pre-tool-use", "post-tool-use"].includes(event)
+    && (typeof input.tool_name !== "string" || !input.tool_name.trim())) {
+    throw new Error("ツール名を判定できません。");
+  }
+  if (["pre-tool-use", "post-tool-use"].includes(event)
+    && (!input.tool_input || typeof input.tool_input !== "object" || Array.isArray(input.tool_input))) {
+    throw new Error("ツールへの入力を判定できません。");
+  }
+  if (event === "stop" && typeof input.stop_hook_active !== "boolean") {
+    throw new Error("終了フックの状態を判定できません。");
+  }
+  const cwd = tool === "codex" && typeof input.cwd === "string" ? input.cwd : root;
+  if (event === "pre-tool-use") {
+    const decision = decidePreToolUse(state.turn, { toolName: input.tool_name, toolInput: input.tool_input }, root, cwd);
+    if (!decision.allow) {
+      process.stdout.write(`${JSON.stringify({ hookSpecificOutput: {
+        hookEventName: "PreToolUse", permissionDecision: "deny", permissionDecisionReason: decision.reason,
+      } })}\n`);
+    }
+    return;
+  }
+  if (event === "post-tool-use") {
+    if (!state.turn) return;
+    const contents = await fs.readFile(path.join(root, state.turn.skillPath), "utf8");
+    const firstLine = contents.split(/\r?\n/).find((line) => line.trim() !== "");
+    if (firstLine && isSkillRead(state.turn, {
+      toolName: input.tool_name, toolInput: input.tool_input, toolResponse: input.tool_response,
+    }, firstLine, root, cwd)) {
+      state.turn.read = true;
+      await saveState(file, state);
+    }
+    return;
+  }
+  if (event === "stop") {
+    const decision = decideStop(state.turn, input.stop_hook_active === true);
+    if (decision.block) {
+      state.turn.stopBlocked = true;
+      await saveState(file, state);
+      process.stdout.write(`${JSON.stringify({ decision: "block", reason: decision.reason })}\n`);
+    } else if (state.turn !== null) {
+      state.turn = null;
       await saveState(file, state);
     }
     return;
