@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { detectCommand, skillPath, isExpandedInvocation, decidePreToolUse, isReadCommand, isSkillRead, messageDeny } from "../.agent-hooks/cc-sdd-bootstrap/kiro-gate-rules.mjs";
+import { detectCommand, skillPath, isExpandedInvocation, decidePreToolUse, isReadCommand, isSkillRead, messageDeny, decideStop, messageAdditionalContext, messageStop } from "../.agent-hooks/cc-sdd-bootstrap/kiro-gate-rules.mjs";
 import path from "node:path";
 
 test("先頭の kiro コマンドと記号を取り出す", () => {
@@ -93,4 +93,22 @@ test("対象の読み取り応答に最初の行がある場合だけ読み取�
   const claudeState = { ...state, skillPath: ".claude/skills/kiro-x/SKILL.md" };
   const claude = { toolName: "Read", toolInput: { file_path: `${root}/.claude/skills/kiro-x/SKILL.md` }, toolResponse: { content: firstLine } };
   assert.equal(isSkillRead(claudeState, claude, firstLine, root), true);
+});
+
+test("未読の終了は一度だけ止め、それ以外は通す", () => {
+  const state = { skill: "kiro-x", skillPath: ".claude/skills/kiro-x/SKILL.md", read: false, stopBlocked: false };
+  assert.deepEqual(decideStop(state, false), { block: true, reason: messageStop(state) });
+  assert.deepEqual(decideStop({ ...state, stopBlocked: true }, false), { block: false });
+  assert.deepEqual(decideStop(state, true), { block: false });
+  assert.deepEqual(decideStop({ ...state, read: true }, false), { block: false });
+  assert.deepEqual(decideStop(null, false), { block: false });
+});
+
+test("追加の指示と終了を止める理由に手順書の場所と先に読む指示を含める", () => {
+  const state = { skill: "kiro-x", skillPath: ".claude/skills/kiro-x/SKILL.md", read: false, stopBlocked: false };
+  for (const message of [messageAdditionalContext(state), messageStop(state)]) {
+    assert.match(message, /\.claude\/skills\/kiro-x\/SKILL\.md/);
+    assert.match(message, /先に/);
+    assert.match(message, /読/);
+  }
 });

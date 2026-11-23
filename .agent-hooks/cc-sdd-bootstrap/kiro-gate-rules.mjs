@@ -65,3 +65,16 @@ export function isSkillRead(state, call, firstLine, root, cwd = root) {
 export function messageDeny(state) {
   return `先に手順書 ${state.skillPath} を読んでから、作業を進めてください。`;
 }
+
+export function decideStop(state, stopHookActive) {
+  if (!state || state.read || state.stopBlocked || stopHookActive) return { block: false };
+  return { block: true, reason: messageStop(state) };
+}
+
+export function messageAdditionalContext(state) {
+  return `作業の前に手順書 ${state.skillPath} を先に読み、その手順に従って作業を進めてください。`;
+}
+
+export function messageStop(state) {
+  return `手順書 ${state.skillPath} を先に読んでから、作業を続けてください。`;
+}
