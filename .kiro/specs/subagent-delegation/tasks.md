@@ -47,7 +47,7 @@
   - _Requirements: 2.3, 4.2, 4.4, 4.5_
 
 - [ ] 3. 入口と早い実機の確認
-- [ ] 3.1 (P) 子の起動を確かめるフックを作る
+- [x] 3.1 (P) 子の起動を確かめるフックを作る
   - Claude Code の子の起動と、Codex の子の起動（ツール名に spawn_agent を含むもの）だけを見る
   - 子のモデルを、操作の入力のモデル → 役割の名前で指した定義ファイルのモデル → 無ければ未指定、の順に求める。子の推論量を、Codex は定義の推論量 → 入力の推論量、Claude Code は定義の推論量から求め、無ければ不明とする。上限は子のモデル（入力で上書きされていれば上書き後）の系統で求める。指揮役のモデルは、Codex は入力のモデル、Claude Code は会話の記録の最後の応答から読み、読めなければ不明とする
   - 設定が読めない・役割表に誤りがあるときは起動を拒否して直し方を示す。設定ファイルが無い・役割表が無いときは既定の設定で判定する。拒否のときだけ拒否の出力を返し、許可の出力は出さない。予期しない誤りは標準エラーに出して通す
@@ -148,3 +148,4 @@
 - 2.2: `decideSpawn({vendor, childModel, childEffort, orchestratorModel}, cfg)` の `vendor` は指揮役のツール（未指定の文言の `--from` に使う）。フック（3.1）はここに指揮役のツールを渡す。拒否の理由は 7 種ごとに固有の文言と、共通の案内の 4 条件を持つ。設定が壊れているときは `messageConfigBroken(problems)`。
 - 2.3: `renderDefinitions(cfg)` → `{files, notices}`。Claude Code の定義は `roles.claude` だけから作り、説明文は同じ提供元の `defaultModelFor` の逆引き（予備のレビューは Sonnet→haiku・Opus→sonnet・Fable→opus）。model は YAML の二重引用。本文は `instructionFor(role, permission)` で権限を反映。Claude Code が受け付ける推論量はファイル内の `CLAUDE_EFFORTS` で判定している（2.4 で作る受け付けの判定と統一する）。
 - 2.4: `buildCliCommand(target, {permission, effort}, modelName, root)` の effort は解決済みの値を渡す。`effortSupported(vendor, effort, levels)` は Codex で一覧（配列）があればその内容だけで判定する。2.3 の `CLAUDE_EFFORTS` は `effortSupported` に統一済み。
+- 3.1: 設定は ENOENT だけ既定で判定し、ほかの読み取りの失敗は起動を拒否する。会話の記録が読めなければ指揮役を不明として続ける。定義の名前は `^[A-Za-z0-9_][A-Za-z0-9_.-]*$` だけ受け付ける。TOML は最上位の `model`・`model_reasoning_effort`（引用符付きのキーも）だけを読む。役割定義のファイルの EACCES などは標準エラーに出して通す。
