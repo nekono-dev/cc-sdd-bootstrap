@@ -175,6 +175,180 @@ export function compareTier(child, orchestrator, tiers) {
   return tiers[c] > tiers[o] ? "higher" : "ok";
 }
 
+const otherVendor = (v) => (v === "claude" ? "codex" : "claude");
+
+/**
+ * 役割ごとの既定のモデル（系統）を決める。
+ * 目標の格: 実装 = 指揮役 −1、レビュー・デバッグ = 指揮役、調査 = max(指揮役 −2, 1)。
+ * 上限 = min(目標, 委任先の子の上限の格, 3)。委任先の系統のうち上限以下で最も上の格（同じ格は名前の順で最初）。
+ * 委任先が指揮役と同じ提供元なら指揮役の系統（分からなければ指揮役の格の系統）を候補から外す。
+ * @param {Role} role
+ * @param {Vendor} target 委任先の提供元
+ * @param {{ vendor: Vendor, tier: number, family: string | null }} orchestrator
+ * @param {SubagentsConfig} cfg
+ * @returns {{ kind: "family", family: string } | { kind: "self" } | { kind: "none", reason: string }}
+ */
+export function defaultModelFor(role, target, orchestrator, cfg) {
+  const tiers = mergedTiers(cfg);
+  const T = orchestrator.tier;
+  const sameVendor = target === orchestrator.vendor;
+  const goal = role === "implement" ? T - 1 : role === "investigate" ? Math.max(T - 2, 1) : T;
+  if (goal < 1) return { kind: "self" };
+  const cap = Math.min(goal, childMaxTier(target, cfg), CHILD_MAX_TIER);
+  const candidates = Object.keys(tiers)
+    .filter((f) => vendorOfFamily(f) === target && tiers[f] <= cap)
+    .filter((f) => {
+      if (!sameVendor) return true;
+      return orchestrator.family !== null ? f !== orchestrator.family : tiers[f] !== T;
+    })
+    .sort((a, b) => tiers[b] - tiers[a] || (a < b ? -1 : a > b ? 1 : 0));
+  if (candidates.length > 0) return { kind: "family", family: candidates[0] };
+  if (sameVendor) return { kind: "self" };
+  return {
+    kind: "none",
+    reason: `${target} に、格 ${cap} 以下で使える系統がありません（子の上限か格の設定を見直してください）`,
+  };
+}
+
+/**
+ * 子のモデルが確定したあとの実際の推論量と知らせ。明示が無ければ子の系統の既定、
+ * 明示は子の系統の上限まで下げて知らせる（元の設定の値は変えない）。
+ * @param {Effort | undefined} explicit 役割設定の明示の推論量
+ * @param {string | null | undefined} childModel 確定した子のモデルの名前
+ * @param {SubagentsConfig} cfg
+ * @returns {{ effort: Effort, notices: string[] }}
+ */
+export function resolveEffort(explicit, childModel, cfg) {
+  const tiers = mergedTiers(cfg);
+  const family = typeof childModel === "string" ? familyOf(childModel, tiers) : null;
+  const cap = effortCapFor(family, cfg);
+  if (explicit === undefined) {
+    if (family !== null) return { effort: defaultEffortFor(family, cfg), notices: [] };
+    return { effort: effortAbove("medium", cap) ? cap : "medium", notices: [] };
+  }
+  if (effortAbove(explicit, cap)) {
+    const label = family ?? "共通";
+    return {
+      effort: cap,
+      notices: [`推論量 ${explicit} は ${label} の上限（${cap}）より上なので ${cap} に下げました`],
+    };
+  }
+  return { effort: explicit, notices: [] };
+}
+
+/**
+ * 役割定義の名前。Claude Code は `cc-sdd-<役割>-<系統>`、Codex は `cc_sdd_<役割>`。
+ * @param {Vendor} vendor
+ * @param {Role} role
+ * @param {string} family
+ * @returns {string}
+ */
+export function definitionNameFor(vendor, role, family) {
+  return vendor === "claude" ? `cc-sdd-${role}-${family}` : `cc_sdd_${role}`;
+}
+
+/**
+ * 役割を解決する（委任先・モデル・推論量・権限）。
+ * 役割設定の明示値を優先し、無い項目は既定の分担と既定のモデルの決め方で補う。
+ * opts.to で委任先を指揮役と同じ（same）・別（other）に切り替えられる。
+ * 同じ提供元への切り替えで、明示のモデルが切り替え先の提供元に属さないときは、その明示を使わず知らせる。
+ * @param {SubagentsConfig} cfg
+ * @param {Vendor} from 指揮役の提供元
+ * @param {Role} role
+ * @param {string | null} orchestratorModel 指揮役のモデル（分からなければ null で格 2 とみなす）
+ * @param {{ to?: "same" | "other" }} [opts]
+ * @returns {{ ok: true, target: Vendor, setting: RoleSetting, selfImplement: boolean, effort: Effort,
+ *   definitionName: string | null, notices: string[] } | { ok: false, reason: string }}
+ */
+export function resolveRole(cfg, from, role, orchestratorModel, opts = {}) {
+  const tiers = mergedTiers(cfg);
+  const notices = [];
+  const explicit = cfg?.roles?.[from]?.[role] ?? {};
+  const setting = { ...DEFAULT_ROLES[from][role], ...explicit };
+  const switched = opts?.to === "same" || opts?.to === "other";
+  if (switched) setting.provider = opts.to;
+  const target = setting.provider === "same" ? from : otherVendor(from);
+  const configuredTarget = (explicit.provider ?? DEFAULT_ROLES[from][role].provider) === "same" ? from : otherVendor(from);
+
+  // 同じ提供元への切り替え（to: same）で、明示のモデルが切り替え先に属さなければ使わず知らせる。
+  // 別の提供元への切り替え（to: other）で委任先が変わり明示のモデルと食い違うときは、置き換えず理由を返す
+  let model = setting.model;
+  if (model !== undefined && switched) {
+    const f = familyOf(model, tiers);
+    const v = f === null ? null : vendorOfFamily(f);
+    if (v !== null && v !== target) {
+      if (opts.to === "same") {
+        notices.push(`役割設定のモデル ${model} は ${target} のものではないので使わず、既定の決め方で選びました`);
+        model = undefined;
+      } else if (target !== configuredTarget) {
+        return {
+          ok: false,
+          reason: `役割設定のモデル ${model} は ${target} のものではありません（--to other では置き換えません。役割設定のモデルか provider を見直してください）`,
+        };
+      }
+    }
+  }
+
+  let selfImplement = false;
+  if (model === undefined) {
+    const fam = typeof orchestratorModel === "string" ? familyOf(orchestratorModel, tiers) : null;
+    const orchestrator = { vendor: from, tier: fam !== null ? tiers[fam] : 2, family: fam };
+    const d = defaultModelFor(role, target, orchestrator, cfg);
+    if (d.kind === "none") return { ok: false, reason: d.reason };
+    if (d.kind === "self") selfImplement = true;
+    else model = d.family;
+  }
+  delete setting.model;
+  if (model !== undefined) setting.model = model;
+
+  const e = resolveEffort(explicit.effort, model, cfg);
+  notices.push(...e.notices);
+  const family = model !== undefined ? familyOf(model, tiers) : null;
+  let definitionName = null;
+  if (target === "claude" && family !== null) {
+    // 定義は Claude の系統で、子に使える格（上限以下）のものだけが作られる
+    const generated = vendorOfFamily(family) === "claude" && tiers[family] <= Math.min(childMaxTier("claude", cfg), CHILD_MAX_TIER);
+    if (generated) definitionName = definitionNameFor("claude", role, family);
+    else notices.push(`${family} の定義は作られないので、組み込みの子の定義は使えません`);
+  } else if (target === "codex" && setting.permission === "write") {
+    definitionName = definitionNameFor("codex", role, family ?? "");
+  }
+  return { ok: true, target, setting, selfImplement, effort: e.effort, definitionName, notices };
+}
+
+/**
+ * @typedef {{ slug: string, visibility: string, priority: number, levels: string[] }[]} ModelCatalog
+ */
+
+/**
+ * 起動に使うモデルの名前を求める。
+ * 完全な名前（系統の語そのものでない）はそのまま → modelIds → Claude Code は別名（系統の語）
+ * → Codex は一覧（visibility が list で slug が "-<系統>" で終わるうち priority が最小）。
+ * @param {string} model
+ * @param {Vendor} vendor
+ * @param {SubagentsConfig} cfg
+ * @param {ModelCatalog | null} catalog
+ * @returns {{ ok: true, name: string } | { ok: false, reason: string }}
+ */
+export function resolveModelName(model, vendor, cfg, catalog) {
+  const tiers = mergedTiers(cfg);
+  const family = familyOf(model, tiers);
+  if (family === null || model.toLowerCase() !== family) return { ok: true, name: model };
+  const ids = cfg?.modelIds;
+  if (isObject(ids) && isName(ids[family])) return { ok: true, name: ids[family] };
+  if (vendor === "claude") return { ok: true, name: family };
+  const hits = (Array.isArray(catalog) ? catalog : [])
+    .filter((m) => m.visibility === "list" && typeof m.slug === "string" && m.slug.endsWith(`-${family}`))
+    .sort((a, b) => a.priority - b.priority);
+  if (hits.length === 0) {
+    return {
+      ok: false,
+      reason: `${family} の最新のモデル名を Codex のモデルの一覧から求められません（modelIds.${family} で名前を指定してください）`,
+    };
+  }
+  return { ok: true, name: hits[0].slug };
+}
+
 /**
  * subagents の値を検証する。誤りは問題の項目の道筋つきで返す。
  * @param {unknown} value
