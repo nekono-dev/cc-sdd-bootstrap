@@ -15,10 +15,8 @@ if (!verdict.supported) {
   const { runCli } = await import("../lib/cli.mjs");
   const code = await runCli(process.argv.slice(2), {
     cwd: process.cwd(),
-    stdin: process.stdin,
     stdout: process.stdout,
     stderr: process.stderr,
-    interactive: Boolean(process.stdin.isTTY && process.stdout.isTTY),
     // 空白や日本語を含む道筋でも正しく求めるため、URL の pathname ではなく fileURLToPath を使う
     packageRoot: fileURLToPath(new URL("..", import.meta.url)),
   });

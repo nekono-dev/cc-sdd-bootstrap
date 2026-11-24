@@ -1,20 +1,26 @@
-import { readInstallConfig, parseState, buildState, isFingerprintTarget, FAILURE_RECORD, STATE_PATH, RETRY_COMMAND, NPX_TIMEOUT_MS, decideInstall, removalTargets, buildManifest, npxArgs, RECORD_IN_PROGRESS, messageInstalled, messageSkipped, messageGuide, failureRecordText, messageFailed } from "../.agent-hooks/cc-sdd-bootstrap/install-rules.mjs";
+import { readInstallConfig, parseState, buildState, FAILURE_RECORD, STATE_PATH, LOCK_PATH, RETRY_COMMAND, NPX_TIMEOUT_MS, STALE_LOCK_MS, decideInstall, removalTargets, buildManifest, npxArgs, messageInstalled, messageSkipped, messageReadSkillDirectly, messageBlocked, messageUsage } from "../.agent-hooks/cc-sdd-bootstrap/install-rules.mjs";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
 const base = { format: 1, ccSdd: { version: "3.1.0", lang: "ja" } };
 const ok = (obj) => readInstallConfig(JSON.stringify(obj));
 
-test("有効な設定を読み、keepTemplates が無ければ false にする", () => {
+test("有効な設定を読み、版・言語だけを返す（雛形の保持の項目は扱わない）", () => {
   const r = ok(base);
   assert.equal(r.ok, true);
-  assert.deepEqual(r.config, { version: "3.1.0", lang: "ja", keepTemplates: false });
+  assert.deepEqual(r.config, { version: "3.1.0", lang: "ja" });
 });
 
-test("keepTemplates が true の設定を読む", () => {
-  const r = ok({ ...base, ccSdd: { ...base.ccSdd, keepTemplates: true } });
+test("ccSdd の項目が無いときは既定値で補う", () => {
+  const r = ok({ format: 1 });
   assert.equal(r.ok, true);
-  assert.equal(r.config.keepTemplates, true);
+  assert.deepEqual(r.config, { version: "3.1.0", lang: "ja" });
+});
+
+test("format 1 の設定は読める（format 以外は必須ではない）", () => {
+  const r = ok({ format: 1, ccSdd: { version: "3.2.0" } });
+  assert.equal(r.ok, true);
+  assert.deepEqual(r.config, { version: "3.2.0", lang: "ja" });
 });
 
 test("設定ファイルが無いときは理由にファイル名と init を含める", () => {
@@ -55,10 +61,11 @@ test("format が新しすぎるときは理由に format と update を含める
   assert.match(r.reason, /update/);
 });
 
-test("版が不正なときは理由に ccSdd.version と update を含める", () => {
+test("版が不正なときは理由に ccSdd.version・ファイル名・update を含める", () => {
   const r = ok({ ...base, ccSdd: { ...base.ccSdd, version: "x" } });
   assert.equal(r.ok, false);
   assert.match(r.reason, /ccSdd\.version/);
+  assert.match(r.reason, /\.cc-sdd-bootstrap\.json/);
   assert.match(r.reason, /update/);
 });
 
@@ -68,143 +75,284 @@ test("言語が不正なときは理由に ccSdd.lang を含める", () => {
   assert.match(r.reason, /ccSdd\.lang/);
 });
 
-test("keepTemplates が真偽でないときは理由に ccSdd.keepTemplates を含める", () => {
+test("雛形の保持の項目（keepTemplates）は読まず、真偽でなくても誤りにしない", () => {
   const r = ok({ ...base, ccSdd: { ...base.ccSdd, keepTemplates: "yes" } });
-  assert.equal(r.ok, false);
-  assert.match(r.reason, /ccSdd\.keepTemplates/);
+  assert.equal(r.ok, true);
+  assert.deepEqual(r.config, { version: "3.1.0", lang: "ja" });
 });
 
 test("ccSdd が文字列でも例外を投げず失敗にする", () => {
   const r = ok({ format: 1, ccSdd: "x" });
   assert.equal(r.ok, false);
+  assert.match(r.reason, /ccSdd/);
+});
+
+test("buildState は format 2 と版・言語・導入物の道筋の一覧を作る", () => {
+  const cfg = { version: "3.1.0", lang: "ja" };
+  const s = buildState(cfg, [".claude/skills/kiro-impl/SKILL.md", ".kiro/settings/cc-sdd-guide.md"]);
+  assert.deepEqual(s, { format: 2, version: "3.1.0", lang: "ja", files: [".claude/skills/kiro-impl/SKILL.md", ".kiro/settings/cc-sdd-guide.md"] });
 });
 
 test("buildState と parseState の往復", () => {
-  const H = "a".repeat(64);
-  const cfg = { version: "3.1.0", lang: "ja", keepTemplates: false };
-  const files = { ".claude/skills/kiro-impl/SKILL.md": H };
-  const s = buildState({ config: cfg, files });
+  const s = buildState({ version: "3.1.0", lang: "ja" }, [".claude/skills/kiro-impl/SKILL.md"]);
   assert.deepEqual(parseState(JSON.stringify(s)), s);
 });
 
 test("buildState は files を複製する", () => {
-  const H = "a".repeat(64);
-  const cfg = { version: "3.1.0", lang: "ja", keepTemplates: false };
-  const files = { ".claude/skills/kiro-impl/SKILL.md": H };
-  const s = buildState({ config: cfg, files });
-  files[".claude/skills/kiro-impl/SKILL.md"] = "b".repeat(64);
-  assert.deepEqual(s.files, { ".claude/skills/kiro-impl/SKILL.md": H });
+  const files = [".claude/skills/kiro-impl/SKILL.md"];
+  const s = buildState({ version: "3.1.0", lang: "ja" }, files);
+  files.push(".kiro/settings/cc-sdd-guide.md");
+  assert.deepEqual(s.files, [".claude/skills/kiro-impl/SKILL.md"]);
 });
 
-test("parseState は不正入力に対し null", () => {
+test("parseState は読めない・オブジェクトでない入力に対し null", () => {
   assert.equal(parseState(null), null);
   assert.equal(parseState("{"), null);
   assert.equal(parseState("[]"), null);
+  assert.equal(parseState("null"), null);
 });
 
-test("parseState は形式不正に対し null", () => {
+test("parseState は旧版の指紋つき（format 1）の記録を読めない扱いにする", () => {
   const H = "a".repeat(64);
+  const old = { format: 1, version: "3.1.0", lang: "ja", keepTemplates: false, files: { ".claude/skills/kiro-impl/SKILL.md": H } };
+  assert.equal(parseState(JSON.stringify(old)), null);
+});
+
+test("parseState は形が違う記録に対し null", () => {
+  const good = { format: 2, version: "3.1.0", lang: "ja", files: [".claude/skills/kiro-impl/SKILL.md"] };
   const cases = [
-    { format: 2, version: "3.1.0", lang: "ja", keepTemplates: false, files: { ".claude/skills/kiro-impl/SKILL.md": H } },
-    { format: 1, version: "", lang: "ja", keepTemplates: false, files: { ".claude/skills/kiro-impl/SKILL.md": H } },
-    { format: 1, version: "3.1.0", lang: "ja", keepTemplates: "no", files: { ".claude/skills/kiro-impl/SKILL.md": H } },
-    { format: 1, version: "3.1.0", lang: "ja", keepTemplates: false, files: { ".claude/skills/kiro-impl/SKILL.md": "xyz" } },
+    { ...good, format: 3 },
+    { ...good, format: "2" },
+    { ...good, version: "" },
+    { ...good, lang: 1 },
+    { ...good, files: {} },
+    { ...good, files: "a.md" },
+    { ...good, files: [1] },
+    { ...good, files: [""] },
   ];
   for (const c of cases) {
     assert.equal(parseState(JSON.stringify(c)), null);
   }
 });
 
-test("parseState は相対でない files に対し null", () => {
-  const H = "a".repeat(64);
-  const badPaths = ["/etc/passwd", "../x", "a/../b", "a\\b", "a//b"];
+test("parseState は相対でない道筋を含む記録に対し null", () => {
+  const badPaths = ["/etc/passwd", "../x", "a/../b", "a\\b", "a//b", "./a"];
   for (const p of badPaths) {
-    const obj = { format: 1, version: "3.1.0", lang: "ja", keepTemplates: false, files: { [p]: H } };
+    const obj = { format: 2, version: "3.1.0", lang: "ja", files: [p] };
     assert.equal(parseState(JSON.stringify(obj)), null);
   }
 });
 
-test("isFingerprintTarget の判定", () => {
-  assert.equal(isFingerprintTarget(".claude/skills/kiro-impl/SKILL.md", true), true);
-  assert.equal(isFingerprintTarget(".claude/skills/kiro-impl/SKILL.md", false), true);
-  assert.equal(isFingerprintTarget(".kiro/settings/cc-sdd-guide.md", true), true);
-  assert.equal(isFingerprintTarget(".kiro/settings/cc-sdd-guide.md", false), true);
-  assert.equal(isFingerprintTarget(".kiro/settings/templates/specs/tasks.md", true), false);
-  assert.equal(isFingerprintTarget(".kiro/settings/templates/specs/tasks.md", false), true);
-  assert.equal(isFingerprintTarget(".claude/skills/other/x.md", true), false);
-  assert.equal(isFingerprintTarget(".kiro/specs/a/spec.json", true), false);
-  assert.equal(isFingerprintTarget("CLAUDE.md", true), false);
+const config = { version: "3.1.0", lang: "ja" };
+const KIRO_SKILL = ".claude/skills/kiro-impl/SKILL.md";
+const state = buildState(config, [KIRO_SKILL]);
+// 判断の材料（InstallFacts）の既定値。試験ごとに上書きする
+const facts = (overrides = {}) => ({
+  config: { ok: true, config },
+  state,
+  lock: { present: false },
+  failure: { present: false },
+  missingFiles: [],
+  sectionPresent: { claude: true, codex: true },
+  ...overrides
 });
 
-const config = { version: "3.1.0", lang: "ja", keepTemplates: false };
-const state = buildState({ config, files: { "a": "a".repeat(64) } });
-const decision = (overrides = {}) => decideInstall({ config, state, failureRecordExists: false, currentHashes: { a: "a".repeat(64) }, templatesMissing: false, ...overrides });
-
-test("導入記録の定数と判定理由・優先順位", () => {
+test("導入記録の定数", () => {
   assert.equal(FAILURE_RECORD, ".cache/cc-sdd-install.failed");
   assert.equal(STATE_PATH, ".cache/cc-sdd-install.state.json");
+  assert.equal(LOCK_PATH, ".cache/cc-sdd-install.lock");
   assert.equal(RETRY_COMMAND, "node .agent-hooks/cc-sdd-bootstrap/install-cc-sdd.mjs");
   assert.equal(NPX_TIMEOUT_MS, 540000);
-  assert.deepEqual(decision({ failureRecordExists: true, state: null }), { action: "install", reason: "failure-record" });
-  assert.deepEqual(decision({ state: null }), { action: "install", reason: "no-state" });
-  assert.deepEqual(decision({ config: { ...config, lang: "en" } }), { action: "install", reason: "config-changed" });
-  assert.deepEqual(decision({ config: { ...config, keepTemplates: true } }), { action: "install", reason: "config-changed" });
-  assert.deepEqual(decision({ config: { ...config, version: "3.2.0" } }), { action: "install", reason: "config-changed" });
-  assert.deepEqual(decision({ currentHashes: { a: null } }), { action: "install", reason: "files-changed" });
-  assert.deepEqual(decision({ currentHashes: {} }), { action: "install", reason: "files-changed" });
-  const keepState = buildState({ config: { ...config, keepTemplates: true }, files: {} });
-  assert.deepEqual(decideInstall({ config: { ...config, keepTemplates: true }, state: keepState, failureRecordExists: false, currentHashes: {}, templatesMissing: true }), { action: "install", reason: "templates-missing" });
-  assert.deepEqual(decision(), { action: "skip" });
-  assert.deepEqual(decision({ templatesMissing: true }), { action: "skip" });
+  assert.equal(STALE_LOCK_MS, 660000);
 });
 
-test("removalTargets は kiro- のみを順に消し、保持時の雛形を残す", () => {
-  assert.deepEqual(removalTargets({ skillEntries: ["kiro-a", "custom", "kiro-file", "kiro-link"], keepTemplates: false }), [".claude/skills/kiro-a", ".claude/skills/kiro-file", ".claude/skills/kiro-link", ".kiro/settings/cc-sdd-guide.md", ".kiro/settings/templates"]);
-  assert.deepEqual(removalTargets({ skillEntries: ["custom", "kiro-a"], keepTemplates: true }), [".claude/skills/kiro-a", ".kiro/settings/cc-sdd-guide.md"]);
+test("揃っていれば省く（skip）", () => {
+  assert.deepEqual(decideInstall(facts()), { action: "skip" });
 });
 
-test("buildManifest は保持と雛形欠落に応じた3通りの一覧を作る", () => {
-  const skills = { type: "templateDir", fromDir: "templates/agents/{{AGENT}}/skills", toDir: "{{AGENT_COMMANDS_DIR}}" };
-  const doc = { type: "templateFile", from: "templates/agents/{{AGENT}}/docs/CLAUDE.md", toDir: "{{KIRO_DIR}}/settings", rename: "cc-sdd-guide.md" };
-  const templates = { type: "templateDir", fromDir: "templates/shared/settings/templates", toDir: "{{KIRO_DIR}}/settings/templates" };
-  const expected = (withTemplates) => ({ version: 1, artifacts: [{ id: "skills", source: skills }, { id: "doc_main", source: doc }, ...(withTemplates ? [{ id: "settings_templates", source: templates }] : [])] });
-  assert.deepEqual(buildManifest({ keepTemplates: false, templatesMissing: false }), expected(true));
-  assert.deepEqual(buildManifest({ keepTemplates: true, templatesMissing: false }), expected(false));
-  assert.deepEqual(buildManifest({ keepTemplates: true, templatesMissing: true }), expected(true));
+test("設定の誤りは fail にし、理由をそのまま返す", () => {
+  const reason = ".cc-sdd-bootstrap.json が JSON として読めません。update で設定を新しくしてください。";
+  assert.deepEqual(decideInstall(facts({ config: { ok: false, reason }, state: null })), { action: "fail", reason });
 });
 
-test("npxArgs はシェルを介さない引数配列を返す", () => {
-  assert.deepEqual(npxArgs(config, ".cache/manifest.json"), ["--yes", "cc-sdd@3.1.0", "--yes", "--overwrite", "force", "--manifest", ".cache/manifest.json", "--claude-skills", "--lang", "ja"]);
+test("設定の誤りは導入中の印より先に判定する", () => {
+  const reason = "設定の誤り";
+  assert.deepEqual(decideInstall(facts({ config: { ok: false, reason }, lock: { present: true, ageMs: 0 } })), { action: "fail", reason });
 });
 
-test("利用者向けの成功・省略・案内の文に必要な情報がある", () => {
+test("導入中の印は busy にし、経過時間が STALE_LOCK_MS を超えたときだけ stale にする", () => {
+  assert.deepEqual(decideInstall(facts({ lock: { present: true, ageMs: 1000 } })), { action: "busy", stale: false });
+  assert.deepEqual(decideInstall(facts({ lock: { present: true, ageMs: STALE_LOCK_MS } })), { action: "busy", stale: false });
+  assert.deepEqual(decideInstall(facts({ lock: { present: true, ageMs: STALE_LOCK_MS + 1 } })), { action: "busy", stale: true });
+});
+
+test("導入中の印は失敗の記録・状態の欠けより先に判定する", () => {
+  assert.deepEqual(decideInstall(facts({ lock: { present: true, ageMs: 1 }, failure: { present: true, text: "x" }, state: null })), { action: "busy", stale: false });
+});
+
+test("失敗の記録があれば入れ直す（reason は failed）", () => {
+  assert.deepEqual(decideInstall(facts({ failure: { present: true, text: "取得に失敗しました" } })), { action: "install", reason: "failed" });
+  assert.deepEqual(decideInstall(facts({ failure: { present: true, text: null }, state: null })), { action: "install", reason: "failed" });
+});
+
+test("状態が無ければ入れ直す（reason は no-state）", () => {
+  assert.deepEqual(decideInstall(facts({ state: null })), { action: "install", reason: "no-state" });
+});
+
+test("版・言語が設定と違えば入れ直す（reason は config-changed）", () => {
+  assert.deepEqual(decideInstall(facts({ config: { ok: true, config: { ...config, lang: "en" } } })), { action: "install", reason: "config-changed" });
+  assert.deepEqual(decideInstall(facts({ config: { ok: true, config: { ...config, version: "3.2.0" } } })), { action: "install", reason: "config-changed" });
+});
+
+test("記録した道筋のうち今は無いものがあれば入れ直す（reason は files-missing）", () => {
+  assert.deepEqual(decideInstall(facts({ missingFiles: [KIRO_SKILL] })), { action: "install", reason: "files-missing" });
+});
+
+test("どちらかの文書に運用の区画が無ければ入れ直す（reason は section-missing）", () => {
+  assert.deepEqual(decideInstall(facts({ sectionPresent: { claude: false, codex: true } })), { action: "install", reason: "section-missing" });
+  assert.deepEqual(decideInstall(facts({ sectionPresent: { claude: true, codex: false } })), { action: "install", reason: "section-missing" });
+});
+
+test("内容だけが変わった導入物は道筋がある限り省く（内容は判断の材料に無い）", () => {
+  // 内容の変更は InstallFacts に現れない。道筋・版・言語・区画が揃っていれば skip のまま
+  assert.deepEqual(decideInstall(facts({ missingFiles: [] })), { action: "skip" });
+});
+
+test("removalTargets は両ツールの kiro- で始まるスキルと .kiro/settings を消す対象にする", () => {
+  assert.deepEqual(
+    removalTargets({ claude: ["kiro-a", "custom", "kiro-file"], codex: ["kiro-b", "mine"] }),
+    [".claude/skills/kiro-a", ".claude/skills/kiro-file", ".agents/skills/kiro-b", ".kiro/settings"]
+  );
+});
+
+test("removalTargets は独自のスキル・仕様・方針・.codex/agents を消す対象に含めない", () => {
+  assert.deepEqual(removalTargets({ claude: ["custom"], codex: ["other"] }), [".kiro/settings"]);
+  for (const target of removalTargets({ claude: ["kiro-a"], codex: ["kiro-b"] })) {
+    assert.doesNotMatch(target, /\.kiro\/(specs|steering)|\.codex/);
+  }
+});
+
+test("removalTargets は空の一覧なら .kiro/settings だけを返す", () => {
+  assert.deepEqual(removalTargets({ claude: [], codex: [] }), [".kiro/settings"]);
+});
+
+test("buildManifest(claude) は Claude Code 向けの出力先と中身を作る（CLAUDE.md を直下へ）", () => {
+  assert.deepEqual(buildManifest("claude"), {
+    version: 1,
+    artifacts: [
+      { id: "skills", source: { type: "templateDir", fromDir: "templates/agents/{{AGENT}}/skills", toDir: "{{AGENT_COMMANDS_DIR}}" } },
+      { id: "doc_main", source: { type: "templateFile", from: "templates/agents/{{AGENT}}/docs/CLAUDE.md", toDir: "." } },
+      { id: "settings_templates", source: { type: "templateDir", fromDir: "templates/shared/settings/templates", toDir: "{{KIRO_DIR}}/settings/templates" } }
+    ]
+  });
+});
+
+test("buildManifest(codex) は Codex 向けの出力先と中身を作り、既定のエージェント定義を含めない", () => {
+  const manifest = buildManifest("codex");
+  assert.deepEqual(manifest, {
+    version: 1,
+    artifacts: [
+      { id: "skills", source: { type: "templateDir", fromDir: "templates/agents/{{AGENT}}/skills", toDir: "{{AGENT_COMMANDS_DIR}}" } },
+      { id: "doc_main", source: { type: "templateFile", from: "templates/agents/{{AGENT}}/docs/AGENTS.md", toDir: "." } },
+      { id: "settings_templates", source: { type: "templateDir", fromDir: "templates/shared/settings/templates", toDir: "{{KIRO_DIR}}/settings/templates" } }
+    ]
+  });
+  assert.equal(manifest.artifacts.some((a) => a.id === "codex_agents"), false);
+});
+
+test("npxArgs は版・言語・manifest・強制上書きを、ツールごとのスキル指定で組み立てる", () => {
+  assert.deepEqual(npxArgs(config, "claude", ".cache/manifest.json"), ["--yes", "cc-sdd@3.1.0", "--yes", "--overwrite", "force", "--manifest", ".cache/manifest.json", "--claude-skills", "--lang", "ja"]);
+  assert.deepEqual(npxArgs(config, "codex", ".cache/manifest.json"), ["--yes", "cc-sdd@3.1.0", "--yes", "--overwrite", "force", "--manifest", ".cache/manifest.json", "--codex-skills", "--lang", "ja"]);
+});
+
+test("導入したときの文は、両ツールの導入物と両文書を書き換えたことを含む（旧版の「CLAUDE.md は変更していません」は含めない）", () => {
   const installed = messageInstalled(config);
   assert.ok(installed.split("\n").length >= 1 && installed.split("\n").length <= 3);
-  for (const part of [config.version, config.lang, ".claude/skills/kiro-*", ".kiro/settings/", "CLAUDE.md は変更していません"]) assert.ok(installed.includes(part));
+  for (const part of [config.version, config.lang, ".claude/skills/kiro-*", ".agents/skills/kiro-*", ".kiro/settings/", "CLAUDE.md", "AGENTS.md", "Claude Code", "Codex", "書き換え"]) assert.ok(installed.includes(part));
+  assert.doesNotMatch(installed, /変更していません/);
+});
+
+test("利用者向けの省略の文に版・言語がある", () => {
   const skipped = messageSkipped(config);
   assert.equal(skipped.split("\n").length, 1);
   for (const part of [config.version, config.lang]) assert.ok(skipped.includes(part));
   assert.match(skipped, /省/);
-  const guide = messageGuide();
-  assert.match(guide, /スキル一覧に載らないスキル/);
-  assert.match(guide, /\.claude\/skills\/<名前>\/SKILL\.md/);
-  assert.match(guide, /Read/);
 });
 
-test("失敗の記録と通知に理由および Claude の外での再試行方法がある", () => {
+test("停止の通知に理由と再試行方法がある", () => {
   const reason = "取得に失敗しました";
-  assert.ok(RECORD_IN_PROGRESS.startsWith("cc-sdd の導入が完了していません（導入中、または中断）。"));
-  assert.ok(RECORD_IN_PROGRESS.includes(RETRY_COMMAND));
-  assert.match(RECORD_IN_PROGRESS, /Claude の外/);
-  const record = failureRecordText(reason);
-  assert.match(record, /^cc-sdd の導入に失敗しました。/);
-  assert.ok(record.includes(`理由: ${reason}`));
-  assert.ok(record.includes(`再試行: ${RETRY_COMMAND}`));
-  assert.match(record, /Claude の外で実行する/);
-  const failed = messageFailed(reason);
+  const failed = messageBlocked({ kind: "failed", detail: reason });
   assert.ok(failed.includes(reason));
   assert.ok(failed.includes(RETRY_COMMAND));
   assert.match(failed, /Claude の外/);
-  assert.match(failed, /次の入力.*止/);
-  assert.match(failed, /新しいセッション.*再試行/);
+  const fresh = messageBlocked({ kind: "busy", stale: false });
+  assert.match(fresh, /別のセッション/);
+  assert.ok(fresh.includes(RETRY_COMMAND));
+  const stale = messageBlocked({ kind: "busy", stale: true });
+  assert.match(stale, /rm \.cache\/cc-sdd-install\.lock/);
+  assert.ok(stale.includes(RETRY_COMMAND));
 });
+
+test("手順書を直接読む文は、ツールごとの手順書の置き場所と読み方を示す", () => {
+  const claude = messageReadSkillDirectly("claude", "何か頼む");
+  assert.match(claude, /\.claude\/skills\/<名前>\/SKILL\.md/);
+  assert.doesNotMatch(claude, /\.agents\/skills/);
+  assert.match(claude, /Read/);
+  assert.match(claude, /最後まで/);
+  const codex = messageReadSkillDirectly("codex", "何か頼む");
+  assert.match(codex, /\.agents\/skills\/<名前>\/SKILL\.md/);
+  assert.doesNotMatch(codex, /\.claude\/skills/);
+  assert.match(codex, /Read/);
+  assert.match(codex, /最後まで/);
+});
+
+test("入力が /kiro-xxx または $kiro-xxx で始まるなら、その手順書の道筋を名指しする", () => {
+  assert.match(messageReadSkillDirectly("claude", "/kiro-impl 1.4"), /\.claude\/skills\/kiro-impl\/SKILL\.md/);
+  assert.match(messageReadSkillDirectly("claude", "  \n/kiro-spec-tasks x"), /\.claude\/skills\/kiro-spec-tasks\/SKILL\.md/);
+  assert.match(messageReadSkillDirectly("codex", "$kiro-impl"), /\.agents\/skills\/kiro-impl\/SKILL\.md/);
+  assert.match(messageReadSkillDirectly("codex", "  $kiro-spec-init 説明"), /\.agents\/skills\/kiro-spec-init\/SKILL\.md/);
+});
+
+test("入力が kiro- の依頼で始まらないときは道筋を名指ししない", () => {
+  const t = messageReadSkillDirectly("claude", "文章で頼む /kiro-impl");
+  assert.doesNotMatch(t, /kiro-impl\/SKILL\.md/);
+  assert.doesNotMatch(messageReadSkillDirectly("claude", ""), /kiro-[a-z]+\/SKILL\.md/);
+});
+
+test("止めた理由（失敗）は詳細と再試行のコマンドを示す。詳細が無ければ完了を確認できない旨を示す", () => {
+  const withDetail = messageBlocked({ kind: "failed", detail: "取得に失敗しました" });
+  assert.ok(withDetail.includes("取得に失敗しました"));
+  assert.ok(withDetail.includes(RETRY_COMMAND));
+  assert.match(withDetail, /通常の端末/);
+  const noDetail = messageBlocked({ kind: "failed", detail: null });
+  assert.match(noDetail, /導入の完了を確認できない/);
+  assert.ok(noDetail.includes(RETRY_COMMAND));
+  assert.match(noDetail, /通常の端末/);
+});
+
+test("止めた理由（導入中・新しい印）は別のセッションで導入中の旨と再試行のコマンドを示し、印の削除は示さない", () => {
+  const m = messageBlocked({ kind: "busy", stale: false });
+  assert.match(m, /別のセッションで導入中/);
+  assert.ok(m.includes(RETRY_COMMAND));
+  assert.doesNotMatch(m, /rm /);
+});
+
+test("止めた理由（導入中・古い印）は中断の可能性と、印を消して再試行する 1 行を示す", () => {
+  const m = messageBlocked({ kind: "busy", stale: true });
+  assert.match(m, /中断した可能性/);
+  assert.match(m, /ほかに導入が進んでいないことを確かめてから/);
+  const command = `rm ${LOCK_PATH} && ${RETRY_COMMAND}`;
+  assert.equal(command, "rm .cache/cc-sdd-install.lock && node .agent-hooks/cc-sdd-bootstrap/install-cc-sdd.mjs");
+  assert.ok(m.split("\n").some((line) => line.trim() === command));
+});
+
+test("利用手順は準備スクリプトの 1 行・手元の初回の始め方・未導入の /kiro-* の扱いを含む", () => {
+  const u = messageUsage();
+  assert.ok(u.includes("if [ -d <リポジトリ> ]; then (cd <リポジトリ> && node .agent-hooks/cc-sdd-bootstrap/install-cc-sdd.mjs); fi"));
+  assert.match(u, /最初の入力/);
+  assert.match(u, /起動前/);
+  assert.match(u, /\/kiro-/);
+  assert.match(u, /Unknown command/);
+  assert.match(u, /通常の文章/);
+});
+

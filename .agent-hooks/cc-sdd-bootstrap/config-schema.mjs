@@ -54,17 +54,6 @@ export const configFields = [
     },
   },
   {
-    path: "ccSdd.keepTemplates",
-    flag: "keep-templates",
-    kind: "boolean",
-    defaultValue: false,
-    question: "cc-sdd の雛形（.kiro/settings/templates/）を上書きせずに保持し、コミットできるようにしますか",
-    validate(value) {
-      return typeof value === "boolean" ? null : "true か false で指定してください";
-    },
-    notice: "雛形（`.kiro/settings/templates/`）は cc-sdd の成果物（MIT ライセンス）。コミットする場合はそのライセンスに従う。保持すると cc-sdd の版を上げても雛形は入れ替わらない（入れ替えるには `.kiro/settings/templates/` を消して新しいセッションを開く）",
-  },
-  {
     path: "codex.enabled",
     flag: "codex",
     kind: "boolean",

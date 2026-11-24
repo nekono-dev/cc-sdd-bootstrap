@@ -8,7 +8,7 @@ import { catalog } from '../lib/catalog.mjs';
 
 const packageRoot = path.resolve(import.meta.dirname, '..');
 
-test('npm package contains only the intended runtime files', (t) => {
+test('配布物は入口・本体・カタログの配置物に限られる', (t) => {
   const cacheDir = mkdtempSync(path.join(os.tmpdir(), 'cc-sdd-bootstrap-npm-cache-'));
   t.after(() => rmSync(cacheDir, { recursive: true, force: true }));
 
@@ -44,20 +44,26 @@ test('npm package contains only the intended runtime files', (t) => {
   const libraryFiles = readdirSync(path.join(packageRoot, 'lib'))
     .filter((name) => name.endsWith('.mjs'))
     .map((name) => `lib/${name}`);
-  for (const file of [...libraryFiles, ...catalog.files.map(({ path: filePath }) => filePath)]) {
+  const catalogFiles = catalog.files.map(({ path: filePath }) => filePath);
+  for (const file of [...libraryFiles, ...catalogFiles]) {
     assert.ok(files.has(file), `${file} が同梱されていません`);
   }
+
+  const manifest = JSON.parse(readFileSync(path.join(packageRoot, 'package.json'), 'utf8'));
+  const expectedFiles = new Set(['package.json', 'README.md', 'LICENSE', 'bin/cc-sdd-bootstrap.mjs', ...libraryFiles, ...catalogFiles]);
+  assert.deepEqual([...files].sort(), [...expectedFiles].sort(), '同梱ファイルが package.json の files とカタログに一致しません');
 
   assert.ok(!files.has('.agent-hooks/cc-sdd-bootstrap/installed.json'), '配置の記録が同梱されています');
   for (const file of files) {
     assert.ok(!file.startsWith('test/'), `テストファイルが同梱されています: ${file}`);
     assert.ok(!file.startsWith('poc/'), `PoC ファイルが同梱されています: ${file}`);
     assert.ok(!file.startsWith('.kiro/'), `.kiro のファイルが同梱されています: ${file}`);
+    assert.ok(!/^skills\/kiro-[^/]+(?:\/|$)/.test(file), `cc-sdd 本体のスキルが同梱されています: ${file}`);
+    assert.ok(!/(?:^|\/)settings\/templates(?:\/|$)/.test(file), `cc-sdd 本体の雛形が同梱されています: ${file}`);
   }
   assert.ok(!files.has('.claude/settings.json'), '.claude/settings.json が同梱されています');
   assert.ok(!files.has('CLAUDE.md'), 'CLAUDE.md が同梱されています');
 
-  const manifest = JSON.parse(readFileSync(path.join(packageRoot, 'package.json'), 'utf8'));
   for (const dependencyField of ['dependencies', 'devDependencies', 'optionalDependencies', 'peerDependencies']) {
     assert.ok(!manifest[dependencyField] || Object.keys(manifest[dependencyField]).length === 0,
       `${dependencyField} に依存パッケージがあります`);
