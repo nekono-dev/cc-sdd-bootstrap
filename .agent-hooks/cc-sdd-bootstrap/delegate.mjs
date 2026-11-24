@@ -1,11 +1,11 @@
 // 別の提供元の入口。役割を解決し、起動の名前と推論量を求め、起動してよいかを確かめる。
 // 判定は subagent-roles.mjs に任せ、このファイルは入出力と引数の扱いに徹する。
-import { promises as fs } from "node:fs";
+import { closeSync, fstatSync, openSync, promises as fs } from "node:fs";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import {
-  DEFAULT_TIERS, EFFORT_ORDER, checkChildModel, compareTier, effortAbove, effortCapFor, effortSupported,
+  DEFAULT_ROLES, DEFAULT_TIERS, EFFORT_ORDER, buildCliCommand, checkChildModel, compareTier, effortAbove, effortCapFor, effortSupported,
   childMaxTier, familyOf, vendorOfFamily, resolveEffort, resolveModelName, resolveRole, validateSubagents,
 } from "./subagent-roles.mjs";
 
@@ -37,7 +37,7 @@ function parseArgs(argv) {
   if (out.orchestratorModel === undefined) {
     stop("--orchestrator-model（今の指揮役のモデル）が必要です。指揮役の格が分からないと子のモデルを決められません");
   }
-  if (out.to !== undefined && out.to !== "same" && out.to !== "other") stop("--to は same か other を指定してください");
+  if (out.to !== undefined && out.to !== "same") stop("--to は same だけを指定できます（別の提供元は役割設定の provider で選びます）");
   if (out.effort !== undefined && !EFFORT_ORDER.includes(out.effort)) {
     stop(`--effort は ${EFFORT_ORDER.join("・")} のどれかを指定してください`);
   }
@@ -110,6 +110,16 @@ function withModel(cfg, from, role, model) {
  */
 function decide(args, cfg) {
   const to = args.to;
+  // その実行の --model が委任先の提供元に属さないときは、役割設定のときのように既定に置き換えず止める
+  if (args.model !== undefined) {
+    const provider = cfg.roles?.[args.from]?.[args.role]?.provider ?? DEFAULT_ROLES[args.from][args.role].provider;
+    const willTarget = to === "same" || provider === "same" ? args.from : args.from === "claude" ? "codex" : "claude";
+    const f = familyOf(args.model, tiersOf(cfg));
+    const v = f === null ? null : vendorOfFamily(f);
+    if (v !== null && v !== willTarget) {
+      return stop(`--model ${args.model} は委任先（${willTarget}）のものではありません。委任先のモデルを指定してください`);
+    }
+  }
   const baseCfg = args.model !== undefined ? withModel(cfg, args.from, args.role, args.model) : cfg;
   // 推論量の知らせは入口で取り直すので、resolveRole には役割設定の推論量を渡さない（知らせを文言で見分けない）
   const r = resolveRole(withoutEffort(baseCfg, args.from, args.role), args.from, args.role, args.orchestratorModel, { to });
@@ -170,6 +180,7 @@ function decide(args, cfg) {
     line: `${name} ${effort}`,
     summary: `委任先: ${target} モデル: ${name} 推論量: ${effort} 権限: ${r.setting.permission}`,
     notices,
+    launch: { target, name, effort, permission: r.setting.permission },
   };
 }
 
@@ -211,7 +222,38 @@ async function main() {
     return;
   }
   process.stderr.write(`${result.summary}\n`);
-  stop("子の起動はまだ作られていません（タスク 3.4）");
+  process.exitCode = launchChild(result.launch, args.instructions);
+}
+
+// Claude Code の子に渡さない環境変数。推論量を一律に上書きするものと、Claude Code のセッションの中であることを示すもの
+const CLAUDE_ENV_TO_DROP = ["CLAUDE_CODE_EFFORT_LEVEL", "CLAUDE_EFFORT", "CLAUDECODE", "CLAUDE_CODE_ENTRYPOINT"];
+
+/**
+ * 確かめ済みの値で子の CLI を起動し、終了コードを返す。起動できなければ Stop（別の条件ではやり直さない）。
+ * 指示のファイルは、開いた記述子をそのまま標準入力にする（パイプへの書き込みと close は Codex のサンドボックスで EPERM になるため）。
+ */
+function launchChild({ target, name, effort, permission }, instructions) {
+  let fd;
+  try {
+    fd = openSync(instructions, "r");
+  } catch (error) {
+    return stop(`指示のファイルを読み取れません: ${instructions}（${error.code ?? error.message}）。子は起動しません`);
+  }
+  try {
+    if (!fstatSync(fd).isFile()) return stop(`指示のファイルが通常のファイルではありません: ${instructions}。子は起動しません`);
+    const cmd = buildCliCommand(target, { permission, effort }, name, root);
+    const env = { ...process.env };
+    if (cmd.command === "claude") for (const k of CLAUDE_ENV_TO_DROP) delete env[k];
+    const r = spawnSync(cmd.command, cmd.args, { cwd: root, env, stdio: [fd, "inherit", "inherit"] });
+    if (r.error) {
+      return stop(`委任先の CLI（${cmd.command}）を起動できません（${r.error.code ?? r.error.message}）。別の条件でのやり直しはしません`);
+    }
+    const code = r.status ?? 1;
+    process.stderr.write(code === 0 ? "委任先の終了: 成功（終了コード 0）\n" : `委任先の終了: 失敗（終了コード ${code}）\n`);
+    return code;
+  } finally {
+    closeSync(fd);
+  }
 }
 
 main().catch((error) => {

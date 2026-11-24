@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { chmodSync, copyFileSync, existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, copyFileSync, existsSync, mkdtempSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -225,10 +225,9 @@ test("Codex の組み込みの子で定義が作られない役割（読み取�
   assert.match(r.stderr, /読み取り専用/);
   assert.match(r.stderr, /適用できません/);
   const cli = f.run("--from", "codex", "--role", "review", "--to", "same", "--orchestrator-model", "gpt-6.2-astra", "--instructions", f.instr);
-  assert.equal(cli.status, 2);
+  assert.equal(cli.status, 0, cli.stderr);
   assert.match(cli.stderr, /委任先: codex モデル: gpt-6\.2-sol 推論量: medium 権限: read-only/);
-  assert.match(cli.stderr, /タスク 3\.4/);
-  assert.deepEqual(launches(f), []);
+  assert.equal(launches(f).length, 1);
 });
 
 test("同じ提供元の役割は --to same が無いと CLI では起動しない", (t) => {
@@ -246,14 +245,6 @@ test("モデルの一覧が取れないときは一覧なしで判断し、系�
   assert.match(r.stderr, /modelIds\.sol/);
   const ids = fixture(t, { modelIds: { sol: "gpt-6.2-sol" } }, { debugFails: true });
   assert.equal(resolve(ids, "claude", "review", "claude-opus-5").stdout, "gpt-6.2-sol medium\n");
-});
-
-test("通常の指定は確かめを通っても子を起動しない（子の起動は 3.4）", (t) => {
-  const f = fixture(t);
-  const r = f.run("--from", "claude", "--role", "review", "--orchestrator-model", "claude-opus-5", "--instructions", f.instr);
-  assert.equal(r.status, 2);
-  assert.match(r.stderr, /委任先: codex モデル: gpt-6\.2-sol/);
-  assert.deepEqual(launches(f), []);
 });
 
 test("系統の提供元が分からない名前でも、委任先の子の上限・格 4 を超えれば止める", (t) => {
@@ -313,4 +304,208 @@ test("モデルの一覧の取得: 有効な JSON を出しても非ゼロ終了
     assert.equal(r.status, 2, r.stdout);
     assert.deepEqual(launches(f), []);
   }
+});
+
+// ---- 子の起動と結果の受け渡し（タスク 3.4） ----
+// 偽の CLI を node のスクリプトで置き換え、受け取った引数・標準入力・作業場所・環境変数を JSON で記録して指定の終了コードで終わる
+function installFakes(f, exits = {}) {
+  const bin = path.join(f.root, "bin");
+  const rec = path.join(f.root, "launch.jsonl");
+  for (const name of ["codex", "claude"]) {
+    const file = path.join(bin, name);
+    writeFileSync(file, `#!${process.execPath}
+const fs = require("fs");
+const a = process.argv.slice(2);
+if ("${name}" === "codex" && a[0] === "debug" && a[1] === "models") { process.stdout.write(fs.readFileSync(${JSON.stringify(path.join(f.root, "models.json"))}, "utf8")); process.exit(0); }
+let stdin = "";
+try { stdin = fs.readFileSync(0, "utf8"); } catch {}
+const env = {};
+for (const k of ["CLAUDE_CODE_EFFORT_LEVEL", "CLAUDE_EFFORT", "CLAUDECODE", "CLAUDE_CODE_ENTRYPOINT", "KEEP_ME"]) if (k in process.env) env[k] = process.env[k];
+fs.appendFileSync(${JSON.stringify(rec)}, JSON.stringify({ name: "${name}", args: a, stdin, cwd: process.cwd(), env }) + "\\n");
+process.stdout.write("子の出力 ${name}\\n");
+process.stderr.write("子の標準エラー ${name}\\n");
+process.exit(${exits[name] ?? 0});
+`);
+    chmodSync(file, 0o755);
+  }
+  const records = () => (existsSync(rec) ? readFileSync(rec, "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l)) : []);
+  return records;
+}
+const runWith = (f, env, ...args) => spawnSync(process.execPath, [path.join(f.root, ".agent-hooks/cc-sdd-bootstrap/delegate.mjs"), ...args], {
+  cwd: f.root, encoding: "utf8", env: { ...process.env, PATH: `${path.join(f.root, "bin")}:${process.env.PATH}`, ...env },
+});
+
+test("起動: Claude Code から Codex への委任（書き込み可）。引数・標準入力・作業場所・子の出力・成功の 1 行", (t) => {
+  const f = fixture(t, { roles: { claude: { implement: { provider: "other" } } } });
+  const records = installFakes(f);
+  writeFileSync(f.instr, "実装の指示\n本文\n");
+  const r = f.run("--from", "claude", "--role", "implement", "--orchestrator-model", "claude-opus-5", "--model", "terra", "--effort", "high", "--instructions", f.instr);
+  assert.equal(r.status, 0, r.stderr);
+  const rec = records();
+  assert.equal(rec.length, 1);
+  assert.equal(rec[0].name, "codex");
+  assert.deepEqual(rec[0].args, ["-a", "never", "exec", "--sandbox", "workspace-write", "--model", "gpt-6.1-terra",
+    "--config", 'model_reasoning_effort="high"', "--cd", f.root, "-"]);
+  assert.equal(rec[0].stdin, "実装の指示\n本文\n");
+  assert.equal(realpathSync(rec[0].cwd), realpathSync(f.root));
+  assert.match(r.stdout, /子の出力 codex/);
+  assert.match(r.stderr, /子の標準エラー codex/);
+  assert.match(r.stderr, /委任先の終了: 成功（終了コード 0）\n$/);
+});
+
+test("起動: Claude Code から Codex への委任（読み取り専用）は read-only の引数", (t) => {
+  const f = fixture(t);
+  const records = installFakes(f);
+  const r = f.run("--from", "claude", "--role", "review", "--orchestrator-model", "claude-opus-5", "--instructions", f.instr);
+  assert.equal(r.status, 0, r.stderr);
+  const rec = records();
+  assert.equal(rec.length, 1);
+  assert.deepEqual(rec[0].args, ["-a", "never", "exec", "--sandbox", "read-only", "--model", "gpt-6.2-sol",
+    "--config", 'model_reasoning_effort="medium"', "--cd", f.root, "-"]);
+  assert.equal(rec[0].stdin, "指示\n");
+});
+
+test("起動: Codex から Claude Code への委任（書き込み可・読み取り専用）", (t) => {
+  const f = fixture(t, { roles: { codex: { implement: { provider: "other" } } } });
+  const records = installFakes(f);
+  const w = f.run("--from", "codex", "--role", "implement", "--orchestrator-model", "gpt-6.2-sol", "--model", "sonnet", "--effort", "low", "--instructions", f.instr);
+  assert.equal(w.status, 0, w.stderr);
+  const ro = f.run("--from", "codex", "--role", "review", "--orchestrator-model", "gpt-6.2-astra", "--instructions", f.instr);
+  assert.equal(ro.status, 0, ro.stderr);
+  const rec = records();
+  assert.equal(rec.length, 2);
+  assert.equal(rec[0].name, "claude");
+  assert.deepEqual(rec[0].args, ["-p", "--model", "sonnet", "--effort", "low", "--permission-mode", "acceptEdits", "--allowedTools", "Bash"]);
+  assert.equal(rec[0].stdin, "指示\n");
+  assert.equal(rec[1].name, "claude");
+  assert.deepEqual(rec[1].args.slice(0, 5), ["-p", "--model", "opus", "--effort", "medium"]);
+  assert.deepEqual(rec[1].args.slice(5), ["--tools", "Read,Grep,Glob"]);
+  assert.equal(realpathSync(rec[1].cwd), realpathSync(f.root));
+});
+
+test("起動: 同じ提供元の CLI で読み取り専用の委任ができる（--to same）", (t) => {
+  const f = fixture(t);
+  const records = installFakes(f);
+  const r = f.run("--from", "claude", "--role", "review", "--to", "same", "--orchestrator-model", "claude-opus-5", "--instructions", f.instr);
+  assert.equal(r.status, 0, r.stderr);
+  const rec = records();
+  assert.equal(rec.length, 1);
+  assert.equal(rec[0].name, "claude");
+  assert.deepEqual(rec[0].args, ["-p", "--model", "sonnet", "--effort", "medium", "--tools", "Read,Grep,Glob"]);
+});
+
+test("起動: 子の終了コードをそのまま返し、失敗の 1 行を出す", (t) => {
+  const f = fixture(t);
+  installFakes(f, { codex: 7 });
+  const r = f.run("--from", "claude", "--role", "review", "--orchestrator-model", "claude-opus-5", "--instructions", f.instr);
+  assert.equal(r.status, 7);
+  assert.match(r.stderr, /委任先の終了: 失敗（終了コード 7）\n$/);
+});
+
+test("起動: 呼び出し元の推論量の環境変数と Claude Code のセッションの環境変数は偽の claude に渡らない", (t) => {
+  const f = fixture(t);
+  const records = installFakes(f);
+  const r = runWith(f, { CLAUDE_CODE_EFFORT_LEVEL: "max", CLAUDE_EFFORT: "max", CLAUDECODE: "1", CLAUDE_CODE_ENTRYPOINT: "cli", KEEP_ME: "残す" },
+    "--from", "codex", "--role", "review", "--orchestrator-model", "gpt-6.2-astra", "--instructions", f.instr);
+  assert.equal(r.status, 0, r.stderr);
+  const rec = records();
+  assert.equal(rec.length, 1);
+  assert.deepEqual(rec[0].env, { KEEP_ME: "残す" });
+});
+
+test("起動: 指示のファイルが読めないときは終了 2 で、子を起動しない", (t) => {
+  const f = fixture(t);
+  const records = installFakes(f);
+  const r = f.run("--from", "claude", "--role", "review", "--orchestrator-model", "claude-opus-5", "--instructions", path.join(f.root, "no-such.md"));
+  assert.equal(r.status, 2);
+  assert.match(r.stderr, /指示のファイル/);
+  assert.deepEqual(records(), []);
+});
+
+test("起動: CLI を起動できない（PATH に無い）ときは理由を出して終了 2。別の条件でやり直さない", (t) => {
+  const f = fixture(t);
+  const records = installFakes(f);
+  rmSync(path.join(f.root, "bin/claude"));
+  // codex から claude への委任。claude が無いので終了 2 で、codex など別の経路で起動しない
+  // 本物の claude が PATH にあっても起動しないよう、PATH は偽の置き場だけにする
+  const r = runWith(f, { PATH: path.join(f.root, "bin") }, "--from", "codex", "--role", "review", "--orchestrator-model", "gpt-6.2-astra", "--instructions", f.instr);
+  assert.equal(r.status, 2, r.stderr);
+  assert.match(r.stderr, /claude/);
+  assert.match(r.stderr, /起動できません/);
+  assert.deepEqual(records(), []);
+});
+
+test("起動: 上限を超える --effort など確かめで止まる場合は子の CLI を起動しない", (t) => {
+  const f = fixture(t, { maxEffort: { sonnet: "low" } });
+  const records = installFakes(f);
+  const r = f.run("--from", "codex", "--role", "review", "--orchestrator-model", "gpt-6.2-astra", "--model", "sonnet", "--effort", "medium", "--instructions", f.instr);
+  assert.equal(r.status, 2);
+  assert.match(r.stderr, /上限/);
+  const g = f.run("--from", "claude", "--role", "review", "--orchestrator-model", "claude-sonnet-5-5", "--model", "sol", "--instructions", f.instr);
+  assert.equal(g.status, 2);
+  assert.deepEqual(records(), []);
+});
+
+test("起動: 同じ提供元の役割は --to same が無いと起動しない", (t) => {
+  const f = fixture(t);
+  const records = installFakes(f);
+  const r = f.run("--from", "claude", "--role", "implement", "--orchestrator-model", "claude-opus-5", "--instructions", f.instr);
+  assert.equal(r.status, 2);
+  assert.match(r.stderr, /--to same/);
+  assert.deepEqual(records(), []);
+});
+
+test("--to は same だけ。other などは理由を出して終了 2（子を起動しない）", (t) => {
+  const f = fixture(t);
+  const records = installFakes(f);
+  const r = f.run("--from", "claude", "--role", "review", "--to", "other", "--orchestrator-model", "claude-opus-5", "--instructions", f.instr);
+  assert.equal(r.status, 2);
+  assert.match(r.stderr, /--to/);
+  assert.deepEqual(records(), []);
+});
+
+test("書き込み可の別の提供元への委任は役割設定の provider で選ぶ", (t) => {
+  const f = fixture(t, { roles: { claude: { implement: { provider: "other" } }, codex: { implement: { provider: "other" } } } });
+  const records = installFakes(f);
+  const a = f.run("--from", "claude", "--role", "implement", "--orchestrator-model", "claude-opus-5", "--model", "terra", "--instructions", f.instr);
+  assert.equal(a.status, 0, a.stderr);
+  const b = f.run("--from", "codex", "--role", "implement", "--orchestrator-model", "gpt-6.2-sol", "--model", "sonnet", "--instructions", f.instr);
+  assert.equal(b.status, 0, b.stderr);
+  const rec = records();
+  assert.deepEqual(rec.map((x) => x.name), ["codex", "claude"]);
+  assert.ok(rec[0].args.includes("workspace-write"));
+  assert.ok(rec[1].args.includes("acceptEdits"));
+});
+
+test("--to same と、委任先に属さないその実行の --model を併用すると理由を出して終了 2（既定に置き換えず、子を起動しない）", (t) => {
+  const f = fixture(t);
+  const records = installFakes(f);
+  const r = f.run("--from", "claude", "--role", "review", "--to", "same", "--orchestrator-model", "claude-opus-5", "--model", "terra", "--instructions", f.instr);
+  assert.equal(r.status, 2);
+  assert.match(r.stderr, /terra/);
+  assert.match(r.stderr, /委任先/);
+  assert.deepEqual(records(), []);
+});
+
+test("--instructions がディレクトリなど通常のファイルでなければ終了 2（子を起動しない）", (t) => {
+  const f = fixture(t);
+  const records = installFakes(f);
+  const r = f.run("--from", "claude", "--role", "review", "--orchestrator-model", "claude-opus-5", "--instructions", f.root);
+  assert.equal(r.status, 2);
+  assert.match(r.stderr, /通常のファイル/);
+  assert.deepEqual(records(), []);
+});
+
+test("入口を根以外の場所から呼んでも、子の作業場所は根になる", (t) => {
+  const f = fixture(t);
+  const records = installFakes(f);
+  const other = mkdtempSync(path.join(os.tmpdir(), "delegate-cwd-"));
+  t.after(() => rmSync(other, { recursive: true, force: true }));
+  const r = spawnSync(process.execPath, [path.join(f.root, ".agent-hooks/cc-sdd-bootstrap/delegate.mjs"), "--from", "claude", "--role", "review", "--orchestrator-model", "claude-opus-5", "--instructions", f.instr], {
+    cwd: other, encoding: "utf8", env: { ...process.env, PATH: `${path.join(f.root, "bin")}:${process.env.PATH}` },
+  });
+  assert.equal(r.status, 0, r.stderr);
+  const rec = records();
+  assert.equal(rec.length, 1);
+  assert.equal(realpathSync(rec[0].cwd), realpathSync(f.root));
 });
