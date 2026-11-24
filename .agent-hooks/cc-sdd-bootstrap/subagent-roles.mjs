@@ -175,6 +175,86 @@ export function compareTier(child, orchestrator, tiers) {
   return tiers[c] > tiers[o] ? "higher" : "ok";
 }
 
+/**
+ * @typedef {{ vendor: Vendor, childModel: string | null, childEffort: Effort | null, orchestratorModel: string | null }} SpawnInput
+ * vendor は指揮役のツール（claude・codex）。
+ */
+
+const DENY_LABELS = {
+  missing: "子のモデルが指定されていません",
+  inherit: "子のモデルが inherit（指揮役の引き継ぎ）になっています",
+  "same-model": "子が指揮役と同じ系統のモデルです",
+  higher: "子が指揮役より上の格のモデルです",
+  tier4: "格 4 以上のモデルは子に使いません（指揮役だけが使えます）",
+  "above-cap": "子のモデルが子の上限（maxModel）より上の格です",
+  effort: "子の推論量が子のモデルの系統の上限より上です",
+};
+
+/**
+ * 子の起動の拒否の文言。理由の種類と、明示の必要を伝える。
+ * @param {"missing" | "inherit" | "same-model" | "higher" | "tier4" | "above-cap" | "effort"} kind
+ * @param {{ child: string | null, orchestrator: string | null, effort?: Effort, cap?: string, vendor?: Vendor, family?: string }} detail
+ * @returns {string}
+ */
+export function messageSpawnDenied(kind, detail = {}) {
+  const lines = [`子の起動を拒否しました。理由: ${DENY_LABELS[kind] ?? kind}。`];
+  if (detail.child) lines.push(`子のモデル: ${detail.child}`);
+  if (detail.orchestrator) lines.push(`指揮役のモデル: ${detail.orchestrator}`);
+  if (detail.family && (kind === "above-cap" || kind === "tier4")) lines.push(`子の系統: ${detail.family}`);
+  if (kind === "effort") lines.push(`子の推論量: ${detail.effort}（上限: ${detail.cap}、系統: ${detail.family ?? "不明"}）`);
+  lines.push(
+    "子のモデルは、指揮役と異なる、指揮役の格以下かつ子の上限以下のモデルを、推論量の上限以下で明示してください。",
+  );
+  if (kind === "missing") {
+    const from = detail.vendor ?? "<claude|codex>";
+    lines.push(
+      "使う定義の名前は次のコマンドで求められます。",
+      `node .agent-hooks/cc-sdd-bootstrap/delegate.mjs --resolve-model --from ${from} --role <役割> --orchestrator-model <自分のモデル>`,
+    );
+  }
+  return lines.join("\n");
+}
+
+/**
+ * 設定が壊れているときの文言。直るまで子を起動しない。
+ * @param {string[]} problems
+ * @returns {string}
+ */
+export function messageConfigBroken(problems) {
+  return [
+    "subagents の設定に問題があるため、直るまで子を起動しません。",
+    "問題の項目:",
+    ...problems.map((p) => `- ${p}`),
+    "直し方: .cc-sdd-bootstrap.json の subagents を直してください。",
+    "問題の確かめ方: npx github:nekono-dev/cc-sdd-bootstrap update（または node bin/cc-sdd-bootstrap.mjs update）を実行します。",
+  ].join("\n");
+}
+
+/**
+ * 子の起動を通すか拒否するかを決める純粋な判定。
+ * 順に: 未指定・inherit → 格 4・上限超え → 推論量の上限超え → 同じ系統・上の格。確かめられなければ通す。
+ * @param {SpawnInput} input
+ * @param {SubagentsConfig} cfg
+ * @returns {{ deny: false } | { deny: true, reason: string }}
+ */
+export function decideSpawn(input, cfg) {
+  const { vendor, childModel, childEffort, orchestratorModel } = input;
+  const detail = { child: childModel ?? null, orchestrator: orchestratorModel ?? null, vendor };
+  const deny = (kind, extra = {}) => ({ deny: true, reason: messageSpawnDenied(kind, { ...detail, ...extra }) });
+  if (!isName(childModel)) return deny("missing");
+  if (childModel.trim().toLowerCase() === "inherit") return deny("inherit");
+  const check = checkChildModel(childModel, cfg);
+  if (!check.ok) return deny(check.kind, { family: check.family });
+  const tiers = mergedTiers(cfg);
+  if (isEffort(childEffort)) {
+    const cap = effortCapFor(familyOf(childModel, tiers), cfg);
+    if (effortAbove(childEffort, cap)) return deny("effort", { effort: childEffort, cap, family: familyOf(childModel, tiers) });
+  }
+  const cmp = compareTier(childModel, orchestratorModel, tiers);
+  if (cmp === "same-model" || cmp === "higher") return deny(cmp);
+  return { deny: false };
+}
+
 const otherVendor = (v) => (v === "claude" ? "codex" : "claude");
 
 /**

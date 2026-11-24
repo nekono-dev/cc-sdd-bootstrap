@@ -29,7 +29,7 @@
   - 起動の名前を、役割設定の完全な名前 → 設定の系統ごとの名前の指定（`modelIds`） → Claude Code は別名 → Codex はモデルの一覧のうち系統に合う最新、の順で求め、求められなければ理由を返す。Claude Code の組み込みの子に使う役割では、定義の名前（役割と系統）を返す
   - 単体試験で、design.md の例の表（8 人の指揮役 × 3 種の役割）と 1.3 の表（推論量を含む）どおりになること、子の上限（Claude Sonnet・Codex Sol）での下げ方、上限なしで格 4 を選ばないこと、同じ提供元で Sonnet の指揮役のレビューが Haiku・Haiku の指揮役では自分で行う扱いになること、一覧の最新の選択、版を含む明示と系統ごとの名前の指定の優先、一覧が無いときの理由、明示の推論量 high が Sonnet の上限 low で low に下がり知らせが出ること、同じ提供元への切り替えで Codex の明示のモデルが使われず知らせが出ることが確かめられる
   - _Requirements: 1.3, 1.4, 1.5, 1.7, 1.9, 1.10, 1.14, 2.1, 5.7_
-- [ ] 2.2 子の起動の判定と拒否の文言を作る
+- [x] 2.2 子の起動の判定と拒否の文言を作る
   - 子のモデルが無い・引き継ぎなら拒否、格 4・子の上限より上なら拒否、子の推論量が分かり子のモデルの系統の上限より上なら拒否、指揮役と同じ系統・上の格と確かめられれば拒否、それ以外（確認できない場合を含む）は通す
   - 拒否の理由に、理由の種類と、指揮役と異なり指揮役の格以下かつ子の上限以下のモデルを推論量の上限以下で明示する必要を入れ、未指定のときは使う定義の名前を求めるコマンドを示す。設定が壊れているときの文言（子を起動しないことと、問題の項目・直し方）も作る
   - 単体試験で、各拒否の場合（Fable・Astra の子、上限 Sonnet での Opus の子、上限 medium の系統での high）、推論量や指揮役が不明なら通すこと、文言の中身が確かめられる
@@ -145,3 +145,4 @@
 - 1.1: `maxModel` は系統の語との完全一致だけを受け付ける（版付きの名前・設定の `tiers` で足した語は誤り）。設定で足した系統の明示モデルは、役割表の `provider` から決まる委任先の提供元の上限と比べる。レビュー役（`codex exec --sandbox read-only`）の環境では既存の試験が一時ディレクトリの作成で失敗する（EROFS）ので、親が実行した `npm test` の結果と、実装役の報告の RED の出力をレビューの依頼に添える。
 - 1.2: `ConfigField` の `flag`・`question` は任意にした（lib/ は参照しない）。`subagentsField.kind` は JSDoc の型検査で `string` と推論され `ConfigField[]` への代入で型の不一致が残る（実行時の影響なし。触るときに `"map"` のリテラル型で注釈する）。配布物の起動の試験は `npm pack` の成果物を展開して `help` を実行する。
 - 2.1: 推論量は `resolveEffort(explicitEffort, childModel, cfg)` → `{effort, notices}` で、確定した子のモデルから求め直す（2.3・3.2 はこれを使う）。`resolveRole(cfg, from, role, orchestratorModel, opts)` は `{ok:true, target, setting, selfImplement, effort, definitionName, notices}` か `{ok:false, reason}`。`setting.effort` は役割設定の元の値、実際の推論量は `effort`。`opts.to` は `"same"`・`"other"`。明示のモデルを置き換えるのは `to:"same"` で提供元が食い違うときだけ（知らせを返す）。`to:"other"` で食い違えば置き換えず理由を返す。`definitionName` は Claude の生成対象の系統のときだけ（対象外は null と知らせ）、Codex は書き込み可の役割だけ `cc_sdd_<役割>`。同じ提供元で候補が無ければ `selfImplement:true`（`defaultModelFor` は `{kind:"self"}`）。
+- 2.2: `decideSpawn({vendor, childModel, childEffort, orchestratorModel}, cfg)` の `vendor` は指揮役のツール（未指定の文言の `--from` に使う）。フック（3.1）はここに指揮役のツールを渡す。拒否の理由は 7 種ごとに固有の文言と、共通の案内の 4 条件を持つ。設定が壊れているときは `messageConfigBroken(problems)`。

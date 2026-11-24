@@ -20,6 +20,9 @@ import {
   effortAbove,
   checkChildModel,
   compareTier,
+  decideSpawn,
+  messageSpawnDenied,
+  messageConfigBroken,
   subagentsField,
   validateSubagents,
 } from "../.agent-hooks/cc-sdd-bootstrap/subagent-roles.mjs";
@@ -582,4 +585,102 @@ test("to: other で委任先と明示のモデルの提供元が食い違うと�
   // 設定どおりの委任先への to: other は明示を使う
   const same = resolveRole({ roles: { claude: { review: { model: "gpt-6.1-sol" } } } }, "claude", "review", ORCH.opus.model, { to: "other" });
   assert.equal(same.setting.model, "gpt-6.1-sol");
+});
+
+// ---- 2.2 子の起動の判定と拒否の文言 ----
+const spawn = (childModel, extra = {}) => ({
+  vendor: "claude", childModel, childEffort: null, orchestratorModel: "claude-opus-5", ...extra,
+});
+
+test("decideSpawn: 未指定・inherit は拒否し、未指定の文言にコマンドが入る", () => {
+  const a = decideSpawn(spawn(null), {});
+  assert.equal(a.deny, true);
+  assert.match(a.reason, /node \.agent-hooks\/cc-sdd-bootstrap\/delegate\.mjs --resolve-model --from claude --role <役割> --orchestrator-model <自分のモデル>/);
+  const b = decideSpawn(spawn("inherit"), {});
+  assert.equal(b.deny, true);
+  assert.match(b.reason, /inherit/);
+});
+
+test("decideSpawn: 格 4（Fable・Astra）の子は拒否", () => {
+  for (const m of ["claude-fable-5", "gpt-6.1-astra"]) {
+    const r = decideSpawn(spawn(m, { orchestratorModel: null }), {});
+    assert.equal(r.deny, true, m);
+  }
+});
+
+test("decideSpawn: 上限 Sonnet で Opus の子は拒否", () => {
+  const cfg = { maxModel: { claude: "sonnet" } };
+  assert.equal(decideSpawn(spawn("claude-opus-5", { orchestratorModel: "claude-fable-5" }), cfg).deny, true);
+  assert.equal(decideSpawn(spawn("claude-sonnet-5-5", { orchestratorModel: "claude-fable-5" }), cfg).deny, false);
+});
+
+test("decideSpawn: 上限 medium の系統で high は拒否、推論量が不明なら通す", () => {
+  const cfg = { maxEffort: { sonnet: "medium" } };
+  const base = { orchestratorModel: "claude-opus-5" };
+  assert.equal(decideSpawn(spawn("claude-sonnet-5-5", { ...base, childEffort: "high" }), cfg).deny, true);
+  assert.equal(decideSpawn(spawn("claude-sonnet-5-5", { ...base, childEffort: "medium" }), cfg).deny, false);
+  assert.equal(decideSpawn(spawn("claude-sonnet-5-5", { ...base, childEffort: null }), cfg).deny, false);
+});
+
+test("decideSpawn: Sonnet の指揮役で sonnet・opus の子は拒否、haiku は通す", () => {
+  const o = { orchestratorModel: "claude-sonnet-5-5" };
+  assert.equal(decideSpawn(spawn("claude-sonnet-5-5", o), {}).deny, true);
+  assert.equal(decideSpawn(spawn("claude-opus-5", o), {}).deny, true);
+  assert.equal(decideSpawn(spawn("claude-haiku-5", o), {}).deny, false);
+});
+
+test("decideSpawn: 指揮役が不明、子の系統が不明なら通す", () => {
+  assert.equal(decideSpawn(spawn("claude-opus-5", { orchestratorModel: null }), {}).deny, false);
+  assert.equal(decideSpawn(spawn("mystery-model"), {}).deny, false);
+});
+
+test("messageSpawnDenied: 各種類の文言に理由と明示の必要が入る", () => {
+  for (const kind of ["missing", "inherit", "same-model", "higher", "tier4", "above-cap", "effort"]) {
+    const m = messageSpawnDenied(kind, { child: "c-model", orchestrator: "o-model", effort: "high", cap: "medium" });
+    assert.match(m, /指揮役と異なる/, kind);
+    assert.match(m, /指揮役の格以下/, kind);
+    assert.match(m, /推論量の上限以下/, kind);
+  }
+  assert.match(messageSpawnDenied("effort", { child: "c", orchestrator: null, effort: "high", cap: "medium" }), /high.*medium/s);
+  assert.doesNotMatch(messageSpawnDenied("tier4", { child: "c", orchestrator: null }), /--resolve-model/);
+});
+
+test("messageConfigBroken: 起動しないことと問題の項目と直し方が入る", () => {
+  const m = messageConfigBroken(["subagents.maxModel.claude: 不正", "subagents.roles: 不正"]);
+  assert.match(m, /起動しません/);
+  assert.match(m, /subagents\.maxModel\.claude: 不正/);
+  assert.match(m, /subagents\.roles: 不正/);
+  assert.match(m, /\.cc-sdd-bootstrap\.json/);
+  assert.match(m, /npx github:nekono-dev\/cc-sdd-bootstrap update/);
+  assert.match(m, /node bin\/cc-sdd-bootstrap\.mjs update/);
+});
+
+// 各拒否の場合の reason に、その場合に固有の理由と共通の案内の条件が入る（3.7）
+const GUIDE = ["指揮役と異なる", "指揮役の格以下", "子の上限以下", "推論量の上限以下"];
+const denyCases = [
+  ["missing", () => decideSpawn(spawn(null), {}), [/モデルが指定されていません/, /--resolve-model/]],
+  ["inherit", () => decideSpawn(spawn("inherit"), {}), [/inherit/, /引き継ぎ/]],
+  ["same-model", () => decideSpawn(spawn("claude-sonnet-5-5", { orchestratorModel: "claude-sonnet-5-5" }), {}), [/同じ系統/, /claude-sonnet-5-5/]],
+  ["higher", () => decideSpawn(spawn("claude-opus-5", { orchestratorModel: "claude-sonnet-5-5" }), {}), [/上の格/, /claude-opus-5/, /claude-sonnet-5-5/]],
+  ["tier4", () => decideSpawn(spawn("claude-fable-5", { orchestratorModel: null }), {}), [/格 4 以上/, /子に使いません/, /fable/]],
+  ["above-cap", () => decideSpawn(spawn("claude-opus-5", { orchestratorModel: "claude-fable-5" }), { maxModel: { claude: "sonnet" } }), [/子の上限（maxModel）より上/, /子の系統: opus/]],
+  ["effort", () => decideSpawn(spawn("claude-sonnet-5-5", { childEffort: "high" }), { maxEffort: { sonnet: "medium" } }), [/子の推論量: high/, /上限: medium/, /sonnet/]],
+];
+for (const [name, run, specific] of denyCases) {
+  test(`decideSpawn の reason（${name}）: 固有の理由と案内の条件が入る`, () => {
+    const r = run();
+    assert.equal(r.deny, true);
+    for (const re of specific) assert.match(r.reason, re);
+    for (const g of GUIDE) assert.ok(r.reason.includes(g), `${g} が無い`);
+    // 他の場合の理由とは混ざらない
+    for (const [other, , res] of denyCases) {
+      if (other === name) continue;
+      assert.ok(!res.every((re) => re.test(r.reason)), `${other} の理由と区別できない`);
+    }
+  });
+}
+test("decideSpawn の reason: --resolve-model は未指定のときだけ", () => {
+  for (const [name, run] of denyCases) {
+    assert.equal(/--resolve-model/.test(run().reason), name === "missing", name);
+  }
 });
