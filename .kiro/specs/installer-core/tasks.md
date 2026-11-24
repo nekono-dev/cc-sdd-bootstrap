@@ -109,6 +109,7 @@
   - 前提: 認証済みの `claude`・`codex`、Codex のフックの信頼の承認（`handoff-self-apply.md` の手順 4）
   - このリポジトリで `claude -p` と `codex exec` を起動し、登録したフックが動き、運用の区画が `.kiro/steering/` を読むよう案内し、`/kiro-spec-status`（Codex は `$kiro-spec-status`）がスキルとして動くことを確かめ、結果を記録する
   - _Requirements: 9.1_
+  - _Blocked: Codex は git の worktree の中で起動されると、worktree ではなく本体のチェックアウト側の `.codex/hooks.json` を読む（2026-11-24、Codex CLI 0.167.0 で使い捨てのリポジトリにより再現）。branch-release-workflow は作業ブランチを worktree で作るため、配置した Codex のフック（cc-sdd の導入・kiro-gate）が worktree では動かない。Codex のフックの置き方は installer-core の設計（または要件）に戻して扱う。_
 
 ## Implementation Notes
 - Codex の作業環境（サンドボックス）では、子プロセス・一時ディレクトリを使う試験（cli.e2e・entry-harness・install-cc-sdd・install-gate など）が EROFS などで失敗する。親が通常の環境で `npm test` を流して確かめる。
@@ -118,3 +119,4 @@
 - 5.1: plan-new・target-new を plan.mjs・target.mjs へ、config の `New` の名前を元の名前へ統合した。旧版の試験を消すときに新しい振る舞いの試験まで消えやすい（レビューで指摘）。統合では変更前の試験の件数と中身を照らし合わせる。
 - 6.2: 通しの試験で、シンボリックリンクの拒否の表示が理由のコードだけ（SYMLINK）だった不具合を見つけ、日本語の理由を出すよう直した。Codex の利用上限に達し、サブエージェントの起動も許可されなかったため、修正とレビュー（kiro-review）は指揮役の会話の中で行った。
 - 7.1: 本番の前に写しのリポジトリ（`~/.cache` の下）で手順 2〜3 を予行した。レビューで 1 回差し戻し（PoC の決まりから「一時ディレクトリで実際の CLI を動かす」条件が抜けた）。運用の区画で「プロジェクト独自の決まりは `.kiro/steering/` から読んでください」が 3 回繰り返される（部品ごとに同じ文を足すため。整理は別途）。
+- 7.2: 自己適用した worktree で `claude -p` と `codex exec` を起動した（`poc/self-apply/run.mjs`、未コミット）。Claude Code はフック・運用の区画の案内・`/kiro-spec-status` が動いた。Codex は区画の案内と `$kiro-spec-status` は動いたが、フックは動かなかった（上の Blocked）。普通のチェックアウト（写し）では Codex のフックが動いた。スクリプトの Claude Code の判定 2 件（スキルの起動の観測・拒否の検出）は誤りの見込みで、直す必要がある。
