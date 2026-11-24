@@ -106,7 +106,7 @@
   - 通しの試験がこれらを確かめて通る
   - _Requirements: 1.1, 1.2, 1.5, 4.1, 4.2, 6.1, 6.2, 7.1, 7.2, 8.1, 8.2_
 
-- [ ] 7. このリポジトリへの自己適用
+- [x] 7. このリポジトリへの自己適用
 - [x] 7.1 独自の決まりを steering へ移し、自己適用する（統合）
   - session-install の実装が済んでから行う。`handoff-self-apply.md` の手順 1〜3 を 1 つのコミットにする（途中の状態で別のセッションが始まると CLAUDE.md が作り直されるため）
   - 今の CLAUDE.md の決まりを `.kiro/steering/project-rules.md` へ表のとおり移し、CLAUDE.md の追跡を外し、`node bin/cc-sdd-bootstrap.mjs update` を実行し、続けて cc-sdd の導入を実行する
@@ -119,7 +119,7 @@
   - 引数が無い・場所が git の最上位でないときに使い方を表示して失敗し、`node --check` が通り、7.3 で使う呼び出し方がスクリプトの冒頭の説明にある
   - _Requirements: 9.1_
 
-- [ ] 7.3 自己適用の後に実機で確かめる（旧 7.2 の保留を外して段取りを直す）
+- [x] 7.3 自己適用の後に実機で確かめる（旧 7.2 の保留を外して段取りを直す）
   - 前提: 認証済みの `claude`・`codex`。5.3 と 7.2 の変更がコミットされていること（Codex の確認はコミットからの写しで行うため）
   - Claude Code は自己適用した作業ブランチの worktree で、Codex はこの作業ブランチを `~/.cache/cc-sdd-bootstrap-scratch/` の下に普通の checkout として写した場所（worktree ではない）で、7.2 のスクリプトにより起動する。登録したフックが動き（SessionStart の状態ファイル）、運用の区画が `.kiro/steering/` を読むよう案内し、`/kiro-spec-status`（Codex は `$kiro-spec-status`）がスキルとして動くことを確かめる
   - 結果を `poc/self-apply/result.md` に記録し、Claude Code・Codex の確認項目がすべて OK になる。develop に取り込んだ後の worktree での Codex の確認は含めない
@@ -137,3 +137,4 @@
 - 7.2: 自己適用した worktree で `claude -p` と `codex exec` を起動した（`poc/self-apply/run.mjs`、未コミット）。Claude Code はフック・運用の区画の案内・`/kiro-spec-status` が動いた。Codex は区画の案内と `$kiro-spec-status` は動いたが、フックは動かなかった（上の Blocked）。普通のチェックアウト（写し）では Codex のフックが動いた。スクリプトの Claude Code の判定 2 件（スキルの起動の観測・拒否の検出）は誤りの見込みで、直す必要がある。
 - 旧 7.2（今の 7.3）の Blocked は、2026-11-24 の設計の改訂（worktree の Codex は本体の checkout の登録に従い、スクリプトは worktree 側が動く。`poc/codex-worktree-hooks/`）で解いた。Codex の確認は普通の checkout の写しで行う。
 - 7.2（2026-11-24 の改訂後）: `claude -p` で先頭に書いたスラッシュコマンドは、stream-json に手順書の本文も Skill の呼び出しも出ない。スキルの証拠は init の `skills`・`slash_commands` と、手順書の Step 1 の Read（順不同）にする（本物の出力: `~/.cache/cc-sdd-bootstrap-scratch/claude-skill-events-2026-11-24.jsonl`）。kiro-gate の拒否は `is_error` の tool_result に限る。実装役（Codex）は「起動しない」の指示があっても実機の CLI を起動したことがあるので、指示に起動の禁止をはっきり書き、報告の RED の主張は指揮役が実データで確かめる。
+- 7.3: 写したばかりの checkout（または新しい worktree）の最初の Codex のセッションは、cc-sdd を最初の入力で入れるため、開始時に読む AGENTS.md と SessionStart の一覧が無い（`poc/self-apply/result.md`）。確認は導入の後の 2 回目の実行で全件 OK。
