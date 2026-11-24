@@ -8,6 +8,8 @@
 
 **Impact**: 手作業で CLAUDE.md に書いてきた「子のモデルの決まり」と「別の提供元の子の使い方」を、設定・フック・入口・運用の区画の文章に移す。
 
+> 改訂（2026-11-24、タスク計画のレビューを受けて）: 同じ提供元で子を選ぶときは指揮役の系統を候補から外す。運用の区画の文章が変わったら、session-install が区画だけを書き直す（要件 5.15）。
+>
 > 改訂（2026-11-24）: 要件の改訂（格の訂正、調査の既定を指揮役の 2 つ下に、子の上限、推論量の上限、設定の誤りで入力を止めない）と `poc/subagent-effort/` の結果に合わせて作り直した。既定のモデルは格 2 の表を持たず、1 つの決まりで計算する。役割表の項目定義と検証は `subagent-roles.mjs` に置き、配置物の `config-schema.mjs`（session-install が読む）からは切り離す。設計レビュー（2026-11-24）を受け、役割定義にはモデルを書かず、設定が壊れている間は子の起動を拒否する。
 
 ### Goals
@@ -35,6 +37,7 @@
 - 役割定義のファイルを書き出す処理と、古い定義の片付け（installer-core のカタログの「設定から作るファイル」。実装済み）。
 - 手順書を読むまでの拒否（kiro-gate）。cc-sdd の導入とその失敗時の停止（session-install）。session-install が読む配置物の項目定義には導入に使う項目だけを残し、`subagents` を置かない（下の「session-install との関係」）。
 - cc-sdd のスキルの本文の改変（読み替えは文章で示す）。
+- cc-sdd の導入の判断と手順そのもの（session-install）。この spec は、区画の文章が変わったときに区画だけを書き直す判断と処理を session-install の部品に足す（要件 5.15。下の「session-install との関係」）。
 - 旧項目を利用者の設定から消すこと（導入コマンドは消さない。利用者が手で外す）。
 
 ### Allowed Dependencies
@@ -105,7 +108,9 @@ poc/subagent-effort/run.mjs   # 実機の確認（推論量の指定と見え方
 ### Modified Files
 - `.agent-hooks/cc-sdd-bootstrap/config-schema.mjs` — `models`・`codex.enabled` の項目を外す（基本の項目 `ccSdd.version`・`ccSdd.lang` だけが残る）。何も読み込まないまま。
 - `lib/config-schema.mjs` — 配置物の基本の項目と `subagent-roles` の `subagentsField` をつないだ `configFields` を公開する（`formatProblem` などは今までどおり公開し直す）。
-- `test/install-rules.test.mjs` — `subagents` の誤りがある設定でも `readInstallConfig` が成功する試験を足す（1.12）。`install-rules.mjs` 自体は変えない。
+- `test/install-rules.test.mjs` — `subagents` の誤りがある設定でも `readInstallConfig` が成功する試験と、区画が古いときの判断の試験を足す（1.12・5.15）。
+- `.agent-hooks/cc-sdd-bootstrap/install-rules.mjs` — 導入の判断に「区画だけ書き直す」を足す（5.15）。
+- `.agent-hooks/cc-sdd-bootstrap/install-cc-sdd.mjs` — 判断の材料に区画の中身の一致を足し、区画だけを書き直す処理を足す（5.15）。`test/install-cc-sdd.test.mjs` に、古い区画が書き直され cc-sdd の導入が走らないことの試験を足す。
 - `.kiro/specs/session-install/design.md`・`.kiro/specs/installer-core/design.md` — 境界の注記を 1 行ずつ足す（session-install: 配置物の項目定義には導入に使う項目だけを置く。installer-core: `lib/` が読み込んでよい配置物の関数に `subagentsField` を足す）。
 - `lib/catalog.mjs` — subagent-delegation の項目（スクリプト 3 つ・フック・`generated`・運用の区画の文章）を足す。
 - `package.json` — `files` に 3 つのスクリプトを足す。
@@ -126,7 +131,8 @@ flowchart TB
     Self -->|いいえ| Clamp
     G2 --> Clamp[上限 = min 目標 と V の子の上限の格 と 3]
     G3 --> Clamp
-    Clamp --> Pick[V の系統のうち上限以下で最も上の格]
+    Clamp --> Exclude[V が指揮役と同じ提供元なら 指揮役の系統を候補から外す]
+    Exclude --> Pick[V の系統のうち上限以下で最も上の格]
     Pick --> Found{見つかる}
     Found -->|はい| Family[その系統]
     Found -->|いいえ| None[既定値なし 理由を示す]
@@ -146,6 +152,8 @@ flowchart TB
 | Astra（4） | Sol | Opus | Sonnet |
 
 上限が Claude は Sonnet、Codex は Sol のときは、Fable の指揮役の実装が Sonnet、Sol・Astra の指揮役のレビュー・デバッグが Sonnet になる（1.10）。
+
+別の提供元が使えず同じ提供元で行うとき（`--to same`、5.7）は、指揮役の系統を候補から外す。例: Sonnet の指揮役のレビューは Haiku、Opus の指揮役のレビューは Sonnet。Haiku・Luna の指揮役では候補が無く、指揮役自身が行う（1.5 と同じ扱い）。
 
 ### 子の起動の確認（PreToolUse）
 
@@ -240,6 +248,7 @@ sequenceDiagram
 | 5.12 | フックが未承認のときの手順 | 区画の文章 | 同上 | — |
 | 5.13 | 子の起動が許可の判定で拒否されたときの手順 | 区画の文章 | 同上 | — |
 | 5.14 | 許可を前もって与えないこと・提供元の切り替えに許可を求めないこと | 区画の文章 | 同上 | — |
+| 5.15 | 区画の文章が変わったら導入済みの作業場所の区画を書き直す | session-install への追加 | 導入の判断の「区画だけ書き直す」 | — |
 
 ## Components and Interfaces
 
@@ -247,6 +256,7 @@ sequenceDiagram
 |-----------|--------------|--------|--------------|------------------|-----------|
 | Roles（`subagent-roles.mjs`） | 純粋 | 役割表の項目定義・解釈・既定値の計算・上限・検証・判定・生成・引数 | 1.1–1.11, 1.13, 2.1–2.3, 3.2–3.4, 3.6, 3.7, 3.9, 3.10, 4.2, 4.4, 4.5, 4.8 | なし | Service |
 | ConfigSchema の分け方（配置物の `config-schema.mjs`・`lib/config-schema.mjs`） | データ | 配置物は基本の項目だけ、`lib/` で `subagentsField` をつなぐ | 1.1, 1.8, 1.11, 1.12 | Roles (P0) | State |
+| session-install への追加（`install-rules.mjs`・`install-cc-sdd.mjs`） | 判断と入口 | 区画の中身が違えば区画だけ書き直す | 5.15 | なし | Event |
 | Check（`subagent-check.mjs`） | 入口 | 子の起動の確認 | 1.12, 3.1–3.10 | Roles (P0) | Event |
 | Delegate（`delegate.mjs`） | 入口 | 別の提供元の子の起動 | 1.4, 1.6, 1.8, 1.12, 2.3, 4.1–4.8 | Roles (P0), CLI (P0) | Batch |
 | カタログの項目（`lib/catalog.mjs`） | データ | スクリプト・フック・生成物・区画の文章 | 2.1, 3.1, 5.1–5.14 | installer-core (P0), Roles (P0) | State |
@@ -288,11 +298,12 @@ function familyOf(model: string, tiers: Record<string, number>): string | null;
 function vendorOfFamily(family: string): Vendor | null;  // FAMILY_VENDOR。設定で足した語は null
 function childMaxTier(vendor: Vendor, cfg: SubagentsConfig): number;
 // maxModel[vendor] の系統の格。未設定なら CHILD_MAX_TIER。どちらも CHILD_MAX_TIER を超えない（1.10）
-function defaultModelFor(role: Role, target: Vendor, orchestratorTier: number, cfg: SubagentsConfig):
+function defaultModelFor(role: Role, target: Vendor, orchestrator: { vendor: Vendor; tier: number; family: string | null }, cfg: SubagentsConfig):
   { kind: "family"; family: string } | { kind: "self" } | { kind: "none"; reason: string };
 // 目標の格: 実装 = T-1（1 未満なら self、1.5）、レビュー・デバッグ = T、調査 = max(T-2, 1)（1.4）。
 // 上限 = min(目標の格, childMaxTier(target), CHILD_MAX_TIER)。target の系統（vendorOfFamily が target のもの）のうち、
-// 上限以下で格が最も上のもの（同じ格が複数なら名前の順で最初）。見つからなければ none（1.8）。1.3 の表は T=2 の場合。
+// 上限以下で格が最も上のもの（同じ格が複数なら名前の順で最初）。target が指揮役の提供元なら、指揮役の系統を候補から外す（5.7。指揮役の系統が分からないときは
+// 指揮役の格の系統を外す）。見つからなければ none（1.8。同じ提供元で候補が無いときは、指揮役自身が行う旨を理由に含める）。1.3 の表は T=2 の場合。
 function resolveRole(cfg: SubagentsConfig, from: Vendor, role: Role, orchestratorModel: string | null):
   { ok: true; target: Vendor; setting: RoleSetting & { model?: string }; selfImplement: boolean } | { ok: false; reason: string };
 // setting = roles[from][role] の明示値 → 無い項目は DEFAULT_ROLES（1.7）。明示の model が無ければ defaultModelFor（指揮役のモデルが分からないときは T=2 として計算）。
@@ -358,8 +369,9 @@ function resolveModelName(model: string, vendor: Vendor, cfg: SubagentsConfig, c
 - `lib/config-schema.mjs`: `export const configFields = [...base.configFields, subagentsField]` とし、ほかは配置物の公開し直し。installer-core の `init`・`update` はこの一覧で検証して失敗する（1.8・1.11）。
 
 ### session-install との関係
-- session-install（`install-rules.mjs`）は配置物の `config-schema.mjs` だけを読み込むので、`subagents` を検証せず、`subagent-roles.mjs` が壊れていても読み込みで失敗しない（1.12）。`install-rules.mjs` は変えず、試験で確かめる。
-- session-install の design.md に「配置物の項目定義には導入に使う項目だけを置く（subagent-delegation 1.12）」を足す。
+- session-install（`install-rules.mjs`）は配置物の `config-schema.mjs` だけを読み込むので、`subagents` を検証せず、`subagent-roles.mjs` が壊れていても読み込みで失敗しない（1.12）。試験で確かめる。
+- 区画の書き直し（5.15）: 導入の判断の材料に「CLAUDE.md・AGENTS.md の区画（開始の目印から終わりの目印まで）が、配置物の区画の文章（`agent-section-<ツール>.md`）と同じか」を足す。区画があり中身が違うときは、判断を「区画だけ書き直す」にし、その区画を配置物の文章で置き換える（cc-sdd 本体の導入・入れ直しはしない）。終わりの目印が無ければ、開始の目印から末尾までを置き換える。cc-sdd の導入が要る場合（版の違い・欠けなど）はこれまでどおり導入し、その中で区画も書き足される。書き直しに失敗したときは、導入の失敗と同じく入力を止める（session-install の決まり）。
+- session-install の design.md に「配置物の項目定義には導入に使う項目だけを置く（subagent-delegation 1.12）」と「区画の中身が配置物と違えば区画だけを書き直す（subagent-delegation 5.15）」を足す。
 
 ### Check（`subagent-check.mjs pre-tool-use --tool <claude|codex>`）
 
@@ -426,7 +438,8 @@ function resolveModelName(model: string, vendor: Vendor, cfg: SubagentsConfig, c
   - `buildCliCommand`: 両ツール・両権限の引数（4.2・4.4・4.5）。
 - **項目定義の分け方**: `readInstallConfig` が `subagents` の誤り（例 `{"subagents": {"maxModel": {"claude": "fable"}}}`）でも成功し、`ccSdd.version` の誤りでは今までどおり失敗する。配置物の `config-schema.mjs` が何も読み込まない。`lib/config-schema.mjs` の `configFields` に `subagents` が入り、`update` が同じ誤りで失敗する（1.8・1.11・1.12）。既存の試験が通る。
 - **入口（Check）**: 標準入力の JSON・一時の会話の記録・一時の定義ファイルで、生成した定義（model 無し）を明示なしで起動すると拒否され理由に `--resolve-model` のコマンドが入る、`tool_input.model` を明示すれば通る、手で書いた定義に `model: haiku` があれば Sonnet の指揮役で通る、`inherit` は拒否、会話の記録が無ければ子が明示なら通す、Codex の `model` で比べる。Codex の定義の推論量 low と起動の `xhigh` では定義の low で判定する。Claude Code の定義の `effort: xhigh` は上限 `high` で拒否。設定が壊れているとモデルを明示した起動も拒否され、理由に問題の項目が入る。何も出さないときに `allow` を出さない（3.1–3.10・1.8・1.12）。
-- **入口（Delegate）**: `--resolve-model` は、偽の `codex debug models` の一覧から、Opus の指揮役のレビューで sol の最新の名前（一覧の例で `gpt-6.2-sol`）、Sonnet の指揮役の調査で luna の最新の名前、Terra の指揮役の実装で luna の最新の名前を出し、子を起動しない（1.4・1.9）。上限 Codex Sol のとき Astra の指揮役の Codex の実装で sol を出す（1.10）。偽の `codex`・`claude` を `PATH` に置き、渡された引数・標準入力・作業場所を記録させる。両方向・両権限の引数、子の終了コードの受け渡し、指示のファイルが無い・役割が未定義・上の格・格 4・上限より上・上限より上の推論量・受け付けない推論量（Claude Code の `ultra`）で終了 2 と CLI を呼ばないこと（2.3・4.1–4.8）。
+- **入口（Delegate）**: `--resolve-model --to same` は、Sonnet の指揮役のレビューで haiku、Opus の指揮役のレビューで sonnet を出し、Haiku の指揮役では指揮役自身が行う旨の理由と終了 2 を返す（5.7）。`--resolve-model` は、偽の `codex debug models` の一覧から、Opus の指揮役のレビューで sol の最新の名前（一覧の例で `gpt-6.2-sol`）、Sonnet の指揮役の調査で luna の最新の名前、Terra の指揮役の実装で luna の最新の名前を出し、子を起動しない（1.4・1.9）。上限 Codex Sol のとき Astra の指揮役の Codex の実装で sol を出す（1.10）。偽の `codex`・`claude` を `PATH` に置き、渡された引数・標準入力・作業場所を記録させる。両方向・両権限の引数、子の終了コードの受け渡し、指示のファイルが無い・役割が未定義・上の格・格 4・上限より上・上限より上の推論量・受け付けない推論量（Claude Code の `ultra`）で終了 2 と CLI を呼ばないこと（2.3・4.1–4.8）。
+- **区画の書き直し**: 判断の単体試験で、区画があり中身が同じなら省く、違えば「区画だけ書き直す」、cc-sdd の導入が要る場合は導入が優先されること。入口の試験（一時の作業場所）で、古い区画が新しい文章に置き換わり、区画の外の文章が保たれ、cc-sdd の導入（`npx`）が呼ばれないこと（5.15）。
 - **カタログの試験**: 区画の文章に 5.1〜5.14 の要素（既定値の表、格と推論量の目安、判断を含む確認はレビュー役、指示のファイルの置き場所、書き込みは 1 つずつ、`CLAUDE_CODE_EFFORT_LEVEL` の注意、Codex の通信の許可など）が入る。
 - **実機**: `poc/subagent-defs/run.mjs` を配置したフックと生成した定義で更新し、Claude Code・Codex の拒否と通過（モデル・推論量）を確かめる。自己適用の後、このリポジトリでも確かめる（Codex は普通の checkout の写しと、develop への取り込み後の worktree）。
 
