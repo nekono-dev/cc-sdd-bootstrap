@@ -34,6 +34,7 @@
   - Claude Code の `Agent` の `tool_input` は `description`・`prompt`・`subagent_type`・`run_in_background`（ほかに `model`・`isolation`）で、推論量の引数は無い。定義の `effort: low`・`xhigh` はそのとおりに効き、`effort` の無い定義は medium だった（指揮役は high）。
   - Codex の `spawn_agent` の `tool_input` に `reasoning_effort` が入る。定義に `model_reasoning_effort` があると起動の指定は効かない（定義 low＋起動 xhigh → low）。定義が無いか推論量の無い定義なら起動の指定が効く。どちらも無ければモデルの既定値（指揮役が high でも gpt-6-luna は medium）。
   - `CLAUDE_CODE_EFFORT_LEVEL` は指揮役・子・定義の `effort` をすべて上書きする（固定値であって上限ではない）。このリポジトリのクラウドのセッションでは `medium` が設定されていた。
+- 追加（設計レビューを受けて、c・d）: Codex はモデル・推論量の無い定義＋起動の `model`・`reasoning_effort` でその値で動く。Claude Code は起動の `model` が定義のモデルより優先され、推論量は定義の値のまま。
 - **Implications**: 推論量の上限は、生成する定義（設定の検証）・Codex の起動（フックが子の実際の推論量を求めて比べる）・Claude Code の起動（フックが `subagent_type` の定義ファイルの `effort` を読む）の 3 か所で守る。定義が無い型や推論量を決められないときは確かめられないものとして通す（3.10）。依頼文の言葉による推論の深まりは対象外。
 
 ### 格の訂正と子の上限（2026-11-24、利用者の指示）
@@ -113,6 +114,10 @@
 - **Context**: Codex は定義の `model_reasoning_effort` が起動の `reasoning_effort` より優先される（`poc/subagent-effort/`）。定義に書くと、要件 1.6（作業ごとに推論量を選ぶ）が組み込みの子でできなくなる。
 - **Selected Approach**: 生成する Codex の定義には `model` と同じく推論量も書かない。指揮役は `delegate.mjs --resolve-model` が出す名前と推論量（または上限以下で選んだ値）を `spawn_agent` に明示する。フックは起動の値を上限と比べる。Claude Code は起動ごとに変えられないので定義の `effort` に書き、別の推論量が要るときは `delegate.mjs --to same`（`claude -p --effort`）を使う。
 - **Trade-offs**: Codex の定義だけを見ても推論量は分からない（要件 2.2 は `--resolve-model` で補う）。
+
+### Decision: 指揮役のモデルの指定を必須にし、定義の説明文に使う場面を書く（2026-11-24、設計レビューの問題 1）
+- **Context**: `--orchestrator-model` を省くと格 2 とみなされ、Opus の指揮役でも Haiku の定義が黙って選ばれる。下の格なのでフックは止めず、作業の質だけが落ちる。
+- **Selected Approach**: `--resolve-model` と委任の入口で `--orchestrator-model` を必須にする（無ければ理由と終了 2）。生成する Claude Code の定義の説明文に、どの格の指揮役がどの役割で使う定義かを書く（例: `cc-sdd-implement-sonnet` は「Opus の指揮役が実装・修正を任せるとき」）。指揮役に依存しない固定の事実なので、設計の原則に反しない。
 
 ### Decision: Build vs Adopt
 - 別の提供元の実行は既存の CLI（`codex exec`・`claude -p`）をそのまま使う。MCP や自作のサーバーは使わない。

@@ -58,6 +58,7 @@
 - 役割定義のファイルの名前・置き場所の変更 → installer-core の片付けの範囲。
 - Claude Code・Codex の子の起動のツールの名前や `tool_input` の形（`model`・`reasoning_effort`）の変更、定義と起動の指定の優先順位の変更 → `poc/subagent-defs/`・`poc/subagent-effort/` を再実行する。
 - 別の提供元の CLI の指定（権限・推論量の書き方）や、推論量の値の種類の変更 → 入口・`EFFORT_ORDER` と PoC。
+- Codex の「モデル・推論量の無い定義＋起動の `model`・`reasoning_effort`」、Claude Code の「起動の `model` による定義のモデルの上書き（推論量は定義のまま）」の動き（`poc/subagent-effort/` の c・d）の変更 → フックの判定と定義の生成。
 - 新しいモデルの系統の登場 → `DEFAULT_TIERS`（設定の `tiers` で利用者が足せる）。
 
 ## Architecture
@@ -349,6 +350,8 @@ function renderDefinitions(cfg: SubagentsConfig): { files: Definition[]; notices
 // Claude Code: 役割ごとに、子に使える Claude の系統 F（vendorOfFamily が claude、格が childMaxTier(claude) 以下）ごとに 1 つ、
 //   `.claude/agents/cc-sdd-<役割>-<F>.md` を作る。役割設定に model を明示していればその系統 F だけを作る（1.7）。
 //   frontmatter: name・description・model（F の別名）・effort・（読み取り専用なら）tools: Read, Grep, Glob。
+//   description には、どの格の指揮役がどの役割で使う定義かを書く（例: implement-sonnet は「Opus の指揮役が実装・修正を任せるとき」。defaultModelFor の逆引き。
+//   別の提供元が使えないとき（5.7）の予備の役割はその旨）。指揮役に依存しない固定の事実なので原則に反しない。
 //   effort = 役割の明示値があればそれを F の上限まで下げた値（下げたときは notices で知らせる。2.3）、無ければ defaultEffortFor(F)（1.14）。
 //   effort が VENDOR_EFFORTS.claude に無い（ultra）ときはその定義を作らず notices（2.3）。
 //   provider=other の役割（review・investigate・debug）は、別の提供元が使えないとき（5.7）の予備。
@@ -400,8 +403,8 @@ function resolveModelName(model: string, vendor: Vendor, cfg: SubagentsConfig, c
 ### Delegate（`delegate.mjs`）
 
 ##### Batch / Job Contract
-- 起動: `node .agent-hooks/cc-sdd-bootstrap/delegate.mjs --from <claude|codex> --role <implement|review|investigate|debug> --instructions <ファイル> [--to same] [--effort <low|medium|high|xhigh|max|ultra>] [--model <ID>] [--orchestrator-model <ID>]`。
-- 名前だけ求める: `delegate.mjs --resolve-model --from <claude|codex> --role <役割> [--to same] [--orchestrator-model <ID>]` は、子を起動せず、その役割に使う名前と推論量を 1 行で出す。組み込みの子に使う役割では、Claude Code なら定義の名前（`cc-sdd-<役割>-<系統>`。`subagent_type` に入れる）、Codex なら起動のモデルの名前と推論量（`spawn_agent` の `model`・`reasoning_effort` に入れる）。別の提供元の役割では CLI に渡すモデルの名前と推論量（1.4・1.9・2.1）。系統はその時点の指揮役のモデル（`--orchestrator-model`）から決める。求められなければ理由と終了 2。根はスクリプトの位置から求める。
+- 起動: `node .agent-hooks/cc-sdd-bootstrap/delegate.mjs --from <claude|codex> --role <implement|review|investigate|debug> --instructions <ファイル> --orchestrator-model <ID> [--to same] [--effort <low|medium|high|xhigh|max|ultra>] [--model <ID>]`。`--orchestrator-model` は必須で、無ければ理由を出して終了 2（指揮役の格を黙って格 2 とみなさない。設計レビュー 2026-11-24）。
+- 名前だけ求める: `delegate.mjs --resolve-model --from <claude|codex> --role <役割> --orchestrator-model <ID> [--to same]`（`--orchestrator-model` は必須）は、子を起動せず、その役割に使う名前と推論量を 1 行で出す。組み込みの子に使う役割では、Claude Code なら定義の名前（`cc-sdd-<役割>-<系統>`。`subagent_type` に入れる）、Codex なら起動のモデルの名前と推論量（`spawn_agent` の `model`・`reasoning_effort` に入れる）。別の提供元の役割では CLI に渡すモデルの名前と推論量（1.4・1.9・2.1）。系統はその時点の指揮役のモデル（`--orchestrator-model`）から決める。求められなければ理由と終了 2。根はスクリプトの位置から求める。
 - 処理: 設定を読み（読めない・誤りがあれば理由を返して終了 2、1.8・1.12）、`resolveRole` で解決する。委任先は役割の `provider` で決まる提供元。`provider` が `same` の役割（実装・修正）は組み込みの子を使う役割なので、その旨を返して起動しない。`--to same` のときは同じ提供元の CLI で起動する（5.7）。`--effort`・`--model` はその実行だけ役割の設定を上書きする（1.6）。
 - 確かめること（どれかに当たれば理由と終了 2、4.8・2.3）: `checkChildModel`（格 4・子の上限より上）、`--orchestrator-model` があれば `compareTier`（同じ系統・上の格）、推論量が `effortCapFor` より上、`effortSupported` が偽（例 Claude Code に `ultra`、Luna に `ultra`）。
 - モデルの名前: 委任先が Codex なら `codex debug models` を実行して一覧（受け付ける推論量を含む）を得て（失敗なら一覧なし）、`resolveModelName` で起動の名前を求める（1.9）。
@@ -448,14 +451,14 @@ function resolveModelName(model: string, vendor: Vendor, cfg: SubagentsConfig, c
   - `familyOf`: `claude-sonnet-5-5`・`sonnet` → sonnet、`gpt-6.1-terra` → terra、`gpt-6.2-sol` → sol、知らない ID → null（1.2・1.9）。
   - `resolveModelName`: 一覧の優先度で最新の `-terra` を選ぶ。版を含む名前の明示はそのまま。一覧が無く明示も無い Codex の系統は理由（1.9）。
   - `decideSpawn`: 未指定・`inherit` は拒否。Sonnet の指揮役で `sonnet` の子は拒否、`opus` の子は拒否、`haiku` は通す。`fable`・`astra` の子は拒否。上限 Sonnet で `opus` の子は拒否。上限 `medium` の系統で推論量 `high` は拒否、推論量が分からなければ通す。指揮役が不明で子が明示なら通す（3.2–3.4・3.6・3.9・3.10）。理由の文言に明示の必要が入る（3.7）。
-  - `renderDefinitions`: Claude Code は上限なしで 12（4 役割 × Haiku・Sonnet・Opus）、上限 Sonnet で 8、上限 Haiku で 4 の定義を作り、Fable の定義は作らない。各定義に系統のモデルと推論量（既定: Haiku は high、Sonnet・Opus は medium。`maxEffort: { default: high, sonnet: low }` なら Sonnet だけ low）。読み取り専用に `tools: Read, Grep, Glob`。役割の明示の推論量が系統の上限より上ならその系統の定義だけ下げて notices、`ultra` は作らず notices。役割設定に model を明示するとその系統の定義だけ。生成の結果は指揮役のモデルを渡さなくても同じ（指揮役に依存しない）。Codex は書き込み可の `implement` だけで、`model`・`model_reasoning_effort` を含まず、読み取り専用は notices（2.1–2.3）。`maxEffort.default` が `low` のとき、明示の無い役割の推論量は low に下がる（1.13）。
+  - `renderDefinitions`: 各定義の説明文に使う場面が入る（例 implement-sonnet に「Opus の指揮役」）。Claude Code は上限なしで 12（4 役割 × Haiku・Sonnet・Opus）、上限 Sonnet で 8、上限 Haiku で 4 の定義を作り、Fable の定義は作らない。各定義に系統のモデルと推論量（既定: Haiku は high、Sonnet・Opus は medium。`maxEffort: { default: high, sonnet: low }` なら Sonnet だけ low）。読み取り専用に `tools: Read, Grep, Glob`。役割の明示の推論量が系統の上限より上ならその系統の定義だけ下げて notices、`ultra` は作らず notices。役割設定に model を明示するとその系統の定義だけ。生成の結果は指揮役のモデルを渡さなくても同じ（指揮役に依存しない）。Codex は書き込み可の `implement` だけで、`model`・`model_reasoning_effort` を含まず、読み取り専用は notices（2.1–2.3）。`maxEffort.default` が `low` のとき、明示の無い役割の推論量は low に下がる（1.13）。
   - `buildCliCommand`: 両ツール・両権限の引数（4.2・4.4・4.5）。
 - **項目定義の分け方**: `readInstallConfig` が `subagents` の誤り（例 `{"subagents": {"maxModel": {"claude": "fable"}}}`）でも成功し、`ccSdd.version` の誤りでは今までどおり失敗する。配置物の `config-schema.mjs` が何も読み込まない。`lib/config-schema.mjs` の `configFields` に `subagents` が入り、`update` が同じ誤りで失敗する（1.8・1.11・1.12）。既存の試験が通る。
 - **入口（Check）**: 標準入力の JSON・一時の会話の記録・一時の定義ファイルで、生成した `cc-sdd-implement-haiku`（haiku・high）を Sonnet の指揮役が選ぶと通る、`cc-sdd-implement-sonnet` を Sonnet の指揮役が選ぶと同じモデルで拒否、名前を付けない起動（`general-purpose`）は拒否され理由に `--resolve-model` のコマンドが入る、`cc-sdd-implement-haiku` を `tool_input.model: sonnet` で上書きすると Sonnet の上限（例 medium）と定義の high を比べて拒否、`inherit` は拒否、会話の記録が無ければ子が明示なら通す、Codex の `model` で比べる。Codex の定義の推論量 low と起動の `xhigh` では定義の low で判定する。Claude Code の定義の `effort: xhigh` は上限 `high` で拒否。設定が壊れているとモデルを明示した起動も拒否され、理由に問題の項目が入る。何も出さないときに `allow` を出さない（3.1–3.10・1.8・1.12）。
-- **入口（Delegate）**: 同じ定義のファイル群に対し、`--resolve-model --from claude --role implement` が Sonnet の指揮役で `cc-sdd-implement-haiku`、Opus で `cc-sdd-implement-sonnet`、Fable で `cc-sdd-implement-opus` を出す（途中で指揮役のモデルを変えても、渡したモデルで選び直す）。`--resolve-model --to same` は、Sonnet の指揮役のレビューで `cc-sdd-review-haiku`、Opus の指揮役のレビューで `cc-sdd-review-sonnet` を出し、Haiku の指揮役では指揮役自身が行う旨の理由と終了 2 を返す（5.7）。`--resolve-model` は、偽の `codex debug models` の一覧から、Opus の指揮役のレビューで sol の最新の名前（一覧の例で `gpt-6.2-sol`）、Sonnet の指揮役の調査で luna の最新の名前、Terra の指揮役の実装で luna の最新の名前を出し、子を起動しない（1.4・1.9）。上限 Codex Sol のとき Astra の指揮役の Codex の実装で sol を出す（1.10）。偽の `codex`・`claude` を `PATH` に置き、渡された引数・標準入力・作業場所を記録させる。両方向・両権限の引数、子の終了コードの受け渡し、指示のファイルが無い・役割が未定義・上の格・格 4・上限より上・上限より上の推論量・受け付けない推論量（Claude Code の `ultra`）で終了 2 と CLI を呼ばないこと（2.3・4.1–4.8）。
+- **入口（Delegate）**: `--orchestrator-model` が無いと `--resolve-model` も委任も理由と終了 2。同じ定義のファイル群に対し、`--resolve-model --from claude --role implement` が Sonnet の指揮役で `cc-sdd-implement-haiku`、Opus で `cc-sdd-implement-sonnet`、Fable で `cc-sdd-implement-opus` を出す（途中で指揮役のモデルを変えても、渡したモデルで選び直す）。`--resolve-model --to same` は、Sonnet の指揮役のレビューで `cc-sdd-review-haiku`、Opus の指揮役のレビューで `cc-sdd-review-sonnet` を出し、Haiku の指揮役では指揮役自身が行う旨の理由と終了 2 を返す（5.7）。`--resolve-model` は、偽の `codex debug models` の一覧から、Opus の指揮役のレビューで sol の最新の名前（一覧の例で `gpt-6.2-sol`）、Sonnet の指揮役の調査で luna の最新の名前、Terra の指揮役の実装で luna の最新の名前を出し、子を起動しない（1.4・1.9）。上限 Codex Sol のとき Astra の指揮役の Codex の実装で sol を出す（1.10）。偽の `codex`・`claude` を `PATH` に置き、渡された引数・標準入力・作業場所を記録させる。両方向・両権限の引数、子の終了コードの受け渡し、指示のファイルが無い・役割が未定義・上の格・格 4・上限より上・上限より上の推論量・受け付けない推論量（Claude Code の `ultra`）で終了 2 と CLI を呼ばないこと（2.3・4.1–4.8）。
 - **区画の書き直し**: 判断の単体試験で、区画があり中身が同じなら省く、違えば「区画だけ書き直す」、cc-sdd の導入が要る場合は導入が優先されること。入口の試験（一時の作業場所）で、古い区画が新しい文章に置き換わり、区画の外の文章が保たれ、cc-sdd の導入（`npx`）が呼ばれないこと（5.15）。
 - **カタログの試験**: 区画の文章に 5.1〜5.14 の要素（既定値の表、格と推論量の目安、判断を含む確認はレビュー役、指示のファイルの置き場所、書き込みは 1 つずつ、`CLAUDE_CODE_EFFORT_LEVEL` の注意、Codex の通信の許可など）が入る。
-- **実機**: `poc/subagent-defs/run.mjs` を配置したフックと生成した定義で更新し、Claude Code・Codex の拒否と通過（モデル・推論量）を確かめる。自己適用の後、このリポジトリでも確かめる（Codex は普通の checkout の写しと、develop への取り込み後の worktree）。
+- **実機**: 前提の動き（Codex のモデル無しの定義＋起動の指定、Claude Code の `model` の上書き）は `poc/subagent-effort/` の c・d で確認済み。`poc/subagent-defs/run.mjs` を配置したフックと生成した定義で更新し、Claude Code・Codex の拒否と通過（モデル・推論量）を確かめる。自己適用の後、このリポジトリでも確かめる（Codex は普通の checkout の写しと、develop への取り込み後の worktree）。
 
 ## Migration Strategy
 - 旧項目 `models`・`codex.enabled` は項目定義から外れ、既存の設定にあっても使わない項目として残る。このリポジトリでは自己適用の確認のときに手で外す。

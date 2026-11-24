@@ -2,7 +2,7 @@
 
 - 実行日: 2026-11-24
 - 環境: Claude Code 2.1.329（指揮役 sonnet、`--effort high`）、Codex CLI 0.167.0（指揮役 gpt-6.1-sol、推論量 medium と high の 2 回）、Node.js v22.16.0
-- 実行: `node poc/subagent-effort/run.mjs [a b]`（`POC_CODEX_PARENT_EFFORT=high` で Codex の指揮役の推論量を変える）
+- 実行: `node poc/subagent-effort/run.mjs [a b c d]`（c・d は設計レビューを受けて 2026-11-24 に追加）（`POC_CODEX_PARENT_EFFORT=high` で Codex の指揮役の推論量を変える）
 - 目的: subagent-delegation 要件 1.13（推論量の上限）・3.10（組み込みの子の起動で上限より上の推論量を拒否）の実現の方法を設計で決める
 - 子が実際に使った推論量は、子の記録から読んだ（Claude Code は `~/.claude/projects/<作業場所>/<会話>/subagents/*.jsonl` の API 要求の `output_config.effort`、Codex は `CODEX_HOME/sessions` の `turn_context` の `effort`）
 
@@ -27,10 +27,23 @@
 
 `codex debug models` の `default_reasoning_level` は、モデルによって low か medium だった（high 以上の既定値は無い）。
 
+## c. Codex のモデル・推論量の無い定義＋起動の指定（設計レビューの問題 2）
+
+| 確かめたこと | 結果 |
+|---|---|
+| `agent_type` にモデル・推論量の無い定義、起動で `model: gpt-6.1-terra`・`reasoning_effort: high` | `tool_input` に両方が入り、子は **gpt-6.1-terra / high** で動いた（指揮役は gpt-6.1-sol / medium）。子の答えも返った |
+
+## d. Claude Code の定義のモデルを起動の `model` で上書き
+
+| 確かめたこと | 結果 |
+|---|---|
+| 定義（`model: haiku`・`effort: low`）を `Agent` の `model: sonnet` で起動（指揮役は opus / high） | `tool_input` に `model: sonnet` が入り、子は **Sonnet** で動いた（meta の `model` も sonnet）。推論量は定義の **low** のまま |
+
 ## 分かったこと
 
 - **Codex**: 起動ごとに推論量を指定でき（`reasoning_effort`）、起動前のフックから見える。子が実際に使う推論量は「定義の `model_reasoning_effort` → 起動の `reasoning_effort` → モデルの既定値」の順に決まる。指揮役の推論量は引き継がない。
 - **Claude Code**: 起動ごとに推論量を指定する方法が無く、子の推論量は定義の `effort` で決まる（無ければ medium）。起動前のフックから推論量は見えないが、`subagent_type` は見えるので、その定義のファイルの `effort` は読める。
+- **組み合わせ（c・d）**: Codex はモデル・推論量の無い定義に起動の `model`・`reasoning_effort` を足すと、その値で動く。Claude Code は起動の `model` が定義のモデルより優先され、推論量は定義の値のまま。
 - **両方**: 推論量を指定しない子が、指揮役の高い推論量を引き継ぐことは無かった。
 - **環境変数 `CLAUDE_CODE_EFFORT_LEVEL`**: 指揮役と子の推論量を一律に上書きする。上限ではなく固定値なので、上限の手段にはならない。この変数が設定された環境では、役割定義の `effort` が効かない。このリポジトリのクラウドのセッションでは `medium` が設定されていた。
 
