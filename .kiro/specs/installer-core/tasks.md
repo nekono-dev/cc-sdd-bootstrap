@@ -1,6 +1,8 @@
 # Implementation Plan
 
 > 改訂（2026-11-23）: 単純化後の設計に合わせて作り直した。旧版のタスク（配置記録・改変検出・対話・CLAUDE.md の管理区画）は git の履歴にある。新しい部品は旧版と並べて作り、入口を切り替えるタスク（5.1）で旧版の部品・定数・試験をまとめて消す（途中で入口が読み込めなくならないようにする）。
+>
+> 改訂（2026-11-24）: 設計の改訂（git の worktree の Codex は本体の checkout の `.codex/hooks.json` に従う）に合わせ、Codex の案内を直す 5.3 を足し、保留だった旧 7.2 を、確認のスクリプトの修正（7.2）と実機の確認（7.3）に分けて段取りを直した。
 
 - [x] 1. 土台: カタログに新しい項目を足す
 - [x] 1.1 カタログに新しい形の項目を足す
@@ -70,7 +72,7 @@
   - _Depends: 3.3_
   - _Requirements: 3.1, 8.5_
 
-- [x] 5. 入口の切り替えと表示
+- [ ] 5. 入口の切り替えと表示
 - [x] 5.1 入口を新しい読み取り・計画・適用につなぎ、旧版の部品を消す（統合）
   - コマンドの流れを、操作ごとの読み取り（4.1）→ 計画（3.x）→ 適用（4.2）に切り替える。受け付ける操作を `init`・`update`・`uninstall`・使い方の表示だけにし、`--force`・設定値の引数・対話を外す。入口の名前は保ち、入口から対話の有無の受け渡しを外す
   - 旧版の部品（配置記録・旧版のフックの統合・CLAUDE.md の管理区画の処理）と、カタログの旧版の項目・定数を消し、それらに依る旧版の試験を消すか新しい振る舞いに直す
@@ -84,6 +86,12 @@
   - 中止は理由ごとにファイル名・問題箇所・直し方を、途中の失敗は失敗・済んだ・未処理と再実行の操作を出す（`init` で設定を書き終えた後の失敗なら再実行は `update`）
   - 表示の単体試験で、それぞれの場面の文言に必要な項目が入ることが確かめられる
   - _Requirements: 2.2, 3.3, 4.5, 5.5, 6.5, 7.3, 8.4, 8.5_
+- [ ] 5.3 Codex の案内に、最初の承認の方法と worktree での前提を足す
+  - `init`・`update` の成功の表示の Codex の案内に、最初の信頼の承認は対話の画面の `codex` で行うこと（`codex exec` は未承認のフックを黙って飛ばす）、git の worktree ではフックの登録が本体の checkout の `.codex/hooks.json` から読まれるため本体の checkout にも同じ導入と承認が要ること、本体側が揃うまでは worktree で Codex を起動する前に `node .agent-hooks/cc-sdd-bootstrap/install-cc-sdd.mjs` を実行して cc-sdd と AGENTS.md を入れることを足す（取り外しの表示は変えない）
+  - 表示の単体試験で、成功の表示にこれらの文言が入り、取り外しと「変更はありません」の表示には入らないことが確かめられ、試験一式が通る
+  - 配置物は変わらないので、`node bin/cc-sdd-bootstrap.mjs update` の再実行で変更が無いと表示される
+  - _Boundary: Cli_
+  - _Requirements: 4.5, 6.5_
 
 - [x] 6. 配布物の整合と通しの試験
 - [x] 6.1 配布する範囲とカタログを揃える
@@ -105,11 +113,18 @@
   - 実行後に、旧版の配置記録が無く、CLAUDE.md・AGENTS.md がコミットの対象から外れて標準の文書＋運用の区画になっており、同じ版の `update` の再実行で変更が無いと表示される
   - _Depends: session-install の全タスク_
   - _Requirements: 9.1, 9.2, 9.3, 9.4_
-- [ ] 7.2 自己適用の後に実機で確かめる
-  - 前提: 認証済みの `claude`・`codex`、Codex のフックの信頼の承認（`handoff-self-apply.md` の手順 4）
-  - このリポジトリで `claude -p` と `codex exec` を起動し、登録したフックが動き、運用の区画が `.kiro/steering/` を読むよう案内し、`/kiro-spec-status`（Codex は `$kiro-spec-status`）がスキルとして動くことを確かめ、結果を記録する
+- [ ] 7.2 自己適用の後の実機の確認のスクリプトを直す
+  - 確認のスクリプト（`poc/self-apply/run.mjs`）を、Claude Code と Codex を確かめる場所（リポジトリの根）をそれぞれ引数で受け取り、kiro-gate の状態ファイルの鍵もその場所から求める形にする。Codex の一時の `CODEX_HOME` の信頼の設定も、受け取った場所に向ける
+  - Claude Code の判定 2 件（スキルの起動の観測・kiro-gate の拒否の検出）を、2026-11-24 の実行で誤った原因に合わせて直す
+  - 引数が無い・場所が git の最上位でないときに使い方を表示して失敗し、`node --check` が通り、7.3 で使う呼び出し方がスクリプトの冒頭の説明にある
   - _Requirements: 9.1_
-  - _Blocked: Codex は git の worktree の中で起動されると、worktree ではなく本体のチェックアウト側の `.codex/hooks.json` を読む（2026-11-24、Codex CLI 0.167.0 で使い捨てのリポジトリにより再現）。branch-release-workflow は作業ブランチを worktree で作るため、配置した Codex のフック（cc-sdd の導入・kiro-gate）が worktree では動かない。Codex のフックの置き方は installer-core の設計（または要件）に戻して扱う。_
+
+- [ ] 7.3 自己適用の後に実機で確かめる（旧 7.2 の保留を外して段取りを直す）
+  - 前提: 認証済みの `claude`・`codex`。5.3 と 7.2 の変更がコミットされていること（Codex の確認はコミットからの写しで行うため）
+  - Claude Code は自己適用した作業ブランチの worktree で、Codex はこの作業ブランチを `~/.cache/cc-sdd-bootstrap-scratch/` の下に普通の checkout として写した場所（worktree ではない）で、7.2 のスクリプトにより起動する。登録したフックが動き（SessionStart の状態ファイル）、運用の区画が `.kiro/steering/` を読むよう案内し、`/kiro-spec-status`（Codex は `$kiro-spec-status`）がスキルとして動くことを確かめる
+  - 結果を `poc/self-apply/result.md` に記録し、Claude Code・Codex の確認項目がすべて OK になる。develop に取り込んだ後の worktree での Codex の確認は含めない
+  - _Depends: 5.3, 7.2_
+  - _Requirements: 9.1_
 
 ## Implementation Notes
 - Codex の作業環境（サンドボックス）では、子プロセス・一時ディレクトリを使う試験（cli.e2e・entry-harness・install-cc-sdd・install-gate など）が EROFS などで失敗する。親が通常の環境で `npm test` を流して確かめる。
@@ -120,3 +135,4 @@
 - 6.2: 通しの試験で、シンボリックリンクの拒否の表示が理由のコードだけ（SYMLINK）だった不具合を見つけ、日本語の理由を出すよう直した。Codex の利用上限に達し、サブエージェントの起動も許可されなかったため、修正とレビュー（kiro-review）は指揮役の会話の中で行った。
 - 7.1: 本番の前に写しのリポジトリ（`~/.cache` の下）で手順 2〜3 を予行した。レビューで 1 回差し戻し（PoC の決まりから「一時ディレクトリで実際の CLI を動かす」条件が抜けた）。運用の区画で「プロジェクト独自の決まりは `.kiro/steering/` から読んでください」が 3 回繰り返される（部品ごとに同じ文を足すため。整理は別途）。
 - 7.2: 自己適用した worktree で `claude -p` と `codex exec` を起動した（`poc/self-apply/run.mjs`、未コミット）。Claude Code はフック・運用の区画の案内・`/kiro-spec-status` が動いた。Codex は区画の案内と `$kiro-spec-status` は動いたが、フックは動かなかった（上の Blocked）。普通のチェックアウト（写し）では Codex のフックが動いた。スクリプトの Claude Code の判定 2 件（スキルの起動の観測・拒否の検出）は誤りの見込みで、直す必要がある。
+- 旧 7.2（今の 7.3）の Blocked は、2026-11-24 の設計の改訂（worktree の Codex は本体の checkout の登録に従い、スクリプトは worktree 側が動く。`poc/codex-worktree-hooks/`）で解いた。Codex の確認は普通の checkout の写しで行う。
