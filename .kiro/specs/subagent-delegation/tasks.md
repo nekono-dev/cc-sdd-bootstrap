@@ -71,6 +71,7 @@
 - [ ] 3.3 自己適用の後に、このリポジトリで子の起動の確認と委任を確かめる
   - 前提: 3.1・3.2 の変更がコミットされていること、認証済みの `claude`・`codex`
   - この作業ブランチの worktree で `node bin/cc-sdd-bootstrap.mjs update` を実行して自己適用し、`.claude/settings.json`・`.codex/hooks.json` に子の起動の確認のフックが登録され、`.claude/agents/cc-sdd-*.md`・`.codex/agents/cc_sdd_*.toml` が生成されることを確かめ、結果をコミットする
+  - このリポジトリの `.cc-sdd-bootstrap.json` から旧項目（`models`・`codex`）を手で外す（導入コマンドは旧項目を消さない設計。2026-11-24、利用者の確認）。外した後も `update` が通り、設定の誤りにならないことを確かめる
   - Claude Code はこの worktree で起動し、モデル未指定の子の起動が拒否され、モデルを明示した起動と実装の役割定義の起動が通ることを確かめる。Codex はこの作業ブランチを `~/.cache/cc-sdd-bootstrap-scratch/` の下に普通の checkout として写した場所で起動し、同じことを確かめる（worktree の Codex は本体の checkout の登録に従うため。installer-core 7.3 と同じ方法）
   - develop への取り込みの後に、本体の checkout から作った worktree の Codex でも子の起動の確認のフックが動くことを確かめる。取り込み前に確かめられない項目は、その旨を結果に書く
   - 結果を `poc/self-apply/result.md` に追記し、確かめた項目がすべて OK になる

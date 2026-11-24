@@ -279,7 +279,7 @@ function buildCliCommand(target: Vendor, setting: RoleSetting, modelName: string
 ### カタログの項目（installer-core の `lib/catalog.mjs` に足す）
 - `files`: `subagent-roles.mjs`・`subagent-check.mjs`・`delegate.mjs`。
 - `hooks`: `{ tools: ["claude"], event: "PreToolUse", matcher: "Agent", script: "subagent-check.mjs", args: ["pre-tool-use", "--tool", "claude"], timeout: 10 }`、`{ tools: ["codex"], event: "PreToolUse", script: "subagent-check.mjs", args: ["pre-tool-use", "--tool", "codex"], timeout: 10 }`。
-- `generated`（installer-core が足す種類。下の「installer-core への追加」）: `{ id: "subagent-definitions", owns: [".claude/agents/cc-sdd-*.md", ".codex/agents/cc_sdd_*.toml"], render: (config) => renderDefinitions(config.subagents) }`。
+- `generated`（installer-core が足す種類。下の「installer-core への追加」）: `{ id: "subagent-definitions", owns: [".claude/agents/cc-sdd-*.md", ".codex/agents/cc_sdd_*.toml"], render: (config) => renderDefinitions(config.subagents) }`。生成した役割定義は利用先でコミットする（`.gitignore` に入れない。クラウドのセッションで `update` を実行せずに使うため。2026-11-24、利用者の確認）。旧項目（`models`・`codex.enabled`）は導入コマンドが設定から消さない（使わない項目として残し、利用者が手で外す）。
 - `agentSections` の `subagent-delegation`（両ツールで同じ趣旨。呼び方の `--from` だけ違う）:
   - 分担（5.1）: 実装・修正は同じ提供元の子（指揮役が最下位の格なら自分）、レビューとデバッグの原因調査は別の提供元、調査は別の提供元の格 1。既定の表（1.3）と、格 2 以外の指揮役の決め方（1.4・1.5）、推論量の目安（1.6）。
   - 作業の流れ（5.2・5.3・5.4）: 実装 → 別の提供元のレビュー 1 回 → 同じ実装役が修正 → 同じレビュー役が指摘箇所だけ再確認。調査 → 指揮役が設計 → 別の提供元が設計をレビュー（推論量は目安に従い指揮役が選ぶ）。原因調査（別）→ 修正（同じ）→ テスト。
