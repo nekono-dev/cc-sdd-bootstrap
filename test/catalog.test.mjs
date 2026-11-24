@@ -174,3 +174,69 @@ test("subagent-delegation のスクリプト・フック・生成物が登録さ
   assert.equal(rendered.files.filter((file) => file.path.startsWith(".claude/agents/")).length, 12);
   assert.deepEqual(rendered.files.filter((file) => file.path.startsWith(".codex/agents/")).map((file) => file.path), [".codex/agents/cc_sdd_implement.toml"]);
 });
+
+test("subagent-delegation の区画に分担・目安・流れ・読み替え・拒否時の扱いが入り、ツールごとの文章が他方に入らない", () => {
+  const section = catalog.agentSections.find((item) => item.id === "subagent-delegation");
+  assert.ok(section);
+  const common = [
+    "| 指揮役 | 実装・修正 | レビュー・デバッグ | 調査 |", "| Haiku（1） | 指揮役自身 | Luna | Luna |", "| Astra（4） | Sol | Opus | Sonnet |",
+    "上限", "格 4", "medium", "high", "low", "複雑な調査", "1 つ上", "費用", "重大度", "強制しない",
+    "別の提供元のレビュー 1 回", "同じ実装役が修正", "指摘箇所だけ再確認", "設計をレビュー", "判断を含む確認", "レビュー役", "原因調査", "テストで確かめ", "別のレビューを重ねない",
+    "やり直さず", "差分", "未確認", "--orchestrator-model", "--resolve-model", "--to same", "レビューは 1 回",
+    "~/.cache/cc-sdd-bootstrap-scratch/", "/tmp", "禁止する操作", "成果物の形式", "CLAUDE.md・AGENTS.md を読むことに頼らない",
+    "書き込みは 1 つずつ", "読み取り専用の子も重ねない", "1 度だけ", "代わりに進めず", "利用者が許可する", "別の提供元が使えるまで待つ", "直接進めることを利用者が認める",
+    "前もって与えない", "利用者の許可を求めない", ".kiro/steering/",
+  ];
+  for (const tool of ["claude", "codex"]) {
+    for (const phrase of common) assert.ok(section[tool].includes(phrase), `${tool}: ${phrase}`);
+    const commands = section[tool].match(/node \.agent-hooks\/cc-sdd-bootstrap\/delegate\.mjs[^\n`]*/g) ?? [];
+    assert.ok(commands.length >= 3, `${tool}: 入口のコマンドの例が 3 つ以上`);
+    for (const command of commands) assert.ok(command.includes("--orchestrator-model <今の自分のモデル>"), `${tool}: ${command}`);
+    assert.ok(commands.some((c) => c.includes("--resolve-model")));
+    assert.ok(commands.some((c) => c.includes("--to same") && !c.includes("--resolve-model")));
+    assert.ok(commands.some((c) => !c.includes("--to same") && !c.includes("--resolve-model")));
+    assert.ok(commands.every((c) => !/--to (?!same)/.test(c)));
+  }
+  const claudeOnly = ["CLAUDE_CODE_EFFORT_LEVEL", "subagent_type", "--effort <値>", "起動ごとに推論量を変えられず"];
+  const codexOnly = ["`agent_type`", "cc_sdd_implement", "reasoning_effort", "fork_turns", "network_access=true", "通信の許可", "フックの信頼が承認されていない", "定義が優先"];
+  for (const phrase of claudeOnly) { assert.ok(section.claude.includes(phrase), `claude: ${phrase}`); assert.ok(!section.codex.includes(phrase), `codex に入らない: ${phrase}`); }
+  for (const phrase of codexOnly) { assert.ok(section.codex.includes(phrase), `codex: ${phrase}`); assert.ok(!section.claude.includes(phrase), `claude に入らない: ${phrase}`); }
+});
+
+test("subagent-delegation の区画は役割ごとのコマンド・候補が無い場合・推論量の上限の順・再試行の範囲・出力の形を正しく示す", () => {
+  const section = catalog.agentSections.find((item) => item.id === "subagent-delegation");
+  for (const tool of ["claude", "codex"]) {
+    const body = section[tool];
+    const commands = body.match(/node \.agent-hooks\/cc-sdd-bootstrap\/delegate\.mjs[^\n`]*/g) ?? [];
+    for (const role of ["review", "debug", "investigate"]) {
+      assert.ok(commands.some((c) => c.includes(`--role ${role} `) && !c.includes("--resolve-model") && !c.includes("--to same")), `${tool}: --role ${role} の委任の例`);
+    }
+    assert.ok(commands.some((c) => c.includes("--to same") && c.includes("--role review")), `${tool}: 同じ提供元の review の例`);
+    assert.match(body, /デバッグの原因調査は `--role debug`/);
+    assert.match(body, /調査は `--role investigate`/);
+    assert.match(body, /レビューは `--role review`/);
+    assert.ok(body.includes("同じ提供元に候補が無い（入口が指揮役自身で行うよう示す）ときは、その作業を指揮役が自分で行う"));
+    assert.match(body, /subagents\.maxEffort\.<系統>.*subagents\.maxEffort\.default.*`high`/s);
+    assert.ok(body.includes("subagents.maxModel.<提供元>"));
+    assert.match(body, /指摘があるときだけ/);
+    assert.match(body, /読み取り専用/);
+    assert.match(body, /別の提供元による確認を兼ね/);
+    assert.match(body, /組み込みの子の起動が利用環境の許可の判定で拒否された場合に限/);
+    assert.match(body, /入口.*指示のファイル.*標準入力.*対象外/s);
+    assert.ok(body.includes("`<名前> <推論量>`"));
+    assert.ok(body.includes("`model`"));
+  }
+  assert.match(section.claude, /先頭の名前を `subagent_type`/);
+  assert.match(section.codex, /名前を `model`、推論量.*を `reasoning_effort`/s);
+  assert.match(section.codex, /`model` を明示すれば定義が無くても未指定の理由では拒否されず/);
+  assert.match(section.codex, /`cc_sdd_implement` を指定しても `model` が無ければ拒否/);
+  assert.doesNotMatch(section.codex, /--model <指揮役と異なるモデル>/);
+  assert.match(section.codex, /--model <指揮役と異なり指揮役の格以下かつ子の上限以下のモデル>/);
+});
+
+test("subagent-delegation の Claude Code の文章は、モデル未指定の拒否の条件を正確に述べる", () => {
+  const section = catalog.agentSections.find((item) => item.id === "subagent-delegation");
+  assert.ok(section.claude.includes("起動の引数と定義のどちらにもモデルが無い起動は、未指定として拒否され、使う定義の名前を求めるコマンドが示される"));
+  assert.doesNotMatch(section.claude, /名前を付けない起動/);
+  assert.doesNotMatch(section.codex, /名前を付けない起動/);
+});
