@@ -116,7 +116,13 @@ test("導入成功は変更一覧と通知を日本語で表示する", () => {
       { code: "GENERATED_NOTICE", id: "agents", messages: ["設定から役割のファイルを作りました"] },
     ],
   });
-  for (const text of ["作成: .cc-sdd-bootstrap.json", "更新: .agent-hooks/cc-sdd-bootstrap/a.mjs", "削除: .agent-hooks/cc-sdd-bootstrap/old.mjs", "ccSdd.version=3.1.0", "ccSdd.lang=ja", "直接編集", ".agent-hooks/cc-sdd-bootstrap/", "git", "信頼", "AGENTS.md", "CLAUDE.md", ".kiro/steering/", "追跡", "コミット", "session-install", "設定から役割のファイルを作りました"]) assert.ok(output.includes(text), text);
+  for (const text of ["作成: .cc-sdd-bootstrap.json", "更新: .agent-hooks/cc-sdd-bootstrap/a.mjs", "削除: .agent-hooks/cc-sdd-bootstrap/old.mjs", "ccSdd.version=3.1.0", "ccSdd.lang=ja", "直接編集", ".agent-hooks/cc-sdd-bootstrap/", "git", "信頼", "AGENTS.md", "CLAUDE.md", ".kiro/steering/", "追跡", "コミット", "session-install", "設定から役割のファイルを作りました", "対話", "codex exec", "worktree", "本体の checkout", "node .agent-hooks/cc-sdd-bootstrap/install-cc-sdd.mjs"]) assert.ok(output.includes(text), text);
+  assert.match(output, /未承認.*AGENTS\.md/);
+});
+
+test("update の成功にも Codex の承認・worktree 案内を表示する", () => {
+  const output = formatSuccess("update", { changes: [{ kind: "write", path: ".codex/hooks.json", created: false }], notices: [] });
+  for (const text of ["対話", "codex exec", "worktree", "本体の checkout", "node .agent-hooks/cc-sdd-bootstrap/install-cc-sdd.mjs", "AGENTS.md"]) assert.ok(output.includes(text), text);
 });
 
 test("取り外しを再実行しても残る対象を runCli で表示する", async (t) => {
@@ -132,8 +138,10 @@ test("取り外しを再実行しても残る対象を runCli で表示する", 
 test("変更なしと取り外し成功が状態と残る対象を表示する", () => {
   const unchanged = formatSuccess("update", { changes: [], notices: [] });
   assert.match(unchanged, /変更はありません/);
+  for (const text of ["codex exec", "worktree", "node .agent-hooks/cc-sdd-bootstrap/install-cc-sdd.mjs"]) assert.ok(!unchanged.includes(text), text);
   const removed = formatSuccess("uninstall", { changes: [{ kind: "delete", path: ".claude/settings.json" }], notices: [], removed: [".claude/settings.json", "CLAUDE.md"] });
   for (const text of ["外した", ".claude/settings.json", "CLAUDE.md", ".cc-sdd-bootstrap.json", ".agent-hooks/cc-sdd-bootstrap/", ".gitignore"]) assert.ok(removed.includes(text), text);
+  for (const text of ["codex exec", "worktree", "node .agent-hooks/cc-sdd-bootstrap/install-cc-sdd.mjs"]) assert.ok(!removed.includes(text), text);
 });
 
 test("中止理由ごとにファイル・問題・直し方を表示する", () => {
