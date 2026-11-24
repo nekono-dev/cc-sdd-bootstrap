@@ -63,7 +63,7 @@
   - _Boundary: Delegate_
   - _Depends: 2.1, 2.3, 2.4_
   - _Requirements: 1.4, 1.8, 1.9, 1.10, 1.12, 2.1, 2.2, 2.3, 4.7, 4.8, 5.7_
-- [ ] 3.3 実機で、フックによる子の起動の拒否と通過を早めに確かめる
+- [x] 3.3 実機で、フックによる子の起動の拒否と通過を早めに確かめる
   - 前提: 認証済みの `claude`・`codex`、一時の Codex の設定でのフックの信頼の承認（検証専用の承認の省略を使う）。呼び出し元の推論量の環境変数は子の CLI に渡さない
   - 一時のリポジトリに有効な設定（Sonnet だけ推論量の上限 medium）を置き、役割の規則・フック・入口のスクリプトを写して 3.1 のフックを手で登録し、2.3 の中身の定義を置いて、実際の `claude -p`・`codex exec` で確かめる（`poc/subagent-defs/run.mjs` を更新する）。Claude Code は、名前を付けない起動が拒否され、Haiku の定義が通り、Haiku（high）の定義を `model: sonnet` で上書きした起動がフックの推論量の理由で拒否される。Codex は、モデルを持たない実装の定義を `agent_type` に指定し `model` を省いた起動が拒否され、`--resolve-model` で得たモデルと推論量を `model`・`reasoning_effort` に明示し `fork_turns` を `none` にした起動が通って、子の応答と子の記録で指定したモデル・推論量で動いたことが確かめられ、指揮役 gpt-6.1-sol・子 Terra・Codex の推論量の上限 high の組で、推論量 high では通り、推論量だけを xhigh（Terra が受け付ける値）に変えるとフックの推論量の理由で拒否される
   - 拒否はフックの理由の文言（推論量の上限など）で見分け、ツール側の入力の拒否と区別して記録する。結果を `poc/subagent-defs/result.md` に記録し、確かめた項目がすべて OK になる。食い違いがあれば実装を進めず、設計に戻す
@@ -150,3 +150,4 @@
 - 2.4: `buildCliCommand(target, {permission, effort}, modelName, root)` の effort は解決済みの値を渡す。`effortSupported(vendor, effort, levels)` は Codex で一覧（配列）があればその内容だけで判定する。2.3 の `CLAUDE_EFFORTS` は `effortSupported` に統一済み。
 - 3.1: 設定は ENOENT だけ既定で判定し、ほかの読み取りの失敗は起動を拒否する。会話の記録が読めなければ指揮役を不明として続ける。定義の名前は `^[A-Za-z0-9_][A-Za-z0-9_.-]*$` だけ受け付ける。TOML は最上位の `model`・`model_reasoning_effort`（引用符付きのキーも）だけを読む。役割定義のファイルの EACCES などは標準エラーに出して通す。
 - 3.2: `delegate.mjs` の `--resolve-model` は標準出力に 1 行 `<名前> <推論量>`、知らせは標準エラーに `知らせ: …`、止める場合は `delegate: <理由>` で終了 2。通常の指定は確かめを通った後、今は「子の起動はまだ作られていません（タスク 3.4）」で終了 2（3.4 で起動に置き換える）。`decide()` の戻り値（name・effort・target・permission）は確かめ済みで `buildCliCommand` に渡せる。Claude Code の組み込みの子の名前を求める指定に `--model`・`--effort` を付けると終了 2（Codex の組み込みの子では反映する）。入口の `tiersOf` は subagent-roles の格の表の重複（`mergedTiers` が未公開のため）。
+- 3.3: 実機で Claude Code・Codex のフックの拒否と通過を確認（`poc/subagent-defs/` の d・e、OK 13・NG 0）。途中で、Codex のサンドボックスでは Node の `spawnSync` が子の標準入力のパイプを閉じるときに EPERM が `r.error` に載ることが分かり（`codex debug models` は成功しているのに一覧を捨てていた）、`fetchCatalog` の標準入力を使わない形に直した。3.4 で子の CLI に指示を渡すときも、パイプに書いて閉じる形を避け、ファイルを開いた記述子を標準入力にするなど同じ EPERM を起こさない形にする。Codex の子の記録は `session_meta` の `agent_path`（`/root/<task_name>`）と `parent_thread_id` で起動と対応づけられる（Codex 0.167.0）。

@@ -21,7 +21,7 @@ const MODELS = { models: [
 ] };
 
 // 一時の根に入口と役割の規則を写し、偽の codex・claude を PATH の先頭に置く
-function fixture(t, config, { debugFails = false, models = MODELS } = {}) {
+function fixture(t, config, { debugFails = false, models = MODELS, debugScript = null } = {}) {
   const root = mkdtempSync(path.join(os.tmpdir(), "delegate-test-"));
   const hooks = path.join(root, ".agent-hooks/cc-sdd-bootstrap");
   mkdirSync(hooks, { recursive: true });
@@ -35,7 +35,7 @@ function fixture(t, config, { debugFails = false, models = MODELS } = {}) {
   writeFileSync(path.join(root, "models.json"), JSON.stringify(models));
   for (const name of ["codex", "claude"]) {
     const file = path.join(bin, name);
-    writeFileSync(file, `#!/bin/sh\necho "${name} $*" >> "${log}"\nif [ "${name}" = codex ] && [ "$1" = debug ] && [ "$2" = models ]; then\n  ${debugFails ? "exit 1" : `cat "${path.join(root, "models.json")}"`}\nfi\nexit 0\n`);
+    writeFileSync(file, `#!/bin/sh\necho "${name} $*" >> "${log}"\nif [ "${name}" = codex ] && [ "$1" = debug ] && [ "$2" = models ]; then\n  ${debugScript ?? (debugFails ? "exit 1" : `cat "${path.join(root, "models.json")}"`)}\nfi\nexit 0\n`);
     chmodSync(file, 0o755);
   }
   writeFileSync(path.join(root, "instr.md"), "指示\n");
@@ -289,4 +289,28 @@ test("--effort を採用した実行では、使われなかった役割設定�
   const r = resolve(f, "codex", "review", "gpt-6.1-terra", "--effort", "low");
   assert.equal(r.stdout, "sonnet low\n");
   assert.doesNotMatch(r.stderr, /知らせ/);
+});
+
+// Codex の制限付きサンドボックスでは、子の標準入力のパイプを閉じる処理が失敗して spawnSync の error に載る。標準入力を使わない形で起動すること
+// 標準入力が /dev/null か（dev・ino・rdev の比較。/proc を使わないので Linux 以外でも動く）。/dev/null なら終了 0、それ以外（パイプなど）なら 1
+const stdinIsDevNull = `node -e 'const fs=require("fs");const a=fs.fstatSync(0),b=fs.statSync("/dev/null");process.exit(a.dev===b.dev&&a.ino===b.ino&&a.rdev===b.rdev?0:1)'`;
+
+test("モデルの一覧の取得は標準入力を子に渡さない（パイプの標準入力だと失敗する codex でも一覧を得る）", (t) => {
+  const f = fixture(t, undefined, { debugScript: `if ${stdinIsDevNull}; then cat "$(dirname "$0")/../models.json"; else exit 1; fi` });
+  const r = resolve(f, "codex", "implement", "gpt-6.2-sol");
+  assert.equal(r.status, 0, r.stderr);
+  assert.equal(r.stdout, "gpt-6.1-terra medium\n");
+  assert.deepEqual(launches(f), []);
+});
+
+test("モデルの一覧の取得: 有効な JSON を出しても非ゼロ終了、または終了 0 でも壊れた JSON なら、一覧なしとして止まる", (t) => {
+  for (const script of [
+    'cat "$(dirname "$0")/../models.json"; exit 1',
+    'echo "{broken"; exit 0',
+  ]) {
+    const f = fixture(t, undefined, { debugScript: script });
+    const r = resolve(f, "codex", "implement", "gpt-6.2-sol");
+    assert.equal(r.status, 2, r.stdout);
+    assert.deepEqual(launches(f), []);
+  }
 });

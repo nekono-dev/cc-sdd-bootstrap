@@ -66,7 +66,8 @@ async function loadConfig() {
 
 /** codex debug models の出力から、名前・表示対象・優先度・受け付ける推論量の一覧を作る。失敗なら null */
 function fetchCatalog() {
-  const r = spawnSync("codex", ["debug", "models"], { encoding: "utf8", timeout: 30000 });
+  // 標準入力は使わない。Codex の制限付きサンドボックスでは、標準入力のパイプを閉じる処理が失敗して error に載り、一覧を捨ててしまうため
+  const r = spawnSync("codex", ["debug", "models"], { encoding: "utf8", timeout: 30000, stdio: ["ignore", "pipe", "pipe"] });
   if (r.error || r.status !== 0) return null;
   try {
     const value = JSON.parse(r.stdout);
