@@ -63,9 +63,9 @@ cc-sdd（Kiro 方式の仕様駆動開発のスキル集）の運用一式を、
 
 ## Existing Spec Updates
 
-- [ ] installer-core -- 要件に戻して削る（記録・改変検出・汎用の取り除き計画・対話・汎用の契約を外す）。Codex への配置（フックの設定・運用の区画の文章）を足す。利用者の CLAUDE.md を保つ管理区画はやめる. Dependencies: none
-- [ ] session-install -- 要件に戻して削る（keepTemplates・全ファイルの内容照合を外す）。起動前（準備スクリプト）と手元の初回の導入、Codex 向けの導入を足す. Dependencies: installer-core
-- [ ] kiro-gate -- 要件に戻して先読みの強制だけに削る。Codex への対応を足す. Dependencies: session-install
+- [x] installer-core -- 要件に戻して削る（記録・改変検出・汎用の取り除き計画・対話・汎用の契約を外す）。Codex への配置（フックの設定・運用の区画の文章）を足す。利用者の CLAUDE.md を保つ管理区画はやめる. Dependencies: none
+- [x] session-install -- 要件に戻して削る（keepTemplates・全ファイルの内容照合を外す）。起動前（準備スクリプト）と手元の初回の導入、Codex 向けの導入を足す. Dependencies: installer-core
+- [x] kiro-gate -- 要件に戻して先読みの強制だけに削る。Codex への対応を足す. Dependencies: session-install
 
 ## Direct Implementation Candidates
 
@@ -83,3 +83,4 @@ cc-sdd（Kiro 方式の仕様駆動開発のスキル集）の運用一式を、
 - 2026-11-20〜22: subagent-model-policy・codex-delegation を `dev/codex-support` で実装したが、実機の検証のたびに厳密さのための改訂が重なった。
 - 2026-11-22: 単純化の discovery で、上の「単純化の決定」のとおり見直した。
 - 2026-11-23: 実装中に要件の改訂（subagent-delegation 5.13・5.14）と実機での新しい事実（Codex は追加の文脈に必ず従う）が見つかり、実装が止まった。実現性を設計・タスクの段階で根拠付きで確かめるため、feasibility-review を足した（利用者の指示。cc-sdd には手を入れず外から指示する）。
+- 2026-11-24: 改訂した installer-core・session-install・kiro-gate を実装し、develop に取り込んだ（#3）。worktree の中の Codex のフックの道筋を確かめた（`poc/codex-worktree-hooks/`）。
