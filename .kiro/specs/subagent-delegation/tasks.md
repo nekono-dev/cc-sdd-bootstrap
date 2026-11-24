@@ -87,7 +87,7 @@
   - _Depends: 1.2, 3.3_
   - _Requirements: 5.15_
 - [ ] 4. 統合と実機の確認
-- [ ] 4.1 カタログに subagent-delegation のスクリプト・フック・生成物を登録する（統合）
+- [x] 4.1 カタログに subagent-delegation のスクリプト・フック・生成物を登録する（統合）
   - 導入コマンドの結果の表示で、ファイルの差分が無く「変更はありません」で終わる場合にも、設定から作るファイルの知らせを表示するよう直す
   - カタログに、子の起動を確かめるフックと別の提供元の入口のスクリプト、両ツールの子の起動の前のフック（Claude Code は子の起動だけに絞る）、設定から作るファイル（役割定義の中身と、Claude Code・Codex の定義の道筋の型）を登録し、配る範囲に 2 つのスクリプトを足す
   - カタログの試験と、一時の git リポジトリで `init` で設定を作ってからの `update` で、フックが両ツールの設定に登録され、役割定義のファイルが系統ごとに作られ（Codex は実装だけ）、子の上限を下げて `update` すると上の系統の定義が消え、知らせが表示されること、定義のファイルに差分が無く知らせだけが生じる設定の変更でも `update` が知らせを表示すること（「変更はありません」で知らせを落とさない）、配る範囲の試験が通ることが確かめられ、試験一式が通る
@@ -153,3 +153,4 @@
 - 3.3: 実機で Claude Code・Codex のフックの拒否と通過を確認（`poc/subagent-defs/` の d・e、OK 13・NG 0）。途中で、Codex のサンドボックスでは Node の `spawnSync` が子の標準入力のパイプを閉じるときに EPERM が `r.error` に載ることが分かり（`codex debug models` は成功しているのに一覧を捨てていた）、`fetchCatalog` の標準入力を使わない形に直した。3.4 で子の CLI に指示を渡すときも、パイプに書いて閉じる形を避け、ファイルを開いた記述子を標準入力にするなど同じ EPERM を起こさない形にする。Codex の子の記録は `session_meta` の `agent_path`（`/root/<task_name>`）と `parent_thread_id` で起動と対応づけられる（Codex 0.167.0）。
 - 3.4: 子は `stdio: [指示のファイルの記述子, "inherit", "inherit"]`・`cwd: 根` で起動し、指示のファイルは通常のファイルか `fstatSync` で確かめる。`claude` を起動するときだけ `CLAUDE_CODE_EFFORT_LEVEL`・`CLAUDE_EFFORT`・`CLAUDECODE`・`CLAUDE_CODE_ENTRYPOINT` を外す。`--to` は `same` だけ（別の提供元は役割設定の `provider` で選ぶ）。`--to same` と委任先に属さないその実行の `--model` の併用は終了 2。
 - 3.5: 区画の書き直しは `decideInstall` の `rewrite-section`（材料 `sectionStale`）と `performSectionRewrite`（導入中の印を取って読み直し、文書ごとに一時ファイル → rename、配置物の文章の目印を書き込む直前に検証）。書き直しの経路の失敗はすべて `SectionRewriteError` で、失敗の記録を作らない。4.1 でカタログに登録するまで、`node bin/cc-sdd-bootstrap.mjs update` は未登録の配置物（delegate.mjs・subagent-check.mjs）を消すので実行しない。
+- 4.1: カタログに generated を足したので、計画の試験の snapshot には生成済みの役割定義（generatedFiles）を含める。既定の設定でも Codex の読み取り専用の役割の知らせが update のたびに出る。差分が無くても知らせは「変更はありません。」の後に表示される。別の提供元（Codex）が利用上限で一時的に使えなくなることがある（2026-11-24 16:15 UTC まで）。

@@ -157,3 +157,20 @@ test("運用区画に標準文書の見出しを複製せず、道筋と目印�
     }
   }
 });
+
+test("subagent-delegation のスクリプト・フック・生成物が登録され、配る範囲に含まれる", () => {
+  for (const name of ["subagent-check.mjs", "delegate.mjs", "subagent-roles.mjs"]) {
+    const file = `${DEPLOY_DIR}/${name}`;
+    assert.ok(catalog.files.some((item) => item.path === file), file);
+    assert.ok(pkg.files.includes(file), file);
+  }
+  const claude = catalog.hooks.find((hook) => hook.script === "subagent-check.mjs" && hook.tools.includes("claude"));
+  assert.deepEqual(claude, { tools: ["claude"], event: "PreToolUse", matcher: "Agent", script: "subagent-check.mjs", args: ["pre-tool-use", "--tool", "claude"], timeout: 10 });
+  const codex = catalog.hooks.find((hook) => hook.script === "subagent-check.mjs" && hook.tools.includes("codex"));
+  assert.deepEqual(codex, { tools: ["codex"], event: "PreToolUse", script: "subagent-check.mjs", args: ["pre-tool-use", "--tool", "codex"], timeout: 10 });
+  const generated = catalog.generated.find((item) => item.id === "subagent-definitions");
+  assert.deepEqual(generated.owns, [".claude/agents/cc-sdd-*.md", ".codex/agents/cc_sdd_*.toml"]);
+  const rendered = generated.render({});
+  assert.equal(rendered.files.filter((file) => file.path.startsWith(".claude/agents/")).length, 12);
+  assert.deepEqual(rendered.files.filter((file) => file.path.startsWith(".codex/agents/")).map((file) => file.path), [".codex/agents/cc_sdd_implement.toml"]);
+});

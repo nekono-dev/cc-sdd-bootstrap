@@ -91,6 +91,7 @@ test("同じ状態を再計算すると変更は空", () => {
   current.deployDirFiles = { ...current.sourceFiles };
   for (const c of first.changes) {
     if (c.kind !== "write") continue;
+    if (/^\.(claude|codex)\/agents\//.test(c.path)) current.generatedFiles = { ...current.generatedFiles, [c.path]: Buffer.from(c.content) };
     if (c.path.startsWith(".agent-hooks/cc-sdd-bootstrap/")) current.deployDirFiles[c.path] = Buffer.from(c.content);
     if (c.path === ".cc-sdd-bootstrap.json") current.config = c.content;
     else if (c.path === ".claude/settings.json") current.claudeSettings = c.content;
@@ -105,6 +106,7 @@ test("update は補う項目がなければ設定の書式を変えない", () =
   const snapshot = { ...empty(), config: '{"format":1,"sample":{"enabled":true}}\n' };
   snapshot.deployDirFiles = { ...snapshot.sourceFiles };
   for (const change of initialized.changes) {
+    if (/^\.(claude|codex)\/agents\//.test(change.path)) snapshot.generatedFiles = { ...snapshot.generatedFiles, [change.path]: Buffer.from(change.content) };
     if (change.path.startsWith(".agent-hooks/cc-sdd-bootstrap/")) snapshot.deployDirFiles[change.path] = Buffer.from(change.content);
     if (change.path === ".claude/settings.json") snapshot.claudeSettings = change.content;
     else if (change.path === ".codex/hooks.json") snapshot.codexHooks = change.content;
@@ -154,6 +156,7 @@ test("両ツールの運用区画を配置し、同じ内容なら再配置し�
   const current = { ...empty(), config: first.changes.find((c) => c.path === ".cc-sdd-bootstrap.json").content };
   current.deployDirFiles = { ...current.sourceFiles };
   for (const change of first.changes) {
+    if (/^\.(claude|codex)\/agents\//.test(change.path)) current.generatedFiles = { ...current.generatedFiles, [change.path]: Buffer.from(change.content) };
     if (change.path === ".claude/settings.json") current.claudeSettings = change.content;
     if (change.path === ".codex/hooks.json") current.codexHooks = change.content;
     if (change.path === ".gitignore") current.gitignore = change.content;
