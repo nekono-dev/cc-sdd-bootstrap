@@ -59,7 +59,7 @@ cc-sdd（Kiro 方式の仕様駆動開発のスキル集）の運用一式を、
   - フックの登録: Claude Code（`.claude/settings.json`）と Codex のフックの設定の両方に、installer-core が自分の印のある項目だけを書く。
   - 運用の区画: CLAUDE.md と AGENTS.md は cc-sdd の導入で標準の文書として作り直し、コミットしない。installer-core が区画の文章を配置し、session-install が導入のたびに末尾へ書き足す。中身は session-install・kiro-gate・subagent-delegation の案内と、プロジェクト独自の決まり（`.kiro/steering/`）を読む案内（2026-11-23、利用者の指示）。
   - ツール起動前のフック: kiro-gate と subagent-delegation が同じ時点で動く。
-  - git の worktree での Codex のフック: Codex は worktree の中でも本体の checkout の `.codex/hooks.json` を読み、スクリプトは worktree 側のものが動く（`poc/codex-worktree-hooks/`、2026-11-24）。本体の checkout が未導入か古い版の間は、worktree の Codex でフックが動かない（kiro-gate・subagent-delegation の強制も効かず、止まらずに通る）。各 spec はこの前提で設計を見直す。
+  - git の worktree での Codex のフック: Codex は worktree の中でも本体の checkout の `.codex/hooks.json` を読み、スクリプトは worktree 側のものが動く（`poc/codex-worktree-hooks/`、2026-11-24）。本体の checkout が未導入か古い版の間は、worktree の Codex でフックが動かない（kiro-gate・subagent-delegation の強制も効かず、止まらずに通る）。各 spec はこの前提で設計を見直す。このリポジトリで新しいフックを足す spec では、develop に取り込むまでの一時的な状態として扱い、自己適用の後の確認（普通の checkout の写しと、取り込み後の worktree）をタスクに置く（2026-11-24、利用者の指示）。
 
 ## Existing Spec Updates
 

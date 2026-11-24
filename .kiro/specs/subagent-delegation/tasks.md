@@ -2,6 +2,10 @@
 
 > カタログへの登録（3.1）は、installer-core がカタログを新しい形に切り替え、設定から作るファイルを扱えるようになった後（installer-core 3.3・5.1）に行う。
 
+> 改訂（2026-11-24、利用者の指示）: 自己適用の後の確認 3.3 を足した。このリポジトリの worktree で Codex のフックが動かないのは、本体の checkout（develop）に subagent-delegation がまだ導入されていない間の一時的な状態として扱い、自己適用と develop への取り込みの後に確かめる。
+>
+> 暫定の運用（2026-11-24、利用者の指示）: この spec が自己適用されるまで、このリポジトリの作業では design.md の役割表（要件 1.3・1.4・5.x）を指揮役が手で守る。指揮役が格 3（Opus）のとき、実装・修正は Claude Code の子（sonnet、`model` を明示）、レビュー・デバッグの原因調査は `codex exec --sandbox read-only`（astra 系統の最新）、調査は `codex exec --sandbox read-only`（luna 系統の最新）で行い、レビューは作業単位ごとに 1 回とする。
+
 - [ ] 1. 設定の項目と役割の規則（純粋）
 - [ ] 1.1 設定の項目定義を役割表に置き換える
   - 旧項目（役割ごとのモデルの対応、Codex を使うかどうか）を外し、役割表の項目（既定は空）を足す
@@ -64,3 +68,11 @@
   - 一時のリポジトリに配置物・フック・生成した役割定義を置き、配置したスクリプトで確かめる（`poc/subagent-defs/run.mjs` を更新する）。Claude Code は、定義の無い型のモデル未指定の起動が拒否され、モデル付きの定義（実装）の起動と、モデルを明示した起動が通る。Codex は、生成した定義（モデル無し）をモデル未指定で呼ぶと拒否され、名前だけを求める指定で得た名前を明示すると通る
   - 入口で、Claude Code から Codex（読み取り専用・書き込み可）と、Codex から Claude Code への委任が動き、応答と成否が返ることを確かめ、結果を記録する
   - _Requirements: 3.1, 3.2, 4.1, 4.6, 5.11_
+- [ ] 3.3 自己適用の後に、このリポジトリで子の起動の確認と委任を確かめる
+  - 前提: 3.1・3.2 の変更がコミットされていること、認証済みの `claude`・`codex`
+  - この作業ブランチの worktree で `node bin/cc-sdd-bootstrap.mjs update` を実行して自己適用し、`.claude/settings.json`・`.codex/hooks.json` に子の起動の確認のフックが登録され、`.claude/agents/cc-sdd-*.md`・`.codex/agents/cc_sdd_*.toml` が生成されることを確かめ、結果をコミットする
+  - Claude Code はこの worktree で起動し、モデル未指定の子の起動が拒否され、モデルを明示した起動と実装の役割定義の起動が通ることを確かめる。Codex はこの作業ブランチを `~/.cache/cc-sdd-bootstrap-scratch/` の下に普通の checkout として写した場所で起動し、同じことを確かめる（worktree の Codex は本体の checkout の登録に従うため。installer-core 7.3 と同じ方法）
+  - develop への取り込みの後に、本体の checkout から作った worktree の Codex でも子の起動の確認のフックが動くことを確かめる。取り込み前に確かめられない項目は、その旨を結果に書く
+  - 結果を `poc/self-apply/result.md` に追記し、確かめた項目がすべて OK になる
+  - _Depends: 3.1, 3.2_
+  - _Requirements: 2.1, 3.1, 3.2, 3.3_
