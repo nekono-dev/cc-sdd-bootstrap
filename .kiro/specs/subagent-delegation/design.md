@@ -414,7 +414,7 @@ function resolveModelName(model: string, vendor: Vendor, cfg: SubagentsConfig, c
 - 処理: 設定を読み（読めない・誤りがあれば理由を返して終了 2、1.8・1.12）、`resolveRole` で解決する。委任先は役割の `provider` で決まる提供元。`provider` が `same` の役割（実装・修正）は組み込みの子を使う役割なので、その旨を返して起動しない。`--to same` のときは同じ提供元の CLI で起動する（5.7）。`--effort`・`--model` はその実行だけ役割の設定を上書きする（1.6）。役割設定で明示した推論量は `resolveRole` が系統の上限まで下げ、そのことを標準エラーに知らせる。
 - 確かめること（どれかに当たれば理由と終了 2、4.8・2.3）: `checkChildModel`（格 4・子の上限より上）、`--orchestrator-model` があれば `compareTier`（同じ系統・上の格）、その実行の `--effort` が `effortCapFor` より上（役割設定の推論量は下げ済みなので、拒否するのは `--effort` の指定だけ）、`effortSupported` が偽（例 Claude Code に `ultra`、Luna に `ultra`）。
 - モデルの名前: 委任先が Codex なら `codex debug models` を実行して一覧（受け付ける推論量を含む）を得て（失敗なら一覧なし）、`resolveModelName` で起動の名前を求める（1.9）。
-- 起動: `buildCliCommand` の引数で、指示のファイルを標準入力に渡し、`cwd` を根にする（4.3）。子の標準出力・標準エラーはそのまま流す。
+- 起動: `buildCliCommand` の引数で、指示のファイルを標準入力に渡し、`cwd` を根にする（4.3）。Claude Code の子のプロセスの環境からは `CLAUDE_CODE_EFFORT_LEVEL` などの推論量の環境変数を外す（`--effort` より優先され、確かめた推論量とずれるため。`poc/subagent-effort/`）。子の標準出力・標準エラーはそのまま流す。
 - 結果: 子の終了コードをそのまま返し、最後に 1 行「委任先の終了: 成功／失敗（終了コード）」を標準エラーに出す（4.6）。別の提供元・モデル・推論量・権限でやり直さない（4.7）。
 
 ### カタログの項目（`lib/catalog.mjs` に足す）
