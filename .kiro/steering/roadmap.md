@@ -73,6 +73,7 @@ cc-sdd（Kiro 方式の仕様駆動開発のスキル集）の運用一式を、
 ## Specs (dependency order)
 
 - [ ] subagent-delegation -- 役割表、両ベンダのエージェント定義の生成、子のモデルの拒否（未指定・指揮役と同じ）、別ベンダの CLI を起動する入口と委任の手順の文章. Dependencies: installer-core
+- [ ] feasibility-review -- 設計・タスクのレビュー（`/kiro-validate-design`・`/kiro-spec-tasks`）に実現性の観点（一次資料か実機の PoC による根拠）を外から渡し、通るまで `/kiro-spec-tasks`・`/kiro-impl` を止める。実機の確認をタスク計画の最初に置く文章. Dependencies: installer-core, kiro-gate
 
 ## 経緯
 
@@ -80,3 +81,4 @@ cc-sdd（Kiro 方式の仕様駆動開発のスキル集）の運用一式を、
 - 2026-11-19〜21: installer-core・session-install を実装して develop に取り込んだ。kiro-gate はタスクまで承認した。
 - 2026-11-20〜22: subagent-model-policy・codex-delegation を `dev/codex-support` で実装したが、実機の検証のたびに厳密さのための改訂が重なった。
 - 2026-11-22: 単純化の discovery で、上の「単純化の決定」のとおり見直した。
+- 2026-11-23: 実装中に要件の改訂（subagent-delegation 5.13・5.14）と実機での新しい事実（Codex は追加の文脈に必ず従う）が見つかり、実装が止まった。実現性を設計・タスクの段階で根拠付きで確かめるため、feasibility-review を足した（利用者の指示。cc-sdd には手を入れず外から指示する）。
