@@ -141,6 +141,61 @@ test("状態の保存に失敗したときも日本語の理由を出して通�
   assert.match(result.stderr, /状態の保存に失敗しました/);
 });
 
+test("自然文の保存に失敗しても前の依頼の強制を解除する", (t) => {
+  if (typeof process.getuid === "function" && process.getuid() === 0) {
+    t.skip("root では読み取り専用の権限を再現できません");
+    return;
+  }
+  const f = fixture(t);
+  hook(f, "session-start", "claude", { session_id: "clear-on-error" });
+  // 一覧外（未読で始まる）にするため、手順書はセッション開始の後に作る
+  skill(f.root, "claude", "kiro-x");
+  const prompt = hook(f, "user-prompt-submit", "claude", { session_id: "clear-on-error", prompt: "/kiro-x" });
+  assert.notEqual(prompt.stdout, "");
+  const stateDirectory = path.dirname(stateFile(f, f.root, "clear-on-error"));
+  chmodSync(stateDirectory, 0o555);
+  let result;
+  try {
+    result = hook(f, "user-prompt-submit", "claude", { session_id: "clear-on-error", prompt: "通常の依頼" });
+  } finally {
+    // 後片付けの前に状態ディレクトリの権限を戻す
+    chmodSync(stateDirectory, 0o755);
+  }
+  assert.equal(result.status, 0);
+  assert.match(result.stderr, /状態の保存に失敗しました/);
+  const allowed = hook(f, "pre-tool-use", "claude", { session_id: "clear-on-error", tool_name: "Bash", tool_input: { command: "echo hello" } });
+  assert.equal(allowed.stdout, "");
+});
+
+test("新しい依頼の保存に失敗しても古い依頼の強制を残さない", (t) => {
+  if (typeof process.getuid === "function" && process.getuid() === 0) {
+    t.skip("root では読み取り専用の権限を再現できません");
+    return;
+  }
+  const f = fixture(t);
+  hook(f, "session-start", "claude", { session_id: "replace-on-error" });
+  // 一覧外（未読で始まる）にするため、手順書はセッション開始の後に作る
+  skill(f.root, "claude", "kiro-x");
+  skill(f.root, "claude", "kiro-y");
+  const prompt = hook(f, "user-prompt-submit", "claude", { session_id: "replace-on-error", prompt: "/kiro-x" });
+  assert.notEqual(prompt.stdout, "");
+  const stateDirectory = path.dirname(stateFile(f, f.root, "replace-on-error"));
+  chmodSync(stateDirectory, 0o555);
+  let result;
+  try {
+    result = hook(f, "user-prompt-submit", "claude", { session_id: "replace-on-error", prompt: "/kiro-y" });
+  } finally {
+    // 後片付けの前に状態ディレクトリの権限を戻す
+    chmodSync(stateDirectory, 0o755);
+  }
+  assert.equal(result.status, 0);
+  assert.match(result.stderr, /状態の保存に失敗しました/);
+  const denied = hook(f, "pre-tool-use", "claude", { session_id: "replace-on-error", tool_name: "Bash", tool_input: { command: "echo hello" } });
+  assert.notEqual(denied.stdout, "");
+  assert.match(JSON.parse(denied.stdout).hookSpecificOutput.permissionDecisionReason, /kiro-y/);
+  assert.doesNotMatch(JSON.parse(denied.stdout).hookSpecificOutput.permissionDecisionReason, /kiro-x/);
+});
+
 test("同じ一時領域でも別セッションと別の根の状態を混ぜない", (t) => {
   const first = fixture(t);
   const second = fixture(t);

@@ -68,6 +68,23 @@ async function saveState(file, state) {
   }
 }
 
+async function savePromptState(file, state) {
+  try {
+    await saveState(file, state);
+  } catch (error) {
+    try {
+      await fs.writeFile(file, JSON.stringify(state), { mode: 0o600 });
+    } catch (directWriteError) {
+      try {
+        await fs.rm(file, { force: true });
+      } catch (removeError) {
+        error.message += `（古い状態の後始末にも失敗しました: 直接保存: ${directWriteError.message}、削除: ${removeError.message}）`;
+      }
+    }
+    throw error;
+  }
+}
+
 async function listedSkills(tool) {
   const directory = path.join(root, tool === "claude" ? ".claude/skills" : ".agents/skills");
   let entries;
@@ -148,7 +165,7 @@ async function run() {
   if (!command) {
     if (state.turn !== null) {
       state.turn = null;
-      await saveState(file, state);
+      await savePromptState(file, state);
     }
     return;
   }
@@ -157,7 +174,7 @@ async function run() {
     if (!(await fs.stat(path.join(root, relative))).isFile()) throw Object.assign(new Error(), { code: "ENOENT" });
   } catch (error) {
     if (error.code === "ENOENT") {
-      if (state.turn !== null) { state.turn = null; await saveState(file, state); }
+      if (state.turn !== null) { state.turn = null; await savePromptState(file, state); }
       return;
     }
     throw error;
@@ -166,7 +183,7 @@ async function run() {
   const turn = { skill: command.skill, skillPath: relative,
     read: isExpandedInvocation(tool, command.sigil, command.skill, state.listed), stopBlocked: false };
   state.turn = turn;
-  await saveState(file, state);
+  await savePromptState(file, state);
   if (!turn.read) {
     process.stdout.write(`${JSON.stringify({ hookSpecificOutput: {
       hookEventName: "UserPromptSubmit", additionalContext: messageAdditionalContext(turn),
