@@ -26,6 +26,9 @@ import {
   messageConfigBroken,
   subagentsField,
   validateSubagents,
+  VENDOR_EFFORTS,
+  effortSupported,
+  buildCliCommand,
 } from "../.agent-hooks/cc-sdd-bootstrap/subagent-roles.mjs";
 
 // 検証の失敗の理由を 1 つにまとめて返す補助
@@ -822,4 +825,43 @@ test("renderDefinitions: 権限の設定が本文に反映される", () => {
   assert.match(cx.content, /編集/);
   const cr = renderDefinitions({ roles: { codex: { implement: { permission: "read-only" } } } });
   assert.ok(!cr.files.some((f) => f.path.includes("cc_sdd_implement")));
+});
+
+test("VENDOR_EFFORTS: Claude Code は 5 つ、Codex は 6 つ", () => {
+  assert.deepEqual(VENDOR_EFFORTS.claude, ["low", "medium", "high", "xhigh", "max"]);
+  assert.deepEqual(VENDOR_EFFORTS.codex, EFFORT_ORDER);
+});
+
+test("effortSupported: Claude Code は ultra を受け付けない", () => {
+  for (const e of ["low", "medium", "high", "xhigh", "max"]) assert.equal(effortSupported("claude", e, null), true);
+  assert.equal(effortSupported("claude", "ultra", null), false);
+  // Claude Code では一覧があっても使わない
+  assert.equal(effortSupported("claude", "ultra", ["low", "ultra"]), false);
+});
+
+test("effortSupported: Codex はモデルの一覧があればそれ、無ければ 6 つ", () => {
+  const luna = ["low", "medium", "high", "xhigh", "max"];
+  assert.equal(effortSupported("codex", "max", luna), true);
+  assert.equal(effortSupported("codex", "ultra", luna), false);
+  assert.equal(effortSupported("codex", "ultra", null), true);
+  assert.equal(effortSupported("codex", "low", null), true);
+  assert.equal(effortSupported("codex", "medium", ["high"]), false);
+});
+
+test("buildCliCommand: Codex の書き込み可・読み取り専用", () => {
+  const w = buildCliCommand("codex", { permission: "write", effort: "high" }, "gpt-6.1-sol", "/work");
+  assert.equal(w.command, "codex");
+  assert.deepEqual(w.args, ["-a", "never", "exec", "--sandbox", "workspace-write", "--model", "gpt-6.1-sol",
+    "--config", 'model_reasoning_effort="high"', "--cd", "/work", "-"]);
+  const r = buildCliCommand("codex", { permission: "read-only", effort: "medium" }, "m", "/r");
+  assert.equal(r.args[4], "read-only");
+  assert.equal(r.args[8], 'model_reasoning_effort="medium"');
+});
+
+test("buildCliCommand: Claude Code の書き込み可・読み取り専用", () => {
+  const w = buildCliCommand("claude", { permission: "write", effort: "high" }, "sonnet", "/work");
+  assert.equal(w.command, "claude");
+  assert.deepEqual(w.args, ["-p", "--model", "sonnet", "--effort", "high", "--permission-mode", "acceptEdits", "--allowedTools", "Bash"]);
+  const r = buildCliCommand("claude", { permission: "read-only", effort: "low" }, "haiku", "/r");
+  assert.deepEqual(r.args, ["-p", "--model", "haiku", "--effort", "low", "--tools", "Read,Grep,Glob"]);
 });

@@ -40,7 +40,7 @@
   - 定義の中身は指揮役のモデルを使わずに決まる
   - 単体試験で、上限なしで 12・Claude の上限 Sonnet で 8・Haiku で 4 の Claude Code の定義ができて Fable の定義が無いこと、各定義の推論量（既定で Haiku は high、Sonnet・Opus は medium、Sonnet だけ上限 low なら Sonnet だけ low）、説明文の中身、明示のモデルでその系統だけになり完全な名前がそのまま書かれること、Codex のモデルを明示した予備の役割は系統ごとに作られ知らせが出ること、同じ設定で 2.1 の解決と定義の推論量が一致すること、Codex の定義が実装だけでモデル・推論量を持たないこと、知らせが出ることが確かめられる
   - _Requirements: 1.13, 1.14, 2.1, 2.2, 2.3_
-- [ ] 2.4 別の提供元の CLI の引数と、推論量の受け付けの判定を作る
+- [x] 2.4 別の提供元の CLI の引数と、推論量の受け付けの判定を作る
   - Codex は承認なし・権限（読み取り専用・作業場所への書き込み）・モデル・推論量・作業場所・標準入力からの指示の引数、Claude Code は非対話・モデル・推論量と、読み取り専用なら読み取りの道具だけ、書き込み可なら編集の自動承認とシェルの許可の引数を組み立てる
   - 推論量をモデルが受け付けるかを、Claude Code は 5 つの値、Codex はモデルの一覧の受け付ける値（無ければ 6 つの値）で判定する
   - 単体試験で、両方向・両権限の引数と、Claude Code の ultra・Luna の ultra を受け付けない判定が確かめられる
@@ -147,3 +147,4 @@
 - 2.1: 推論量は `resolveEffort(explicitEffort, childModel, cfg)` → `{effort, notices}` で、確定した子のモデルから求め直す（2.3・3.2 はこれを使う）。`resolveRole(cfg, from, role, orchestratorModel, opts)` は `{ok:true, target, setting, selfImplement, effort, definitionName, notices}` か `{ok:false, reason}`。`setting.effort` は役割設定の元の値、実際の推論量は `effort`。`opts.to` は `"same"`・`"other"`。明示のモデルを置き換えるのは `to:"same"` で提供元が食い違うときだけ（知らせを返す）。`to:"other"` で食い違えば置き換えず理由を返す。`definitionName` は Claude の生成対象の系統のときだけ（対象外は null と知らせ）、Codex は書き込み可の役割だけ `cc_sdd_<役割>`。同じ提供元で候補が無ければ `selfImplement:true`（`defaultModelFor` は `{kind:"self"}`）。
 - 2.2: `decideSpawn({vendor, childModel, childEffort, orchestratorModel}, cfg)` の `vendor` は指揮役のツール（未指定の文言の `--from` に使う）。フック（3.1）はここに指揮役のツールを渡す。拒否の理由は 7 種ごとに固有の文言と、共通の案内の 4 条件を持つ。設定が壊れているときは `messageConfigBroken(problems)`。
 - 2.3: `renderDefinitions(cfg)` → `{files, notices}`。Claude Code の定義は `roles.claude` だけから作り、説明文は同じ提供元の `defaultModelFor` の逆引き（予備のレビューは Sonnet→haiku・Opus→sonnet・Fable→opus）。model は YAML の二重引用。本文は `instructionFor(role, permission)` で権限を反映。Claude Code が受け付ける推論量はファイル内の `CLAUDE_EFFORTS` で判定している（2.4 で作る受け付けの判定と統一する）。
+- 2.4: `buildCliCommand(target, {permission, effort}, modelName, root)` の effort は解決済みの値を渡す。`effortSupported(vendor, effort, levels)` は Codex で一覧（配列）があればその内容だけで判定する。2.3 の `CLAUDE_EFFORTS` は `effortSupported` に統一済み。

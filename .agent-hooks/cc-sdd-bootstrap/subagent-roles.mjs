@@ -581,8 +581,45 @@ export const subagentsField = {
   },
 };
 
-/** Claude Code が受け付ける推論量（ultra は受け付けない） */
-const CLAUDE_EFFORTS = ["low", "medium", "high", "xhigh", "max"];
+/** 提供元ごとの推論量（Claude Code は ultra を受け付けない） */
+export const VENDOR_EFFORTS = { claude: ["low", "medium", "high", "xhigh", "max"], codex: EFFORT_ORDER };
+
+/**
+ * 推論量をその提供元のモデルが受け付けるか。
+ * Claude Code は VENDOR_EFFORTS.claude。Codex はモデルの一覧の受け付ける値（あれば）、無ければ VENDOR_EFFORTS.codex。
+ * @param {Vendor} vendor
+ * @param {string} effort
+ * @param {string[] | null} catalogLevels
+ * @returns {boolean}
+ */
+export function effortSupported(vendor, effort, catalogLevels) {
+  if (vendor === "codex" && Array.isArray(catalogLevels)) return catalogLevels.includes(effort);
+  return (VENDOR_EFFORTS[vendor] ?? []).includes(effort);
+}
+
+/**
+ * 別の提供元の CLI を起動するコマンドと引数を組み立てる（起動はしない。指示は標準入力で渡す）。
+ * @param {Vendor} target
+ * @param {{ permission: string, effort: string }} setting
+ * @param {string} modelName
+ * @param {string} root 作業場所
+ * @returns {{ command: string, args: string[] }}
+ */
+export function buildCliCommand(target, setting, modelName, root) {
+  const readOnly = setting.permission === "read-only";
+  if (target === "codex") {
+    return {
+      command: "codex",
+      args: ["-a", "never", "exec", "--sandbox", readOnly ? "read-only" : "workspace-write", "--model", modelName,
+        "--config", `model_reasoning_effort="${setting.effort}"`, "--cd", root, "-"],
+    };
+  }
+  return {
+    command: "claude",
+    args: ["-p", "--model", modelName, "--effort", setting.effort,
+      ...(readOnly ? ["--tools", "Read,Grep,Glob"] : ["--permission-mode", "acceptEdits", "--allowedTools", "Bash"])],
+  };
+}
 
 const ROLE_LABELS = { implement: "実装・修正", review: "レビュー", investigate: "調査", debug: "デバッグの原因調査" };
 const ROLE_TASKS = {
@@ -674,7 +711,7 @@ export function renderDefinitions(cfg) {
       const name = definitionNameFor("claude", role, family);
       const e = resolveEffort(cfg?.roles?.claude?.[role]?.effort, model, cfg);
       notices.push(...e.notices.map((n) => `${name}: ${n}`));
-      if (!CLAUDE_EFFORTS.includes(e.effort)) {
+      if (!effortSupported("claude", e.effort, null)) {
         notices.push(`${name}: 推論量 ${e.effort} は Claude Code が受け付けないので、この定義は作りませんでした`);
         continue;
       }
