@@ -1,4 +1,4 @@
-import { readInstallConfig, parseState, buildState, FAILURE_RECORD, STATE_PATH, LOCK_PATH, RETRY_COMMAND, NPX_TIMEOUT_MS, STALE_LOCK_MS, decideInstall, removalTargets, buildManifest, npxArgs, messageInstalled, messageSkipped, messageReadSkillDirectly, messageBlocked, messageUsage } from "../.agent-hooks/cc-sdd-bootstrap/install-rules.mjs";
+import { readInstallConfig, parseState, buildState, FAILURE_RECORD, STATE_PATH, LOCK_PATH, RETRY_COMMAND, NPX_TIMEOUT_MS, STALE_LOCK_MS, decideInstall, removalTargets, buildManifest, npxArgs, messageInstalled, messageSkipped, messageReadSkillDirectly, messageBlocked, messageUsage, SECTION_BEGIN_MARKER, SECTION_END_MARKER, inspectSection, replaceSection, validateSectionText, messageSectionRewritten } from "../.agent-hooks/cc-sdd-bootstrap/install-rules.mjs";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
@@ -363,3 +363,51 @@ test("利用手順は準備スクリプトの 1 行・手元の初回の始め�
   assert.match(u, /通常の文章/);
 });
 
+
+// 区画だけの書き直し（subagent-delegation 5.15）
+const SECTION_TEXT = `${SECTION_BEGIN_MARKER}\n\n新しい文章\n\n${SECTION_END_MARKER}\n`;
+const OLD_SECTION = `${SECTION_BEGIN_MARKER}\n\n古い文章\n\n${SECTION_END_MARKER}\n`;
+
+test("区画の終わりの目印は installer-core と同じ値", async () => {
+  const { AGENT_SECTION_MARKERS } = await import("../lib/catalog.mjs");
+  assert.equal(SECTION_END_MARKER, AGENT_SECTION_MARKERS.end);
+});
+
+test("inspectSection: 区画が無ければ present=false、同じなら stale=false、違えば stale=true", () => {
+  assert.deepEqual(inspectSection("利用者の文章\n", SECTION_TEXT), { present: false, stale: false });
+  assert.deepEqual(inspectSection(`先頭\n${SECTION_TEXT}`, SECTION_TEXT), { present: true, stale: false });
+  assert.deepEqual(inspectSection(`先頭\n${OLD_SECTION}末尾\n`, SECTION_TEXT), { present: true, stale: true });
+  assert.deepEqual(inspectSection(`先頭\n${OLD_SECTION}`.replace(SECTION_END_MARKER, ""), SECTION_TEXT), { present: true, stale: true });
+});
+
+test("replaceSection: 区画の外を保って区画だけを置き換える。終わりの目印が無ければ末尾まで置き換える", () => {
+  assert.equal(replaceSection(`先頭\n${OLD_SECTION}末尾\n`, SECTION_TEXT), `先頭\n${SECTION_TEXT}末尾\n`);
+  assert.equal(replaceSection(`先頭\n${SECTION_BEGIN_MARKER}\n古い`, SECTION_TEXT), `先頭\n${SECTION_TEXT}`);
+});
+
+test("区画が古ければ区画だけ書き直す（rewrite-section）。導入が要る場合は導入を優先する", () => {
+  assert.deepEqual(decideInstall(facts({ sectionStale: { claude: false, codex: false } })), { action: "skip" });
+  assert.deepEqual(decideInstall(facts({ sectionStale: { claude: true, codex: false } })), { action: "rewrite-section", tools: ["claude"] });
+  assert.deepEqual(decideInstall(facts({ sectionStale: { claude: true, codex: true } })), { action: "rewrite-section", tools: ["claude", "codex"] });
+  assert.equal(decideInstall(facts({ sectionStale: { claude: true, codex: true }, sectionPresent: { claude: false, codex: true } })).action, "install");
+  assert.equal(decideInstall(facts({ sectionStale: { claude: true, codex: true }, failure: { present: true, text: "x" } })).action, "install");
+  assert.equal(decideInstall(facts({ sectionStale: { claude: true, codex: true }, state: null })).action, "install");
+  assert.equal(decideInstall(facts({ sectionStale: { claude: true, codex: true }, missingFiles: ["a"] })).action, "install");
+  assert.equal(decideInstall(facts({ sectionStale: { claude: true, codex: true }, lock: { present: true, ageMs: 1 } })).action, "busy");
+});
+
+test("区画の書き直しの文言", () => {
+  assert.match(messageSectionRewritten(["claude", "codex"]), /CLAUDE\.md.*AGENTS\.md|区画だけ/);
+  const blocked = messageBlocked({ kind: "section", detail: "書けない" });
+  assert.match(blocked, /書けない/);
+  assert.ok(blocked.includes(RETRY_COMMAND));
+});
+
+test("validateSectionText: 開始と終わりの目印が 1 つずつ正しい順であること", () => {
+  assert.equal(validateSectionText(SECTION_TEXT), null);
+  assert.equal(typeof validateSectionText(`${SECTION_BEGIN_MARKER}\n本文\n`), "string");
+  assert.equal(typeof validateSectionText(`${SECTION_END_MARKER}\n${SECTION_BEGIN_MARKER}\n`), "string");
+  assert.equal(typeof validateSectionText(`${SECTION_BEGIN_MARKER}\n${SECTION_BEGIN_MARKER}\n${SECTION_END_MARKER}\n`), "string");
+  assert.equal(typeof validateSectionText(`${SECTION_BEGIN_MARKER}\n${SECTION_END_MARKER}\n${SECTION_END_MARKER}\n`), "string");
+  assert.equal(typeof validateSectionText("本文のみ"), "string");
+});

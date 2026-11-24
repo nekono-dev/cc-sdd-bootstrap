@@ -6,7 +6,7 @@ import { pathToFileURL } from 'node:url';
 import { spawnSync } from 'node:child_process';
 import {
   CONFIG_FILE, UPDATE_COMMAND, FAILURE_RECORD, STATE_PATH, LOCK_PATH, INSTALL_DEADLINE_MS, STALE_LOCK_MS, SECTION_BEGIN_MARKER,
-  RETRY_COMMAND,
+  RETRY_COMMAND, inspectSection, replaceSection, validateSectionText, messageSectionRewritten,
   readInstallConfig, parseState, buildState, decideInstall,
   removalTargets, buildManifest, npxArgs, messageInstalled, messageSkipped, messageReadSkillDirectly, messageBlocked, messageUsage
 } from './install-rules.mjs';
@@ -18,6 +18,19 @@ const writeRecord = (rel, text) => {
   fs.mkdirSync(path.dirname(absolute(rel)), { recursive: true });
   fs.writeFileSync(absolute(rel), text, 'utf8');
 };
+const SECTION_FILES = { claude: '.agent-hooks/cc-sdd-bootstrap/agent-section-claude.md', codex: '.agent-hooks/cc-sdd-bootstrap/agent-section-codex.md' };
+const SECTION_DOCS = { claude: 'CLAUDE.md', codex: 'AGENTS.md' };
+
+/** 文書の区画の有無と、配置物の区画の文章との違い。文書を読めなければ区画なし、配置物を読めなければ違いなし（比べられない） */
+function readSectionState(tool, repoRoot) {
+  let docText;
+  try { docText = fs.readFileSync(absolute(SECTION_DOCS[tool], repoRoot), 'utf8'); }
+  catch { return { present: false, stale: false }; }
+  let sectionText = null;
+  try { sectionText = fs.readFileSync(absolute(SECTION_FILES[tool], repoRoot), 'utf8'); } catch { /* 比べられない */ }
+  return sectionText === null ? { present: docText.split(/\r?\n/).includes(SECTION_BEGIN_MARKER), stale: false } : inspectSection(docText, sectionText);
+}
+
 /** 導入判断に使う材料を一度に読み取る */
 export function readInstallFacts(repoRoot = root) {
   let configText = null;
@@ -38,12 +51,14 @@ export function readInstallFacts(repoRoot = root) {
   try { failure = { present: true, text: fs.readFileSync(absolute(FAILURE_RECORD, repoRoot), 'utf8') }; }
   catch (error) { if (error.code !== 'ENOENT') failure = { present: true, text: null }; }
   const missingFiles = state ? state.files.filter((rel) => !fs.existsSync(absolute(rel, repoRoot))) : [];
-  const sectionPresent = Object.fromEntries(['claude', 'codex'].map((tool) => {
-    const doc = tool === 'claude' ? 'CLAUDE.md' : 'AGENTS.md';
-    try { return [tool, fs.readFileSync(absolute(doc, repoRoot), 'utf8').split(/\r?\n/).includes(SECTION_BEGIN_MARKER)]; }
-    catch { return [tool, false]; }
-  }));
-  return { config, state, lock, failure, missingFiles, sectionPresent };
+  const sectionPresent = { claude: false, codex: false };
+  const sectionStale = { claude: false, codex: false };
+  for (const tool of ['claude', 'codex']) {
+    const states = readSectionState(tool, repoRoot);
+    sectionPresent[tool] = states.present;
+    sectionStale[tool] = states.stale;
+  }
+  return { config, state, lock, failure, missingFiles, sectionPresent, sectionStale };
 }
 /** 消す道筋の各区間にシンボリックリンクがあれば、削除前に失敗させる */
 function rejectLinkedPath(rel) {
@@ -95,7 +110,6 @@ function collectFiles() {
   return files;
 }
 
-const SECTION_FILES = { claude: '.agent-hooks/cc-sdd-bootstrap/agent-section-claude.md', codex: '.agent-hooks/cc-sdd-bootstrap/agent-section-codex.md' };
 const recordedInstallErrors = new WeakSet();
 
 function appendSection(tool, doc) {
@@ -117,8 +131,11 @@ function appendSection(tool, doc) {
 }
 
 class BusyInstallError extends Error {}
+/** 区画の書き直しの失敗。導入の失敗の記録は残さない（残すと次に cc-sdd 本体が入れ直されるため） */
+class SectionRewriteError extends Error {}
 
-function performInstall(config, { writeResult = true } = {}) {
+/** 導入中の印を排他的に取得する。取れなければ BusyInstallError */
+function acquireLock() {
   fs.mkdirSync(absolute(path.dirname(LOCK_PATH)), { recursive: true });
   let lockFd;
   try {
@@ -131,6 +148,54 @@ function performInstall(config, { writeResult = true } = {}) {
     throw error;
   }
   fs.closeSync(lockFd);
+}
+
+/**
+ * 古い区画だけを書き直す。導入中の印を取得し、取得後に状態を読み直して、まだ書き直しが要るときだけ書く。
+ * 文書ごとに一時のファイルへ書いてから置き換えるので、途中で失敗しても元の文書が残る。cc-sdd 本体と導入の記録には触れない。
+ * @returns {{ rewritten: boolean, message?: string }}
+ */
+function performSectionRewrite({ writeResult = true } = {}) {
+  try { acquireLock(); }
+  catch (error) {
+    if (error instanceof BusyInstallError) throw error;
+    throw new SectionRewriteError(`導入中の印を作れません: ${error.message}`);
+  }
+  try {
+    const facts = readInstallFacts();
+    const decision = decideInstall({ ...facts, lock: { present: false } });
+    // 再判定が書き直し以外なら書き直さず、呼び出し元の入口の扱いに回す
+    if (decision.action !== 'rewrite-section') return { rewritten: false, decision, facts };
+    for (const tool of decision.tools) {
+      const doc = SECTION_DOCS[tool];
+      const full = absolute(doc);
+      const tmp = `${full}.${process.pid}.tmp`;
+      try {
+        const sectionText = fs.readFileSync(absolute(SECTION_FILES[tool]), 'utf8');
+        const problem = validateSectionText(sectionText);
+        if (problem !== null) throw new Error(`${SECTION_FILES[tool]}: ${problem}`);
+        const next = replaceSection(fs.readFileSync(full, 'utf8'), sectionText);
+        if (next === null) throw new Error(`${doc} に運用の区画が見つかりません。`);
+        const mode = fs.statSync(full).mode & 0o777;
+        fs.writeFileSync(tmp, next, { encoding: 'utf8', mode });
+        fs.renameSync(tmp, full);
+      } catch (error) {
+        try { fs.rmSync(tmp, { force: true }); } catch { /* 後片付けの失敗は書き直しの失敗の理由を優先する */ }
+        throw new SectionRewriteError(`${doc} の運用の区画を書き直せません: ${error.message}`);
+      }
+    }
+    const message = messageSectionRewritten(decision.tools);
+    if (writeResult) writeOutput(`${message}\n`);
+    return { rewritten: true, message };
+  } catch (error) {
+    throw error instanceof SectionRewriteError ? error : new SectionRewriteError(`区画の書き直しで失敗しました: ${error.message}`);
+  } finally {
+    try { fs.rmSync(absolute(LOCK_PATH), { force: true }); } catch { /* 印を消せない場合は次の入力で古い印として扱われる */ }
+  }
+}
+
+function performInstall(config, { writeResult = true } = {}) {
+  acquireLock();
   const manifestPaths = [];
   try {
     writeRecord(FAILURE_RECORD, 'cc-sdd の導入中です。');
@@ -193,7 +258,9 @@ async function runSessionStart(tool) {
         ? 'cc-sdd の導入中、または前回の導入が中断されています。導入が完了するまで入力は止まります。'
         : decision.action === 'fail'
           ? `cc-sdd の導入は未完了です。最初の入力で導入を試み、完了するまで入力は止まります。理由: ${decision.reason}`
-          : 'cc-sdd はまだ揃っていません。最初の入力で導入します。';
+          : decision.action === 'rewrite-section'
+            ? '運用の区画の文章が新しくなっています。最初の入力で、区画だけを書き直します（cc-sdd 本体は入れ直しません）。'
+            : 'cc-sdd はまだ揃っていません。最初の入力で導入します。';
     writeOutput(`${JSON.stringify({ hookSpecificOutput: { hookEventName: 'SessionStart', additionalContext: context } })}\n`);
   } catch {
     // SessionStart の例外は知らせず、入力時のフックに判断を任せる。
@@ -203,13 +270,14 @@ async function runSessionStart(tool) {
 
 async function runUserPromptSubmit(tool) {
   let installing = false;
+  let rewriting = false;
   try {
     let input = '';
     for await (const chunk of process.stdin) input += chunk;
     const event = JSON.parse(input);
     if (typeof event.prompt !== 'string') throw new Error('入力 JSON に prompt 文字列がありません。');
-    const facts = readInstallFacts();
-    const decision = decideInstall(facts);
+    let facts = readInstallFacts();
+    let decision = decideInstall(facts);
     if (decision.action === 'skip') {
       process.exitCode = 0;
       return;
@@ -224,6 +292,34 @@ async function runUserPromptSubmit(tool) {
       process.exitCode = 0;
       return;
     }
+    if (decision.action === 'rewrite-section') {
+      rewriting = true;
+      const result = performSectionRewrite({ writeResult: false });
+      rewriting = false;
+      if (result.rewritten) {
+        const additionalContext = `${result.message}\n${messageReadSkillDirectly(tool, event.prompt)}`;
+        writeOutput(`${JSON.stringify({ hookSpecificOutput: { hookEventName: 'UserPromptSubmit', additionalContext } })}\n`);
+        process.exitCode = 0;
+        return;
+      }
+      // 印を取った後の再判定が書き直し以外なら、今の入口の扱いに回す
+      decision = result.decision;
+      facts = result.facts;
+      if (decision.action === 'skip') {
+        process.exitCode = 0;
+        return;
+      }
+      if (decision.action === 'fail') {
+        writeOutput(`${JSON.stringify({ decision: 'block', reason: messageBlocked({ kind: 'failed', detail: decision.reason }) })}\n`);
+        process.exitCode = 0;
+        return;
+      }
+      if (decision.action === 'busy') {
+        writeOutput(`${JSON.stringify({ decision: 'block', reason: messageBlocked({ kind: 'busy', stale: decision.stale }) })}\n`);
+        process.exitCode = 0;
+        return;
+      }
+    }
     installing = true;
     const installedMessage = performInstall(facts.config.config, { writeResult: false });
     const additionalContext = `${installedMessage}\n${messageReadSkillDirectly(tool, event.prompt)}`;
@@ -236,6 +332,8 @@ async function runUserPromptSubmit(tool) {
         stale = facts.lock.present && facts.lock.ageMs > STALE_LOCK_MS;
       } catch { /* 印を読めない場合も、止める理由を下で示す */ }
       writeOutput(`${JSON.stringify({ decision: 'block', reason: messageBlocked({ kind: 'busy', stale }) })}\n`);
+    } else if (rewriting && error instanceof SectionRewriteError) {
+      writeOutput(`${JSON.stringify({ decision: 'block', reason: messageBlocked({ kind: 'section', detail: error.message }) })}\n`);
     } else if (installing || (error instanceof Error && recordedInstallErrors.has(error))) {
       writeOutput(`${JSON.stringify({ decision: 'block', reason: messageBlocked({ kind: 'failed', detail: error.message }) })}\n`);
     } else {
@@ -281,6 +379,21 @@ try {
   const decision = decideInstall(facts);
   if (decision.action === 'skip') {
     writeOutput(`${messageSkipped(config)}\n`);
+  } else if (decision.action === 'rewrite-section') {
+    const result = performSectionRewrite();
+    if (!result.rewritten) {
+      // 印を取った後の再判定が書き直し以外なら、今の扱いに回す
+      const again = result.decision;
+      if (again.action === 'skip') writeOutput(`${messageSkipped(config)}\n`);
+      else if (again.action === 'install') performInstall(result.facts.config.config);
+      else {
+        writeOutput(`${messageBlocked(again.action === 'busy'
+          ? { kind: 'busy', stale: again.stale }
+          : { kind: 'failed', detail: again.reason })}\n`);
+        process.exitCode = 1;
+        process.exit();
+      }
+    }
   } else if (decision.action === 'install') {
     performInstall(config);
   } else {
@@ -295,6 +408,12 @@ try {
   if (error instanceof BusyInstallError) {
     const facts = readInstallFacts();
     writeOutput(`${messageBlocked({ kind: 'busy', stale: facts.lock.present && facts.lock.ageMs > 660000 })}\n`);
+    process.exitCode = 1;
+    return;
+  }
+  if (error instanceof SectionRewriteError) {
+    // 区画の書き直しの失敗は導入の失敗ではないため、失敗の記録は残さない。
+    writeOutput(`${messageBlocked({ kind: 'section', detail: error.message })}\n`);
     process.exitCode = 1;
     return;
   }
