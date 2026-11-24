@@ -580,3 +580,123 @@ export const subagentsField = {
     return r.ok ? null : r.problems.join("、");
   },
 };
+
+/** Claude Code が受け付ける推論量（ultra は受け付けない） */
+const CLAUDE_EFFORTS = ["low", "medium", "high", "xhigh", "max"];
+
+const ROLE_LABELS = { implement: "実装・修正", review: "レビュー", investigate: "調査", debug: "デバッグの原因調査" };
+const ROLE_TASKS = {
+  implement: "割り当てられた作業の範囲だけを実装・修正し、結果と確認の内容を簡潔に報告してください。",
+  review: "変更を点検し、問題点と根拠を簡潔に報告してください。",
+  investigate: "指示された事柄を調べ、分かったことと根拠を簡潔に報告してください。",
+  debug: "不具合の原因を突き止め、原因と根拠を簡潔に報告してください。",
+};
+/** 役割の短い指示。設定後の権限（write・read-only）を反映する */
+function instructionFor(role, permission) {
+  const access = permission === "write"
+    ? "必要な編集とテストの実行ができます。作業の範囲を超えて変更しないでください。"
+    : "読み取り専用で作業し、ファイルは変更しません。";
+  return `${ROLE_TASKS[role]}${access}`;
+}
+const capitalize = (s) => s.charAt(0).toUpperCase() + s.slice(1);
+
+/** 役割設定（明示を含む）の最終的な設定 */
+function roleSettingOf(cfg, from, role) {
+  return { ...DEFAULT_ROLES[from][role], ...(cfg?.roles?.[from]?.[role] ?? {}) };
+}
+
+/**
+ * Claude Code の定義の説明文。Claude Code が指揮役のとき（roles.claude）だけから作る。
+ * 同じ提供元の指揮役の系統を外す既定のモデルの決め方（defaultModelFor）の逆引き。
+ */
+function claudeDescription(cfg, role, family, explicit) {
+  const tiers = mergedTiers(cfg);
+  const setting = roleSettingOf(cfg, "claude", role);
+  const label = ROLE_LABELS[role];
+  const head = `cc-sdd の${label}の役割（${capitalize(family)}）。`;
+  if (explicit) return `${head}役割設定でモデルを明示した Claude Code の指揮役が${label}を任せるときに使う。`;
+  const users = Object.keys(tiers)
+    .filter((f) => vendorOfFamily(f) === "claude")
+    .filter((f) => {
+      const d = defaultModelFor(role, "claude", { vendor: "claude", tier: tiers[f], family: f }, cfg);
+      return d.kind === "family" && d.family === family;
+    })
+    .sort((a, b) => tiers[a] - tiers[b])
+    .map((f) => `${capitalize(f)} の指揮役`);
+  const who = users.length > 0 ? users.join("・") : "指揮役";
+  return setting.provider === "same"
+    ? `${head}${who}が${label}を任せるとき。`
+    : `${head}別の提供元が使えないとき（同じ提供元での委任）に ${who}が使う。`;
+}
+
+/** Claude Code の定義 1 つ（frontmatter と短い指示）。値は YAML の二重引用の文字列で書く */
+function claudeDefinition(role, family, model, effort, permission, description) {
+  const name = definitionNameFor("claude", role, family);
+  const lines = [
+    "---",
+    `name: ${name}`,
+    `description: ${JSON.stringify(description)}`,
+    `model: ${JSON.stringify(model)}`,
+    `effort: ${effort}`,
+  ];
+  if (permission === "read-only") lines.push("tools: Read, Grep, Glob");
+  lines.push("---", "", instructionFor(role, permission), "");
+  return { path: `.claude/agents/${name}.md`, content: lines.join("\n") };
+}
+
+/**
+ * 役割定義の中身を作る。ファイルは書かず、道筋と中身を返す。指揮役のモデルは使わない。
+ * Claude Code: roles.claude の役割 × 子に使える Claude の系統ごとに 1 つ。
+ * Codex: roles.codex のうち書き込み可の役割だけ 1 つ（モデルも推論量も書かない）。
+ * @param {SubagentsConfig} cfg
+ * @returns {{ files: { path: string, content: string }[], notices: string[] }}
+ */
+export function renderDefinitions(cfg) {
+  const tiers = mergedTiers(cfg);
+  const files = [];
+  const notices = [];
+  const maxTier = Math.min(childMaxTier("claude", cfg), CHILD_MAX_TIER);
+  const allFamilies = Object.keys(tiers)
+    .filter((f) => vendorOfFamily(f) === "claude" && tiers[f] <= maxTier)
+    .sort((a, b) => tiers[a] - tiers[b] || (a < b ? -1 : 1));
+
+  for (const role of ROLES) {
+    const setting = roleSettingOf(cfg, "claude", role);
+    const explicitModel = setting.model;
+    const explicitFamily = explicitModel !== undefined ? familyOf(explicitModel, tiers) : null;
+    const onlyOwn = explicitFamily !== null && vendorOfFamily(explicitFamily) === "claude" && allFamilies.includes(explicitFamily);
+    if (explicitModel !== undefined && !onlyOwn) {
+      notices.push(`役割 ${role} のモデル ${explicitModel} は Claude Code の定義には使わず、使える系統すべての定義を作りました（別の提供元が使えないときの予備）`);
+    }
+    const families = onlyOwn ? [explicitFamily] : allFamilies;
+    for (const family of families) {
+      const model = onlyOwn ? explicitModel : family;
+      const name = definitionNameFor("claude", role, family);
+      const e = resolveEffort(cfg?.roles?.claude?.[role]?.effort, model, cfg);
+      notices.push(...e.notices.map((n) => `${name}: ${n}`));
+      if (!CLAUDE_EFFORTS.includes(e.effort)) {
+        notices.push(`${name}: 推論量 ${e.effort} は Claude Code が受け付けないので、この定義は作りませんでした`);
+        continue;
+      }
+      files.push(claudeDefinition(role, family, model, e.effort, setting.permission, claudeDescription(cfg, role, family, onlyOwn)));
+    }
+  }
+
+  for (const role of ROLES) {
+    const setting = roleSettingOf(cfg, "codex", role);
+    if (setting.permission !== "write") {
+      notices.push(`Codex の組み込みの子では読み取り専用を適用できない（${role}）`);
+      continue;
+    }
+    const name = definitionNameFor("codex", role, "");
+    const description = `cc-sdd の${ROLE_LABELS[role]}の役割。Codex の指揮役が${ROLE_LABELS[role]}を任せるときに使う。`;
+    const content = [
+      `name = ${JSON.stringify(name)}`,
+      `description = ${JSON.stringify(description)}`,
+      `developer_instructions = ${JSON.stringify(instructionFor(role, setting.permission))}`,
+      "",
+    ].join("\n");
+    files.push({ path: `.codex/agents/${name}.toml`, content });
+  }
+  return { files, notices };
+}

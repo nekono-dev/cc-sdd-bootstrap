@@ -15,6 +15,7 @@ import {
   resolveEffort,
   resolveModelName,
   definitionNameFor,
+  renderDefinitions,
   DEFAULT_ROLES,
   effortCapFor,
   effortAbove,
@@ -683,4 +684,142 @@ test("decideSpawn の reason: --resolve-model は未指定のときだけ", () =
   for (const [name, run] of denyCases) {
     assert.equal(/--resolve-model/.test(run().reason), name === "missing", name);
   }
+});
+
+// ---- タスク 2.3: 役割定義の中身 ----
+
+const claudeDefs = (cfg) => renderDefinitions(cfg).files.filter((f) => f.path.startsWith(".claude/agents/"));
+const defByPath = (cfg, path) => renderDefinitions(cfg).files.find((f) => f.path === path);
+const field = (content, key) => new RegExp(`^${key}: (.*)$`, "m").exec(content)?.[1];
+
+test("renderDefinitions: 上限なしで 12・Sonnet で 8・Haiku で 4 の Claude Code の定義が出来て Fable は無い", () => {
+  assert.equal(claudeDefs({}).length, 12);
+  assert.equal(claudeDefs({ maxModel: { claude: "sonnet" } }).length, 8);
+  assert.equal(claudeDefs({ maxModel: { claude: "haiku" } }).length, 4);
+  assert.ok(!claudeDefs({}).some((f) => f.path.includes("fable")));
+  assert.ok(defByPath({}, ".claude/agents/cc-sdd-implement-sonnet.md"));
+});
+
+test("renderDefinitions: 各定義の推論量（既定と系統ごとの上限）", () => {
+  const eff = (cfg, p) => field(defByPath(cfg, p).content, "effort");
+  assert.equal(eff({}, ".claude/agents/cc-sdd-review-haiku.md"), "high");
+  assert.equal(eff({}, ".claude/agents/cc-sdd-review-sonnet.md"), "medium");
+  assert.equal(eff({}, ".claude/agents/cc-sdd-review-opus.md"), "medium");
+  const cfg = { maxEffort: { default: "high", sonnet: "low" } };
+  assert.equal(eff(cfg, ".claude/agents/cc-sdd-review-sonnet.md"), "low");
+  assert.equal(eff(cfg, ".claude/agents/cc-sdd-review-opus.md"), "medium");
+  assert.equal(eff(cfg, ".claude/agents/cc-sdd-review-haiku.md"), "high");
+  const low = { maxEffort: { default: "low" } };
+  for (const f of claudeDefs(low)) assert.equal(field(f.content, "effort"), "low");
+});
+
+test("renderDefinitions: frontmatter・読み取り専用の道具・説明文", () => {
+  const impl = defByPath({}, ".claude/agents/cc-sdd-implement-sonnet.md").content;
+  assert.match(impl, /^---\n/);
+  assert.equal(field(impl, "name"), "cc-sdd-implement-sonnet");
+  assert.equal(field(impl, "model"), '"sonnet"');
+  assert.ok(!/^tools:/m.test(impl));
+  assert.match(field(impl, "description"), /Opus の指揮役/);
+  assert.match(field(impl, "description"), /実装/);
+  const rev = defByPath({}, ".claude/agents/cc-sdd-review-opus.md").content;
+  assert.equal(field(rev, "tools"), "Read, Grep, Glob");
+  assert.match(field(rev, "description"), /レビュー/);
+  assert.match(field(rev, "description"), /別の提供元が使えないとき/);
+});
+
+test("renderDefinitions: 明示のモデルでその系統だけ・完全な名前はそのまま", () => {
+  const cfg = { roles: { claude: { implement: { model: "claude-sonnet-5-5" } } } };
+  const r = renderDefinitions(cfg);
+  const impls = r.files.filter((f) => f.path.includes("cc-sdd-implement-"));
+  assert.deepEqual(impls.map((f) => f.path), [".claude/agents/cc-sdd-implement-sonnet.md"]);
+  assert.equal(field(impls[0].content, "model"), '"claude-sonnet-5-5"');
+  assert.equal(r.files.filter((f) => f.path.includes("cc-sdd-review-")).length, 3);
+});
+
+test("renderDefinitions: Codex のモデルを明示した予備の役割は系統ごとに作られ知らせが出る", () => {
+  const cfg = { roles: { claude: { review: { model: "sol" } } } };
+  const r = renderDefinitions(cfg);
+  assert.equal(r.files.filter((f) => f.path.includes("cc-sdd-review-")).length, 3);
+  assert.ok(r.notices.some((n) => n.includes("sol") && n.includes("review")));
+});
+
+test("renderDefinitions: 2.1 の解決と定義の推論量が一致する", () => {
+  const cfg = { maxEffort: { default: "high", sonnet: "low" }, roles: { claude: { implement: { model: "sonnet", effort: "high" } } } };
+  const r = resolveRole(cfg, "claude", "implement", "opus");
+  const def = defByPath(cfg, `.claude/agents/${r.definitionName}.md`);
+  assert.equal(field(def.content, "effort"), r.effort);
+  assert.equal(r.effort, "low");
+  assert.ok(renderDefinitions(cfg).notices.some((n) => n.includes("low")));
+  for (const fam of ["haiku", "sonnet", "opus"]) {
+    const rr = resolveRole({ maxEffort: { sonnet: "low" } }, "claude", "review", fam === "opus" ? "fable" : "opus", { to: "same" });
+    if (rr.ok && rr.definitionName) {
+      const d = defByPath({ maxEffort: { sonnet: "low" } }, `.claude/agents/${rr.definitionName}.md`);
+      assert.equal(field(d.content, "effort"), rr.effort);
+    }
+  }
+});
+
+test("renderDefinitions: ultra は作らず知らせる", () => {
+  const cfg = { maxEffort: { default: "ultra" }, roles: { claude: { implement: { model: "sonnet", effort: "ultra" } } } };
+  const r = renderDefinitions(cfg);
+  assert.ok(!r.files.some((f) => f.path.includes("cc-sdd-implement-sonnet")));
+  assert.ok(r.notices.some((n) => n.includes("ultra")));
+});
+
+test("renderDefinitions: Codex の定義は実装だけでモデルも推論量も持たない", () => {
+  const r = renderDefinitions({});
+  const codex = r.files.filter((f) => f.path.startsWith(".codex/agents/"));
+  assert.deepEqual(codex.map((f) => f.path), [".codex/agents/cc_sdd_implement.toml"]);
+  const c = codex[0].content;
+  assert.match(c, /^name = "cc_sdd_implement"/m);
+  assert.match(c, /^description = /m);
+  assert.match(c, /^developer_instructions = /m);
+  assert.ok(!/model/.test(c.replace(/developer_instructions.*/s, "")));
+  for (const role of ["review", "investigate", "debug"]) {
+    assert.ok(r.notices.includes(`Codex の組み込みの子では読み取り専用を適用できない（${role}）`));
+  }
+});
+
+test("renderDefinitions: 引数に指揮役のモデルを取らず結果が決まる", () => {
+  assert.equal(renderDefinitions.length, 1);
+  assert.deepEqual(renderDefinitions({}), renderDefinitions({}));
+});
+
+// ---- タスク 2.3 の差し戻し対応 ----
+
+test("renderDefinitions: 予備のレビューの説明文は同じ提供元の指揮役の系統の逆引き", () => {
+  const d = (fam) => field(defByPath({}, `.claude/agents/cc-sdd-review-${fam}.md`).content, "description");
+  assert.match(d("sonnet"), /Opus の指揮役/);
+  assert.match(d("opus"), /Fable の指揮役/);
+  assert.match(d("haiku"), /Sonnet の指揮役/);
+  assert.match(d("sonnet"), /別の提供元が使えないとき/);
+  assert.ok(!/Codex|Sol/.test(d("sonnet")));
+  assert.match(field(defByPath({}, ".claude/agents/cc-sdd-implement-sonnet.md").content, "description"), /Opus の指揮役が実装・修正を任せるとき/);
+});
+
+test("renderDefinitions: roles.codex を変えても Claude Code の定義は変わらない", () => {
+  const a = claudeDefs({});
+  const b = claudeDefs({ roles: { codex: { review: { provider: "same", permission: "write" }, implement: { provider: "other" } } } });
+  assert.deepEqual(a, b);
+});
+
+test("renderDefinitions: 明示のモデルの名前は YAML の文字列として保たれる", () => {
+  const cfg = { roles: { claude: { implement: { model: "claude-sonnet-5-5 # fixed" } } } };
+  const c = defByPath(cfg, ".claude/agents/cc-sdd-implement-sonnet.md").content;
+  assert.equal(field(c, "model"), JSON.stringify("claude-sonnet-5-5 # fixed"));
+});
+
+test("renderDefinitions: 権限の設定が本文に反映される", () => {
+  const body = (c) => c.split("---\n").pop();
+  const w = defByPath({ roles: { claude: { review: { permission: "write" } } } }, ".claude/agents/cc-sdd-review-sonnet.md").content;
+  assert.ok(!/^tools:/m.test(w));
+  assert.match(body(w), /編集/);
+  assert.ok(!/変更しません/.test(body(w)));
+  const r = defByPath({ roles: { claude: { implement: { permission: "read-only" } } } }, ".claude/agents/cc-sdd-implement-sonnet.md").content;
+  assert.match(body(r), /変更しません/);
+  const cx = renderDefinitions({ roles: { codex: { review: { permission: "write" } } } }).files.find((f) => f.path === ".codex/agents/cc_sdd_review.toml");
+  assert.ok(cx);
+  assert.match(cx.content, /編集/);
+  const cr = renderDefinitions({ roles: { codex: { implement: { permission: "read-only" } } } });
+  assert.ok(!cr.files.some((f) => f.path.includes("cc_sdd_implement")));
 });

@@ -34,7 +34,7 @@
   - 拒否の理由に、理由の種類と、指揮役と異なり指揮役の格以下かつ子の上限以下のモデルを推論量の上限以下で明示する必要を入れ、未指定のときは使う定義の名前を求めるコマンドを示す。設定が壊れているときの文言（子を起動しないことと、問題の項目・直し方）も作る
   - 単体試験で、各拒否の場合（Fable・Astra の子、上限 Sonnet での Opus の子、上限 medium の系統での high）、推論量や指揮役が不明なら通すこと、文言の中身が確かめられる
   - _Requirements: 1.8, 1.12, 3.2, 3.3, 3.4, 3.6, 3.7, 3.9, 3.10_
-- [ ] 2.3 役割定義の中身を作る
+- [x] 2.3 役割定義の中身を作る
   - Claude Code は、Claude Code が指揮役のときの役割表から、役割と子に使える Claude の系統の組ごとに 1 つの定義を作る（役割設定に Claude Code のモデルを明示していればその系統だけ。Codex のモデルを明示した予備の役割は、使える系統すべてで作り知らせを返す）。定義には系統のモデル（完全な名前の明示があればその名前）、推論量（2.1 の処理にその系統を渡した結果）、読み取り専用の役割には道具の制限、どの格の指揮役がどの役割で使う定義かの説明文を書く。系統の上限まで下げたときと、Claude Code が受け付けない推論量（ultra）で作らないときは知らせを返す
   - Codex は、書き込み可の役割だけ 1 つの定義を作り、モデルも推論量も書かない。読み取り専用の役割は作らず、適用できない旨の知らせを返す
   - 定義の中身は指揮役のモデルを使わずに決まる
@@ -146,3 +146,4 @@
 - 1.2: `ConfigField` の `flag`・`question` は任意にした（lib/ は参照しない）。`subagentsField.kind` は JSDoc の型検査で `string` と推論され `ConfigField[]` への代入で型の不一致が残る（実行時の影響なし。触るときに `"map"` のリテラル型で注釈する）。配布物の起動の試験は `npm pack` の成果物を展開して `help` を実行する。
 - 2.1: 推論量は `resolveEffort(explicitEffort, childModel, cfg)` → `{effort, notices}` で、確定した子のモデルから求め直す（2.3・3.2 はこれを使う）。`resolveRole(cfg, from, role, orchestratorModel, opts)` は `{ok:true, target, setting, selfImplement, effort, definitionName, notices}` か `{ok:false, reason}`。`setting.effort` は役割設定の元の値、実際の推論量は `effort`。`opts.to` は `"same"`・`"other"`。明示のモデルを置き換えるのは `to:"same"` で提供元が食い違うときだけ（知らせを返す）。`to:"other"` で食い違えば置き換えず理由を返す。`definitionName` は Claude の生成対象の系統のときだけ（対象外は null と知らせ）、Codex は書き込み可の役割だけ `cc_sdd_<役割>`。同じ提供元で候補が無ければ `selfImplement:true`（`defaultModelFor` は `{kind:"self"}`）。
 - 2.2: `decideSpawn({vendor, childModel, childEffort, orchestratorModel}, cfg)` の `vendor` は指揮役のツール（未指定の文言の `--from` に使う）。フック（3.1）はここに指揮役のツールを渡す。拒否の理由は 7 種ごとに固有の文言と、共通の案内の 4 条件を持つ。設定が壊れているときは `messageConfigBroken(problems)`。
+- 2.3: `renderDefinitions(cfg)` → `{files, notices}`。Claude Code の定義は `roles.claude` だけから作り、説明文は同じ提供元の `defaultModelFor` の逆引き（予備のレビューは Sonnet→haiku・Opus→sonnet・Fable→opus）。model は YAML の二重引用。本文は `instructionFor(role, permission)` で権限を反映。Claude Code が受け付ける推論量はファイル内の `CLAUDE_EFFORTS` で判定している（2.4 で作る受け付けの判定と統一する）。
