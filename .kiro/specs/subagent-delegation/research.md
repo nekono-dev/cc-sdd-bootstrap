@@ -77,23 +77,32 @@
 - **Rationale**: 上限（1.10）を足すと、表と計算の 2 か所で同じ下げ方を持つことになる。一般化すると 1 か所で済む。
 - **Trade-offs**: 表を見ても既定値が直接は読めない。運用の区画の文章に、指揮役ごとの既定値の表を載せて補う。
 
-### Decision: 役割表の検証は Roles に置き、項目定義はそれを使う（2026-11-24）
+### Decision: 役割表の項目定義と検証は Roles に置き、配置物の項目定義から切り離す（2026-11-24。設計レビューで改訂）
 - **Context**: 旧版は検証の規則を `config-schema.mjs` に置き、`subagent-roles.mjs` がそれを使う向きだった。子の上限・推論量の上限の検証には、格の表・系統の判定・提供元の判定が要る。
-- **Selected Approach**: `subagent-roles.mjs`（何も読み込まない純粋な部品）が `validateSubagents` を持ち、`config-schema.mjs` は `subagents` の項目の `validate` でそれを呼ぶ。配置物どうしの向きは `subagent-roles` ← `config-schema` ← `install-rules`・`lib/config-schema.mjs`。
-- **Rationale**: 格・系統の知識を 1 か所に保つ。`subagent-roles.mjs` は何も読み込まないので、循環しない。
+- **Selected Approach**: `subagent-roles.mjs`（何も読み込まない純粋な部品）が `subagentsField` と `validateSubagents` を持つ。配置物の `config-schema.mjs` は基本の項目だけを持ち、何も読み込まない。`lib/config-schema.mjs` が両方をつないで導入コマンドの項目の一覧にする。
+- **Rationale**: 格・系統の知識を 1 か所に保つ。最初の案（`config-schema.mjs` が `subagent-roles.mjs` を読み込む）では、cc-sdd の導入（`install-rules.mjs`）を読み込むだけで役割表の部品も読み込まれ、その不具合で導入スクリプトが起動できなくなる（設計レビューの問題 3。要件 1.12 の狙いに反する）。
 
-### Decision: session-install は導入に使う項目だけを検証する（2026-11-24、利用者の確認。要件 1.12）
+### Decision: session-install は導入に使う項目だけを知る（2026-11-24、利用者の確認。要件 1.12。設計レビューで実現の方法を改訂）
 - **Context**: 入力のたびの検証が全項目に及ぶと、役割表の誤りで入力が止まる。
 - **Alternatives Considered**:
   1. 項目定義の `subagents` の検証を浅くし、細かい検証を Roles に任せる
   2. session-install の検証を `ccSdd.version`・`ccSdd.lang` に絞る
-- **Selected Approach**: 2。`install-rules.mjs` の `readInstallConfig` が検証する項目を、導入に使う 2 つに限る。変更は session-install の持ち物だが、引き金がこの spec なので、この spec のタスクで行い、session-install の design.md に境界の注記を足す。
+- **Selected Approach**: 2 を、項目定義の置き場所で実現する。配置物の項目定義（session-install が読む）には導入に使う 2 つだけを置き、`subagents` は `lib/` の側でつなぐ。`install-rules.mjs` は変えず、試験で確かめる。session-install の design.md に境界の注記を足す。
 - **Rationale**: 案 1 は、項目が増えるたびに同じ問題が再び起きる。`update` は全項目を検証して失敗するだけで、セッションは止めない。
 
 ### Decision: 推論量の上限は 3 か所で守り、確かめられないときは通す（2026-11-24）
 - **Context**: 要件 1.11・1.13・3.10・4.8。PoC の結果（上の「組み込みの子の推論量」）。
 - **Selected Approach**: 生成する定義と設定は `validateSubagents` で上限より上を誤りにする。委任の入口は `--effort` を上限と比べる。フックは、Codex では「定義の `model_reasoning_effort` → `tool_input.reasoning_effort`」、Claude Code では「`subagent_type` の定義の `effort`」を子の推論量とし、上限と比べる。決められなければ通す。`CLAUDE_CODE_EFFORT_LEVEL` はフックで見ず、運用の区画の文章で、設定されていると定義の推論量が効かないことを知らせる。
 - **Rationale**: フックが見える範囲だけで判定し、厳密さのための仕組みを増やさない（roadmap の制約）。環境変数がフックに渡るかは確かめていないため、判定に使わない。
+
+### Decision: 役割定義にモデルを書かない（2026-11-24、設計レビューの問題 1）
+- **Context**: 要件 1.4 の既定のモデルは指揮役の格で変わるが、役割定義のファイルは指揮役を知らない。最初の案では Claude Code の実装役の定義に格 2 の既定（haiku）を書いたため、Opus の指揮役がモデルを明示し忘れると Haiku で動き、フックも通した。cc-sdd の `kiro-impl` はモデルを付けずに子を起動する。
+- **Selected Approach**: 両ツールとも定義にモデルを書かない。明示の無い起動はフックが未指定として拒否し、理由に `delegate.mjs --resolve-model` のコマンドを示す。指揮役は出た名前を明示して起動し直す。
+- **Trade-offs**: 最初の起動が 1 回拒否されうる。その代わり、どの指揮役でも 1.4 が機械的に守られる。
+
+### Decision: 設定が壊れている間は子の起動を拒否する（2026-11-24、設計レビューの問題 2、利用者の選択）
+- **Alternatives Considered**: ア 子の起動を拒否して直し方を示す／イ 壊れた項目だけ捨てて読めた上限を使う／ウ 既定の設定で判定を続ける。
+- **Selected Approach**: ア。上限が外れたまま子が動くことを防ぐ（要件 1.8 の「確定できない設定で委任しない」と揃う）。入力は止めないので 1.12 は守れる。
 
 ### Decision: Codex の役割定義に推論量を書かない（2026-11-24）
 - **Context**: Codex は定義の `model_reasoning_effort` が起動の `reasoning_effort` より優先される（`poc/subagent-effort/`）。定義に書くと、要件 1.6（作業ごとに推論量を選ぶ）が組み込みの子でできなくなる。
