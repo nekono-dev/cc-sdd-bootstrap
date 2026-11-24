@@ -10,10 +10,10 @@
  * 設定ファイルの 1 項目の定義。
  * @typedef {object} ConfigField
  * @property {string} path 設定ファイルの中の道筋（例 "ccSdd.version"）
- * @property {string} flag 引数の名前（例 "cc-sdd-version"）
+ * @property {string} [flag] 引数の名前（例 "cc-sdd-version"）
  * @property {"string" | "boolean" | "map"} kind 値の種類
  * @property {ConfigValue} defaultValue 既定値
- * @property {string} question 対話で示す日本語の質問文
+ * @property {string} [question] 対話で示す日本語の質問文
  * @property {(value: unknown) => string | null} validate 不正なら日本語の理由、正しければ null
  * @property {string} [notice] 値が true のとき init・update の完了時に示す文（boolean の項目だけが使う）
  * @property {string[]} [mapKeys] kind が map のとき、対話で尋ねるキーの一覧
@@ -25,7 +25,10 @@ export const CONFIG_FORMAT = 1;
 const VERSION_RE = /^\d+\.\d+\.\d+(-.+)?$/;
 const LANG_RE = /^[a-z]{2}(-[A-Z]{2})?$/;
 
-/** @type {ConfigField[]} */
+/**
+ * 導入に使う基本の項目だけを置く（役割表などの項目は lib/config-schema.mjs でつなぐ。subagent-delegation 1.12）。
+ * @type {ConfigField[]}
+ */
 export const configFields = [
   {
     path: "ccSdd.version",
@@ -51,35 +54,6 @@ export const configFields = [
       return LANG_RE.test(value)
         ? null
         : "「xx」または「xx-YY」の形で指定してください（例 ja・pt-BR）";
-    },
-  },
-  {
-    path: "codex.enabled",
-    flag: "codex",
-    kind: "boolean",
-    defaultValue: false,
-    question: "Codex も使いますか",
-    validate(value) {
-      return typeof value === "boolean" ? null : "true か false で指定してください";
-    },
-  },
-  {
-    path: "models",
-    flag: "model",
-    kind: "map",
-    defaultValue: {},
-    question: "役割ごとのモデルを入力してください",
-    mapKeys: [],
-    validate(value) {
-      if (typeof value !== "object" || value === null || Array.isArray(value)) {
-        return "役割の名前とモデルの対応（オブジェクト）で指定してください";
-      }
-      for (const [key, v] of Object.entries(value)) {
-        if (typeof v !== "string" || v.trim() === "") {
-          return `${key} のモデルは空でない文字列で指定してください`;
-        }
-      }
-      return null;
     },
   },
 ];

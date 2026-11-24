@@ -11,6 +11,13 @@ test("有効な設定を読み、版・言語だけを返す（雛形の保持�
   assert.deepEqual(r.config, { version: "3.1.0", lang: "ja" });
 });
 
+test("役割表の誤りでは失敗せず、版の誤りでは失敗する（役割表は導入に使わない）", () => {
+  const r = ok({ ...base, subagents: { maxModel: { claude: "fable" } } });
+  assert.equal(r.ok, true);
+  assert.deepEqual(r.config, { version: "3.1.0", lang: "ja" });
+  assert.equal(ok({ format: 1, ccSdd: { version: "bad" }, subagents: {} }).ok, false);
+});
+
 test("ccSdd の項目が無いときは既定値で補う", () => {
   const r = ok({ format: 1 });
   assert.equal(r.ok, true);

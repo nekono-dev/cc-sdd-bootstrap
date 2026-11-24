@@ -47,7 +47,7 @@ test("一時の git リポジトリで init・利用者設定を保つ update・
   const deploy = path.join(root, ".agent-hooks/cc-sdd-bootstrap");
   for (const file of [config, claudeSettings, codexHooks, ignore,
     path.join(deploy, "install-cc-sdd.mjs"), path.join(deploy, "install-rules.mjs"),
-    path.join(deploy, "config-schema.mjs"),
+    path.join(deploy, "config-schema.mjs"), path.join(deploy, "subagent-roles.mjs"),
     path.join(deploy, "agent-section-claude.md"), path.join(deploy, "agent-section-codex.md")]) {
     assert.ok(fs.existsSync(file), `${path.relative(root, file)} がありません`);
   }
@@ -83,6 +83,15 @@ test("一時の git リポジトリで init・利用者設定を保つ update・
   if (!repeated) return;
   assert.equal(repeated.status, 0, repeated.stderr);
   assert.match(repeated.stdout, /変更はありません/);
+
+  const configText = fs.readFileSync(config, "utf8");
+  const broken = { ...readJson(config), subagents: { maxModel: { claude: "fable" } } };
+  fs.writeFileSync(config, `${JSON.stringify(broken, null, 2)}\n`);
+  const failed = runOrSkip(t, root, ["update"]);
+  if (!failed) return;
+  assert.notEqual(failed.status, 0);
+  assert.match(`${failed.stdout}${failed.stderr}`, /subagents\.maxModel\.claude/);
+  fs.writeFileSync(config, configText);
 
   const claudeDoc = "# 標準の Claude 文書\n\n標準部分を残す。\n";
   const agentsDoc = "# 標準の Codex 文書\n\n標準部分を残す。\n";

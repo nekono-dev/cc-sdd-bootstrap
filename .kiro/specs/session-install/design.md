@@ -40,6 +40,7 @@
 - `npx`（cc-sdd の公式の CLI、`cc-sdd@<版>`）と、配布元への通信。
 - Node.js 22 の標準モジュール。`lib/` は読み込まない。
 - 依存の向き: `config-schema` → `install-rules`（純粋）→ `install-cc-sdd`（入出力と入口）。
+- 配置物の `config-schema.mjs` には導入に使う項目だけを置く（役割表の項目は lib/ 側でつなぐ。subagent-delegation 1.12）。
 
 ### Revalidation Triggers
 - 導入物の置き場所や、CLAUDE.md・AGENTS.md の書き出し方の変更 → installer-core の `.gitignore` の行、kiro-gate の手順書の道筋を見直す。

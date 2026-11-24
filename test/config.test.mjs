@@ -14,7 +14,7 @@ test("設定処理: format だけを必須にし、欠けた項目を補う", ()
   assert.equal(parsed.ok, true);
   assert.equal(validateConfig(parsed.config, configFields), null);
   const filled = fillDefaults(parsed.config, configFields);
-  assert.deepEqual(filled.filled, ["ccSdd.lang", "codex.enabled", "models"]);
+  assert.deepEqual(filled.filled, ["ccSdd.lang", "subagents"]);
   assert.equal(filled.config.ccSdd.version, "3.2.0");
   assert.deepEqual(filled.config.extra, { keep: true });
   assert.equal(serializeConfig(filled.config).endsWith("\n"), true);
@@ -42,11 +42,15 @@ test("設定処理: 読めない文字列のエラーにファイル名を付け
   assert.match(result.error.messages[0], /理由|JSON/);
 });
 
-test("設定処理: 項目定義が受け入れる map キーを保持する", () => {
-  const parsed = parseConfig('{"format":1,"models":{"constructor":"gpt-5"}}');
-  assert.equal(parsed.ok, true);
-  assert.equal(validateConfig(parsed.config, configFields), null);
-  const filled = fillDefaults(parsed.config, configFields);
-  assert.equal(Object.hasOwn(filled.config.models, "constructor"), true);
-  assert.equal(filled.config.models.constructor, "gpt-5");
+test("設定処理: 役割表の誤りを問題の項目つきで返し、旧項目（codex・models）は誤りにしない", () => {
+  const bad = parseConfig('{"format":1,"subagents":{"maxModel":{"claude":"fable"}}}');
+  const error = validateConfig(bad.config, configFields);
+  assert.equal(error.code, "CONFIG_INVALID");
+  assert.match(error.messages[0], /^subagents: .*subagents\.maxModel\.claude/);
+  const old = parseConfig('{"format":1,"codex":{"enabled":true},"models":{"x":1}}');
+  assert.equal(validateConfig(old.config, configFields), null);
+  const filled = fillDefaults(old.config, configFields);
+  assert.deepEqual(filled.config.codex, { enabled: true });
+  assert.deepEqual(filled.config.models, { x: 1 });
+  assert.deepEqual(filled.config.subagents, {});
 });
