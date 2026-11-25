@@ -125,7 +125,7 @@
   - 結果を `poc/self-apply/result.md` に追記し、確かめた項目がすべて OK になる
   - _Depends: 3.5, 4.5_
   - _Requirements: 5.15_
-- [ ] 4.7 自己適用したこのリポジトリで、両ツールの子の起動を確かめる
+- [x] 4.7 自己適用したこのリポジトリで、両ツールの子の起動を確かめる
   - 前提: 認証済みの `claude`・`codex`
   - 指揮役のモデルは、子を選べる格に固定する（Claude Code は `claude -p --model sonnet`、Codex は `--model` で Terra）。`--orchestrator-model` にも同じモデルを渡す
   - Claude Code はこの worktree で起動し、名前を付けない子の起動が拒否され、`--resolve-model` の定義の名前での起動が通ることを確かめる
@@ -158,3 +158,4 @@
 - 4.4: 実機の通しは `node poc/subagent-defs/run.mjs f`（`POC_CASES=f3,f4` で場合を選べ、`POC_DEBUG=1` で詳細、`POC_KEEP=1` で作業場所を残す）。この版の Codex は指揮役の実行を `command_execution` で出さないので、指揮役の記録（CODEX_HOME のセッション）の `function_call`・`custom_tool_call` から呼び出しと出力を取る。Codex の子の `npm test` の出力は JSON が入れ子で引用符・改行が逃がされるため、逃がしを外してから判定する。Codex の指揮役のサンドボックスは、書き込み先に `~/.claude` と作業場所を足し、通信を許可する。判定の既知の限界は `result.md` の末尾に記載。
 - 4.5: 自己適用で `.claude/agents/`（役割 × 系統の 12 件）と `.codex/agents/cc_sdd_implement.toml` が生成され、コミットされる。`cc-sdd-investigate-opus.md` の説明文に「に 指揮役が使う」という不自然な言い回しがある（生成する側の文言。動作には影響しない。後で見直す）。この自己適用で、この worktree の Claude Code には subagent-check のフックが効くようになる。
 - 4.6: 確認は `node poc/self-apply/rewrite.mjs`（本物の `npx` の通信が要る）。更新先は 4.5 のコミット `d71527a` に固定し、`REWRITE_TARGET_REV` で明示したときだけ変えられる。CLI の `update` は配置物の区画ファイルだけを書き、CLAUDE.md・AGENTS.md の区画の書き直しは入力のフックだけが行う。
+- 4.7: 確認は `node poc/subagent-defs/run.mjs q`（Claude Code はこの worktree、Codex は 4.5 のコミットを写した checkout。本物の `npx` の通信が要る）。解決コマンドの引数と子の起動の結び付きは同一のコマンドに限っていない（既知の限界。`poc/self-apply/result.md` に記載）。

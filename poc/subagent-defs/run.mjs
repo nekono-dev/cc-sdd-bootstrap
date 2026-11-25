@@ -18,7 +18,10 @@
 //   f. 実機（タスク 4.4）: 指揮役（Claude Code・Codex のセッション）から入口 delegate.mjs を呼び、5 つの場合（Claude Code→Codex・Codex→Claude Code の
 //      読み取り専用と書き込み可、Claude Code の --to same の読み取り専用）で、子の起動・応答と成否の指揮役への受け渡し、権限、呼び出し元の推論量の環境変数の扱いを確かめる
 //
-// 使い方: node poc/subagent-defs/run.mjs [a b c d e f]   （既定はすべて。s は実機を使わない判定の自己検査）
+//   q. 実機（タスク 4.7）: 自己適用したこの worktree で Claude Code の子（名前なしの拒否・--resolve-model の名前の通過）、
+//      4.5 のコミットを写した checkout で Codex の子（モデル省略の拒否・--resolve-model の組の通過）を確かめる。判定は p と同じ
+//
+// 使い方: node poc/subagent-defs/run.mjs [a b c d e f p q]   （既定はすべて。s は実機を使わない判定の自己検査）
 // 必要なもの: claude（認証済み）・codex（~/.codex/auth.json）・版管理の CLI。作業場所は ~/.cache/cc-sdd-bootstrap-scratch/subagent-defs。
 // Codex のフックの信頼の承認は --dangerously-bypass-hook-trust で省く（検証専用）。認証の写しは終わったら消す。
 import { execFileSync, spawnSync } from "node:child_process";
@@ -193,7 +196,10 @@ const sessionsOf = (home) => codexSessions(home).map(sessionInfo);
 // codex exec --json の出力から、シェルで実行した --resolve-model の結果（終了コードと標準出力）を取り出す
 const resolveCommands = (stdout) => (stdout ?? "").split("\n").map((l) => { try { return JSON.parse(l); } catch { return null; } })
   .filter((x) => x?.item?.type === "command_execution" && /--resolve-model/.test(String(x.item.command)) && x.type === "item.completed")
-  .map((x) => ({ code: x.item.exit_code, out: String(x.item.aggregated_output ?? "").trim() }));
+  .map((x) => ({ code: x.item.exit_code, out: String(x.item.aggregated_output ?? "").trim(), command: String(x.item.command ?? "") }));
+// 4.7: 解決コマンドが、指示どおりの引数（--from・--role implement・--orchestrator-model）で呼ばれたか（誤った指揮役モデルで解決しても OK にならないように）
+const resolveArgsOk = (command, from, orch) => { const t = String(command); const flag = (k) => new RegExp(`${k}[= ]([^\\s"']+)`).exec(t)?.[1];
+  return /delegate\.mjs/.test(t) && /--resolve-model/.test(t) && flag("--from") === from && flag("--role") === "implement" && flag("--orchestrator-model") === orch; };
 const MISSING = /子のモデルが指定されていません/;
 // e1: モデル省略の拒否 → --resolve-model の結果 → その名前・推論量の明示の起動 → 子の記録
 // d = { entries（フックの記録）, cmds（--resolve-model の結果）, sessions（子の記録）, phrase }
@@ -760,6 +766,72 @@ if (want("f")) {
   } catch (error) { check(`f. 委任の確認を最後まで実行（${error.message}）`, false); }
 }
 
+// ---- q. 自己適用したこのリポジトリでの両ツールの子の起動（タスク 4.7）----
+// Claude Code は、この worktree（git rev-parse --show-toplevel）で起動し、配置物のフックと定義を通す。
+// Codex は、4.5 のコミットを普通の checkout に写して cc-sdd を導入してから起動する（worktree の Codex は本体の checkout の登録に従うため）。
+// 判定は節 p と同じ関数を使い、ラベルの接頭辞だけ q にする。
+const SELF_APPLY_REV = "d71527a"; // 4.5 のコミット（自己適用の配置物を含む）
+if (want("q")) {
+  console.log("== q. 自己適用したこのリポジトリで、両ツールの子の起動（タスク 4.7）");
+  const commonQ = "Agent ツールの起動は、拒否されたら言い換えや再試行をせず、拒否の文言をそのまま引用して次へ進んでください。";
+  const commonXQ = "spawn_agent が拒否されたら、言い換えや再試行をせず、拒否の文言をそのまま引用して次へ進んでください。";
+  const shQ = (cmd, args, cwd, extraEnv = {}) => spawnSync(cmd, args, { cwd, env: { ...env, ...extraEnv }, encoding: "utf8", input: "", timeout: 900000 });
+  const relabel = (rows) => rows.map(([l, ok]) => [l.replace(/^p\./, "q."), ok]);
+  const wt = execFileSync("git", ["rev-parse", "--show-toplevel"], { cwd: repoRoot, encoding: "utf8" }).trim(); // この worktree の絶対パス
+  // ---- Claude Code: この worktree で、指揮役 sonnet が名前なしの子の拒否と、解決した名前の子の通過を確かめる ----
+  const wtSettings = JSON.parse(fs.readFileSync(path.join(wt, ".claude/settings.json"), "utf8"));
+  check("q. 前提: この worktree の .claude/settings.json に、Agent の PreToolUse で subagent-check（claude）が登録されている",
+    (wtSettings.hooks?.PreToolUse ?? []).some((g) => g.matcher === "Agent" && g.hooks.some((h) => /subagent-check\.mjs.* pre-tool-use --tool claude/.test(h.command))));
+  // 子の記録は、この実行の前後の差分だけを使う（同じ worktree の既存の記録を拾わない）
+  const claudeSlug = path.join(os.homedir(), ".claude/projects", wt.replace(/[\/.]/g, "-"));
+  const metaFiles = () => { try { return execFileSync("find", [claudeSlug, "-name", "*.meta.json"], { encoding: "utf8" }).split("\n").filter(Boolean); } catch { return []; } };
+  const metaBefore = new Set(metaFiles());
+  const claudePrompt = `${commonQ} 次を順に 1 回ずつ行ってください。(1) Agent ツールで subagent_type に general-purpose を指定して子を起動し「OK」と答えさせる。(2) シェルで node .agent-hooks/cc-sdd-bootstrap/delegate.mjs --resolve-model --from claude --role implement --orchestrator-model claude-sonnet-5-5 を実行し、標準出力の 1 行の先頭の名前を得る。(3) Agent ツールで subagent_type に (2) の名前（model は指定しない）で子を起動し「OK」と答えさせる。それぞれの結果（拒否か通ったか、拒否の文言）を答えてください。`;
+  const rc = shQ("claude", ["-p", "--model", "sonnet", "--setting-sources", "project", "--permission-mode", "acceptEdits", "--allowedTools", "Bash", "--output-format", "stream-json", "--verbose", "--max-turns", "16", claudePrompt], wt);
+  const claudeRes = parseLines(rc.stdout).filter((e) => e.type === "result").pop();
+  check("q. Claude Code: 指揮役（sonnet）が終了し、結果を返す", rc.status === 0 && !!claudeRes && !claudeRes.is_error);
+  const cCalls = claudeCalls(rc.stdout);
+  const cSubs = metaFiles().filter((f) => !metaBefore.has(f)).map((f) => { try { return { agentType: JSON.parse(fs.readFileSync(f, "utf8")).agentType }; } catch { return {}; } });
+  for (const c of cCalls.filter(claudeSpawn)) console.log(`     観測: 起動 ${JSON.stringify({ ...c.input, prompt: "…" })} → ${c.denied ? "フックが拒否: " + c.text.split("\n")[0].slice(0, 120) : c.isError ? "ツール側の失敗: " + c.text.slice(0, 80) : "通った"}`);
+  console.log(`     観測: 子の記録=${JSON.stringify(cSubs)} 答え=${JSON.stringify(String(claudeRes?.result ?? "").slice(0, 160))}`);
+  for (const [l, ok] of relabel(judgeCl1({ calls: cCalls, subs: cSubs }).slice(0, 3))) check(l, ok);
+  check("q. Claude Code: --resolve-model が --from claude --role implement --orchestrator-model claude-sonnet-5-5 の引数で呼ばれた",
+    cCalls.some((x) => x.name === "Bash" && !x.isError && resolveArgsOk(x.input?.command, "claude", "claude-sonnet-5-5") && /^cc-sdd-\S+ (low|medium|high|xhigh|max|ultra)$/.test(String(x.text).trim())));
+  // ---- Codex: 4.5 のコミットを普通の checkout に写し、cc-sdd を導入してから、指揮役 terra で子の起動を確かめる ----
+  const scratch = path.join(os.homedir(), ".cache/cc-sdd-bootstrap-scratch");
+  fs.mkdirSync(scratch, { recursive: true });
+  const cx = fs.mkdtempSync(path.join(scratch, "self-apply-q-"));
+  try {
+    const archive = spawnSync("git", ["-C", repoRoot, "archive", "--format=tar", SELF_APPLY_REV], { encoding: "buffer", maxBuffer: 512 * 1024 * 1024 });
+    if (archive.status !== 0) throw new Error(`git archive ${SELF_APPLY_REV} が失敗`);
+    const untar = spawnSync("tar", ["-x", "-C", cx], { input: archive.stdout });
+    if (untar.status !== 0) throw new Error("展開に失敗");
+    execFileSync("git", ["init", "-q"], { cwd: cx });
+    const inst = shQ("node", [".agent-hooks/cc-sdd-bootstrap/install-cc-sdd.mjs"], cx);
+    check("q. Codex: 写した checkout で install-cc-sdd.mjs が終了 0 で、cc-sdd（手順書）と AGENTS.md の区画が入る",
+      inst.status === 0 && fs.existsSync(path.join(cx, ".agents/skills/kiro-spec-status/SKILL.md"))
+      && fs.readFileSync(path.join(cx, "AGENTS.md"), "utf8").includes(fs.readFileSync(path.join(cx, ".agent-hooks/cc-sdd-bootstrap/agent-section-codex.md"), "utf8").trim()));
+    const home = path.join(base, "q-codex-home");
+    fs.mkdirSync(home, { recursive: true });
+    let rx;
+    try {
+      // 認証の写しは、作った直後から後始末（finally）に入る（設定の書き込みなどが失敗しても残さない）
+      fs.copyFileSync(path.join(os.homedir(), ".codex/auth.json"), path.join(home, "auth.json"));
+      fs.writeFileSync(path.join(home, "config.toml"), `[projects.${JSON.stringify(cx)}]\ntrust_level = "trusted"\n`);
+      const r = shQ("codex", ["-a", "never", "exec", "--json", "--dangerously-bypass-hook-trust", "-s", "workspace-write", "--model", "gpt-6.1-terra", "-c", 'model_reasoning_effort="high"', "--cd", cx,
+        `${commonXQ} 次を順に行ってください。(1) spawn_agent で agent_type に cc_sdd_implement、fork_turns に none を指定し、model と reasoning_effort は指定せずに子を起動し「OK」と答えさせる。(2) シェルで node .agent-hooks/cc-sdd-bootstrap/delegate.mjs --resolve-model --from codex --role implement --orchestrator-model gpt-6.1-terra を実行し、標準出力の 1 行（モデルと推論量）を得る。(3) spawn_agent で agent_type に cc_sdd_implement、fork_turns に none、(2) で得たモデルを model、推論量を reasoning_effort に明示して子を起動し、子に合言葉 CCSDD-RESOLVED を答えさせ、wait で待つ。`],
+        cx, { CODEX_HOME: home });
+      rx = { calls: codexCalls(home), cmds: resolveCommands(r.stdout), sessions: sessionsOf(home), phrase: "CCSDD-RESOLVED" };
+    } finally { fs.rmSync(path.join(home, "auth.json"), { force: true }); }
+    for (const c of rx.calls.filter(codexSpawn)) console.log(`     観測: 起動 ${JSON.stringify({ ...c.input, message: "…" })} → ${c.denied ? "フックが拒否: " + c.text.split("\n")[0].slice(0, 120) : "フックは通した"}`);
+    console.log(`     観測: --resolve-model の結果=${JSON.stringify(rx.cmds)} 子の記録=${JSON.stringify(rx.sessions.map((x) => x.ctxs))}`);
+    for (const [l, ok] of relabel(judgeCx1(rx))) check(l, ok);
+    check("q. Codex: --resolve-model が --from codex --role implement --orchestrator-model gpt-6.1-terra の引数で呼ばれ、終了 0 で出力が返った",
+      rx.cmds.some((x) => x.code === 0 && resolveArgsOk(x.command, "codex", "gpt-6.1-terra") && x.out.length > 0));
+  } catch (error) { check(`q. Codex の確認を最後まで実行（${error.message}）`, false); }
+  finally { if (process.env.POC_KEEP) console.log(`     観測: 作業場所を残しました: ${cx}`); else fs.rmSync(cx, { recursive: true, force: true }); }
+}
+
 // ---- 判定の自己検査（実機を使わない）: わざと失敗させた記録で NG になることを確かめる。node run.mjs s ----
 if (only.includes("s")) {
   console.log("== s. 判定の自己検査（模擬の記録。期待どおりなら「期待どおり」）");
@@ -896,6 +968,13 @@ if (only.includes("s")) {
   // やり直しの条件: 本当に読んだときだけ
   // やり直しの条件の自己検査: 本当に手順書を読んだ後に最初の起動をしたときだけやり直す（拒否された echo だけなら、やり直さない）
   const expectBool = (label, got, want) => { const as = got === want; console.log(`${as ? "期待どおり" : "想定外"}: ${label} → ${got}`); if (!as) fail++; };
+  // 4.7: 解決コマンドの引数の判定
+  const RC = "node .agent-hooks/cc-sdd-bootstrap/delegate.mjs --resolve-model --from claude --role implement --orchestrator-model claude-sonnet-5-5";
+  expectBool("q 解決コマンドの引数が指示どおり", resolveArgsOk(RC, "claude", "claude-sonnet-5-5"), true);
+  expectBool("q 解決コマンドの指揮役モデルが違う（opus）", resolveArgsOk(RC.replace("claude-sonnet-5-5", "claude-opus-5-5"), "claude", "claude-sonnet-5-5"), false);
+  expectBool("q 解決コマンドの --from が違う（codex）", resolveArgsOk(RC.replace("--from claude", "--from codex"), "claude", "claude-sonnet-5-5"), false);
+  expectBool("q 解決コマンドの役割が違う（review）", resolveArgsOk(RC.replace("--role implement", "--role review"), "claude", "claude-sonnet-5-5"), false);
+  expectBool("q 解決コマンドに --resolve-model が無い", resolveArgsOk(RC.replace("--resolve-model ", ""), "claude", "claude-sonnet-5-5"), false);
   expectBool("retry 起動より前に本当に読んだ", readBeforeSpawn("claude", [readCl(), clSp("cc-sdd-implement-haiku", {}, "OK")]), true);
   expectBool("retry 起動の前に拒否された echo だけ", readBeforeSpawn("claude", [{ name: "Bash", input: { command: "echo .claude/skills/kiro-spec-status/SKILL.md" }, denied: true, text: "blocked", isError: true }, clSp("cc-sdd-implement-haiku", {}, GATE, true)]), false);
   expectBool("retry 起動の前に読みが失敗", readBeforeSpawn("claude", [{ ...readCl(), isError: true, text: "error" }, clSp("cc-sdd-implement-haiku", {}, GATE, true)]), false);
@@ -987,6 +1066,17 @@ if (only.includes("s")) {
   const continued = [entryC, EXO("e", "Process running with session ID 42"), EXC("u", '{"cmd":"echo x"}'), EXO("u", `別の応答\n${DELEGATE_OK}`), EXC("w", '{"session_id":42,"chars":""}'), EXO("w", "子の応答")];
   const cr = codexEntryRuns(continued, instrS);
   expectBool("codex 入口の結果は session_id の続きの出力だけを連ねる（無関係な出力は含まない）", cr.length === 1 && cr[0].out.includes("子の応答") && !cr[0].out.includes("別の応答"), true);
+
+  // ---- q の判定の自己検査（節 p の関数をそのまま使う。Claude Code は 3 項目、Codex は 5 項目） ----
+  expect("q cl 正常な記録は 3 項目 OK", judgeCl1(clGood1()).slice(0, 3), []);
+  d = clGood1(); d.calls[0] = clSp("general-purpose", {}, "OK"); expect("q cl 名前なしの起動が通ってしまった", judgeCl1(d).slice(0, 3), [0]);
+  d = clGood1(); d.calls[1].text = ""; expect("q cl 解決の出力が空", judgeCl1(d).slice(0, 3), [1, 2]);
+  d = clGood1(); d.subs = []; expect("q cl 通ったはずの子が起動していない", judgeCl1(d).slice(0, 3), [2]);
+  d = clGood1(); d.subs = [{ agentType: "cc-sdd-implement-sonnet", models: [] }]; expect("q cl 解決した名前と違う子の記録だけがある", judgeCl1(d).slice(0, 3), [2]);
+  expect("q cx 正常な記録は 5 項目 OK", judgeCx1(cxGood1()), []);
+  d = cxGood1(); d.calls[0].denied = false; d.calls[0].text = "OK"; expect("q cx モデル省略の起動が通ってしまった", judgeCx1(d), [0]);
+  d = cxGood1(); d.cmds = []; expect("q cx 解決の実行が無い", judgeCx1(d), [1, 2, 3, 4]);
+  d = cxGood1(); d.sessions = [ROOT]; expect("q cx 指定した起動の子の記録が無い", judgeCx1(d), [3, 4]);
 }
 
 console.log(`結果: OK ${pass} 件、NG ${fail} 件`);
