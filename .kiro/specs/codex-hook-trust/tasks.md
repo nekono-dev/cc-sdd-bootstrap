@@ -64,7 +64,7 @@
   - 既存の引数の並びが変わらず、指定の有効のときだけ指定が入ることが単体試験で確かめられる
   - _Boundary: subagent-roles_
   - _Requirements: 5.1, 5.3_
-- [ ] 4.2 入口のコマンドで、承認を省く指定を付けて Codex の子を起動する
+- [x] 4.2 入口のコマンドで、承認を省く指定を付けて Codex の子を起動する
   - Codex の子を起動する前に設定を読み、有効なら 3.3 の確認を行う。使えなければ子を起動せず、使えないことと手で承認する方法を示して失敗で終わる。使えるなら 4.1 の引数で起動し、付けて起動することを標準エラー出力へ出す。設定が false なら付けない
   - 指定を付けた子が終了コード 2 で終わったときは、指定が拒否された可能性と対処を標準エラー出力へ足す
   - 偽の `codex` を使った試験で、指定あり・設定が false で指定なし・使えない Codex で起動せず失敗・終了コード 2 での案内が確かめられる
@@ -124,3 +124,4 @@
 - 2.4: 結果の形（TrustResult）は `{ status, configPath, counts, reason, notes }`、`status` は written・unchanged・removed・skipped・failed・disabled。`messageTrust(result)` は行の配列、`trustIsEffective(result)` は written・unchanged のとき true（導入コマンドが『信頼の承認が必要です』の案内を出すかの判定に使う）。3.1 以降の `codex-trust.mjs` はこの形で結果を返す。
 - 3.1: `codex-trust.mjs` の `resolveHooksTarget(repoRoot)` は 3.2 で本体の checkout の特定に差し替える入口（今は `repoRoot` 直下の `.codex/hooks.json` と空の notes）。`hooks.json` が無い・自分のフックが無いときは `skipped`（設計の Error Handling の表をこれに合わせた）。`applyCodexTrust` の `beforeCommit` は試験用の差し込み口で、呼び出し側（導入コマンド・準備スクリプト）は使わない。
 - 3.2: `applyCodexTrust` / `resolveHooksTarget` は、呼び出し側が git の最上位（`repoRoot`）を渡す前提。サブディレクトリを渡すと worktree 扱いになりうる（導入コマンドは最上位を要求し、準備スクリプトは自分の位置から最上位を求めるので、実際には起きない）。git が 2.31 より古いと本体を特定できず、実体の道筋で動く（エラーにしない）。
+- 4.2: `delegate.mjs` は `codex-trust.mjs`（と、それが読む `codex-trust-rules.mjs`）を import する。これらの配置物を `lib/catalog.mjs` の配置一覧と `package.json` の `files` に登録するまで（4.5）、導入先では `delegate.mjs` が動かない。5.1 の自己適用の前に必ず 4.5 を済ませる。
