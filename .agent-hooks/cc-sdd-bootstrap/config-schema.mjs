@@ -56,6 +56,16 @@ export const configFields = [
         : "「xx」または「xx-YY」の形で指定してください（例 ja・pt-BR）";
     },
   },
+  {
+    // Codex のフックの承認の記録を書く・子の承認の確認を省くかの切り替え（既定 true）。
+    // flag・question は持たない（対話や引数では尋ねない）。
+    path: "codex.trustHooks",
+    kind: "boolean",
+    defaultValue: true,
+    validate(value) {
+      return typeof value === "boolean" ? null : "true か false で指定してください";
+    },
+  },
 ];
 
 /**
