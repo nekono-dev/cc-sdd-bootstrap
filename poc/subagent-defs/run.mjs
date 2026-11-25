@@ -783,6 +783,48 @@ if (want("q")) {
   finally { if (process.env.POC_KEEP) console.log(`     観測: 作業場所を残しました: ${cx}`); else fs.rmSync(cx, { recursive: true, force: true }); }
 }
 
+// ---- w. 4.8: develop 取り込み後に、本体の checkout から作った worktree の Codex で、子の起動の拒否と通過を確かめる ----
+// 前提: 利用者が本体の checkout で codex を対話で起動し、更新されたフックの信頼を承認している。worktree で install-cc-sdd.mjs を実行済み。
+// この節は本番どおり、フックの信頼の承認の省略（--dangerously-bypass-hook-trust）を使わない。実行は node poc/subagent-defs/run.mjs w（全体の既定の実行には含めない）
+if (only.includes("w")) {
+  console.log("== w. 本体の checkout から作った worktree の Codex（タスク 4.8。信頼の承認の省略なし）");
+  const commonXQ = "spawn_agent が拒否されたら、言い換えや再試行をせず、拒否の文言をそのまま引用して次へ進んでください。";
+  const shQ = (cmd, args, cwd, extraEnv = {}) => spawnSync(cmd, args, { cwd, env: { ...env, ...extraEnv }, encoding: "utf8", input: "", timeout: 900000 });
+  const relabelW = (rows) => rows.map(([l, ok]) => [l.replace(/^p\./, "w."), ok]);
+  // 本体の checkout（git の共通ディレクトリの親）。Codex のフックの信頼の記録は、この checkout の .codex/hooks.json に対して付く
+  const mainCheckout = path.dirname(path.resolve(execFileSync("git", ["rev-parse", "--git-common-dir"], { cwd: repoRoot, encoding: "utf8" }).trim()));
+  const cx = repoRoot; // 本体の checkout から作った worktree（この作業ブランチの worktree）
+  try {
+    // 起動の前に cc-sdd の導入（install-cc-sdd.mjs）が済んでいること（手順は親が実行済み）と、本体の checkout の更新されたフックが登録されていること
+    check("w. 前提: worktree が本体の checkout と別の場所で、cc-sdd（手順書）と AGENTS.md の区画が入っている",
+      cx !== mainCheckout && fs.existsSync(path.join(cx, ".agents/skills/kiro-spec-status/SKILL.md"))
+      && fs.readFileSync(path.join(cx, "AGENTS.md"), "utf8").includes(fs.readFileSync(path.join(cx, ".agent-hooks/cc-sdd-bootstrap/agent-section-codex.md"), "utf8").trim()));
+    const mainHooks = JSON.parse(fs.readFileSync(path.join(mainCheckout, ".codex/hooks.json"), "utf8"));
+    check("w. 前提: 本体の checkout の .codex/hooks.json に subagent-check（codex）の PreToolUse が登録されている",
+      (mainHooks.hooks?.PreToolUse ?? []).some((g) => (g.hooks ?? []).some((h) => /subagent-check\.mjs/.test(h.command) && /--tool codex/.test(h.command))));
+    const home = path.join(base, "w-codex-home");
+    fs.mkdirSync(home, { recursive: true });
+    let rx;
+    try {
+      // 認証の写しは、作った直後から後始末（finally）に入る（設定の書き込みなどが失敗しても残さない）
+      fs.copyFileSync(path.join(os.homedir(), ".codex/auth.json"), path.join(home, "auth.json"));
+      // フックの信頼の記録（本体の checkout の hooks.json に対するもの）だけを、利用者の設定から一時の CODEX_HOME へ写す。信頼の承認の省略（--dangerously-bypass-hook-trust）は使わない
+      const realCfg = fs.readFileSync(path.join(os.homedir(), ".codex/config.toml"), "utf8");
+      const hookBlocks = [...realCfg.matchAll(/^\[hooks\.state\."([^"]+)"\]\n(?:(?!\[).*\n?)*/gm)].filter((m) => m[1].startsWith(`${mainCheckout}/.codex/hooks.json:`)).map((m) => m[0].trimEnd());
+      check("w. 前提: 利用者の設定に、本体の checkout の hooks.json のフックの信頼の記録がある（SessionStart・UserPromptSubmit・PreToolUse・PostToolUse・Stop の 8 件）", hookBlocks.length === 8, `${hookBlocks.length} 件`);
+      fs.writeFileSync(path.join(home, "config.toml"), `[projects.${JSON.stringify(cx)}]\ntrust_level = "trusted"\n\n${hookBlocks.join("\n\n")}\n`);
+      const r = shQ("codex", ["-a", "never", "exec", "--json", "-s", "workspace-write", "--model", "gpt-6.1-terra", "-c", 'model_reasoning_effort="high"', "--cd", cx,
+        `${commonXQ} 次を順に行ってください。(1) spawn_agent で agent_type に cc_sdd_implement、fork_turns に none を指定し、model と reasoning_effort は指定せずに子を起動し「OK」と答えさせる。(2) シェルで node .agent-hooks/cc-sdd-bootstrap/delegate.mjs --resolve-model --from codex --role implement --orchestrator-model gpt-6.1-terra を実行し、標準出力の 1 行（モデルと推論量）を得る。(3) spawn_agent で agent_type に cc_sdd_implement、fork_turns に none、(2) で得たモデルを model、推論量を reasoning_effort に明示して子を起動し、子に合言葉 CCSDD-RESOLVED を答えさせ、wait で待つ。`],
+        cx, { CODEX_HOME: home });
+      rx = { calls: codexCalls(home), cmds: resolveCommands(r.stdout), sessions: sessionsOf(home), phrase: "CCSDD-RESOLVED" };
+    } finally { fs.rmSync(path.join(home, "auth.json"), { force: true }); }
+    for (const c of rx.calls.filter(codexSpawn)) console.log(`     観測: 起動 ${JSON.stringify({ ...c.input, message: "…" })} → ${c.denied ? "フックが拒否: " + c.text.split("\n")[0].slice(0, 120) : "フックは通した"}`);
+    console.log(`     観測: --resolve-model の結果=${JSON.stringify(rx.cmds)} 子の記録=${JSON.stringify(rx.sessions.map((x) => x.ctxs))}`);
+    for (const [l, ok] of relabelW(judgeCx1(rx))) check(l, ok);
+  } catch (error) { check(`w. Codex の確認を最後まで実行（${error.message}）`, false); }
+  finally { fs.rmSync(path.join(base, "w-codex-home", "auth.json"), { force: true }); }
+}
+
 // ---- 判定の自己検査（実機を使わない）: わざと失敗させた記録で NG になることを確かめる。node run.mjs s ----
 if (only.includes("s")) {
   console.log("== s. 判定の自己検査（模擬の記録。期待どおりなら「期待どおり」）");
