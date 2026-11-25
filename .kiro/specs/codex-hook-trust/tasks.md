@@ -100,7 +100,7 @@
   - 設定ファイルに `codex.trustHooks` が入り、`.agent-hooks/` の新しい配置物が自己適用の結果として揃う
   - _Depends: 4.2, 4.3, 4.4, 4.5_
   - _Requirements: 1.1, 4.1_
-- [ ] 5.2 一時の Codex の設定で、実機の確認を再実行する
+- [x] 5.2 一時の Codex の設定で、実機の確認を再実行する
   - 一時の `CODEX_HOME`（認証は写し、プロジェクトの信頼は書く）で導入コマンドの `update` を実行し、書かれた承認の記録で、承認を省く指定なしの `codex exec` がフックを動かすことを確かめる
   - 書いた記録のハッシュを壊して起動し、フックは動かないだけで他の動作は壊れないことを確かめる（6.3）。承認を省く指定を付けた子の起動が、設定に保存されないことを確かめる
   - 計算式の確認手順（`run.mjs`・`probe.mjs`）を再実行して結果を記録する。実機の結果が `result.md` に追記される
@@ -128,3 +128,4 @@
 - 4.3: `test/helpers/entry-harness.mjs` の `isolatedEnv(repo, extra)` は `CODEX_HOME`・`HOME` を必ず一時ディレクトリにする。`install-cc-sdd.mjs` を起動する試験は必ずこれを通す（通さないと、導入後の承認の記録の書き込みが利用者の実際の `~/.codex` に及びうる）。ほかの試験（`cli`・`cli.e2e` など、4.4 以降で導入コマンドから承認の段階を呼ぶもの）も同じ分離を使うこと。
 - 4.4: `lib/cli.mjs` が配置物（`codex-trust.mjs`・`codex-trust-rules.mjs`）を静的に import するため、配布の登録（`lib/catalog.mjs` の `files`・`package.json` の `files`・それを確かめる試験）は 4.5 から 4.4 に前倒しした（タスク計画の抜け。登録が無いと、展開した配布物から導入コマンドが起動できない）。4.5 に残るのは運用の区画の文章の更新だけ。導入コマンドを実行する試験は、`CODEX_HOME`・`HOME` を一時ディレクトリにする分離を必ず使う（`io.env`・`io.home` で差し込む）。
 - 5.1: 自己適用は、まず一時の `CODEX_HOME`・`HOME` で `update` を実行して差分と表示を確かめ（記録 8 件が一時の設定へ書かれ、実際の `~/.codex` は変わらない）、続けて実際の環境で実行した（実際の `~/.codex/config.toml` は『最新です（変更なし 8）』で、更新時刻は変わらなかった）。自己適用で変わったのは `.cc-sdd-bootstrap.json`（`codex.trustHooks: true` が入った）と、`.agent-hooks/cc-sdd-bootstrap/agent-section-claude.md`・`agent-section-codex.md`（運用の区画の文章）の 3 ファイル。この作業は命令の実行と生成物の確認だけなので、個別のレビューは行っていない（4.5 までの実装がレビュー済み）。
+- 5.2: 実機の確認は `poc/codex-hook-trust/real-install.mjs`（一時の `CODEX_HOME`・`HOME` で導入コマンドと実際の `codex exec` を動かす。PASS 8 / 8）。手順は計画から 2 点読み替えた: 取り除きの前に、壊した記録を `update` で正しいハッシュに戻す（壊れたままでは取り除きの照合が合わず何も外れないため）、取り除き後の再導入は `init` でなく `update`（`uninstall` は設定ファイルを残すため `init` は `CONFIG_EXISTS`）。
