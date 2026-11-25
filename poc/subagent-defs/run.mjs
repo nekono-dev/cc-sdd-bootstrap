@@ -15,8 +15,10 @@
 //   node run.mjs s は、e の判定を模擬の記録（わざと失敗させたもの）で自己検査する（実機を使わない）。
 //   d・e は POC_NOHOOK=1 でフックを登録せずに動かせる（確かめる項目が未登録で NG になることの確認）。
 //   拒否はフックの出力（理由の文言）で見分ける（ツール側の入力の拒否と区別するため、フックを包んで出力を記録する）
+//   f. 実機（タスク 4.4）: 指揮役（Claude Code・Codex のセッション）から入口 delegate.mjs を呼び、5 つの場合（Claude Code→Codex・Codex→Claude Code の
+//      読み取り専用と書き込み可、Claude Code の --to same の読み取り専用）で、子の起動・応答と成否の指揮役への受け渡し、権限、呼び出し元の推論量の環境変数の扱いを確かめる
 //
-// 使い方: node poc/subagent-defs/run.mjs [a b c d e]   （既定はすべて）
+// 使い方: node poc/subagent-defs/run.mjs [a b c d e f]   （既定はすべて。s は実機を使わない判定の自己検査）
 // 必要なもの: claude（認証済み）・codex（~/.codex/auth.json）・版管理の CLI。作業場所は ~/.cache/cc-sdd-bootstrap-scratch/subagent-defs。
 // Codex のフックの信頼の承認は --dangerously-bypass-hook-trust で省く（検証専用）。認証の写しは終わったら消す。
 import { execFileSync, spawnSync } from "node:child_process";
@@ -278,8 +280,8 @@ const claudeSpawn = (c) => c.name === "Agent";
 const claudeSpawnType = (c) => c.input?.subagent_type;
 // 親（指揮役）の記録から、起動（spawn_agent）とほかの呼び出しを順に取り出す
 const codexRoot = (home) => codexSessions(home).find((f) => { const first = parseLines(fs.readFileSync(f, "utf8").split("\n")[0])[0]; return first?.type === "session_meta" && !first.payload?.parent_thread_id; });
-const codexCalls = (home) => {
-  const f = codexRoot(home); if (!f) return [];
+// 1 つのセッションの記録から、呼び出しと結果の列を取り出す（親の記録・子の記録の両方に使う）
+const codexCallsOf = (f) => {
   const calls = []; const byId = new Map();
   for (const e of parseLines(fs.readFileSync(f, "utf8"))) {
     if (e.type !== "response_item") continue;
@@ -292,6 +294,7 @@ const codexCalls = (home) => {
   }
   return calls;
 };
+const codexCalls = (home) => { const f = codexRoot(home); return f ? codexCallsOf(f) : []; };
 const codexSpawn = (c) => c.name === "spawn_agent";
 const EFFORTS = ["low", "medium", "high", "xhigh", "max", "ultra"];
 // 起動の成功: フックに拒否されず、結果に起動した子の名前（/root/<task_name>）が返っている（Codex）
@@ -538,6 +541,225 @@ if (want("p")) {
   } catch (error) { check(`p. 配置による確認を最後まで実行（${error.message}）`, false); }
 }
 
+// ---- f. 実機: 別の提供元の入口（delegate.mjs）による委任（タスク 4.4） ----
+// 指揮役（Claude Code・Codex のセッション）から入口を Bash で呼び、子が起動して応答と成否が指揮役に戻ること、
+// 読み取り専用の子が書けないこと、書き込み可の子が編集とテストの実行をできることを確かめる。
+// 判定は、記録から取り出した値（入口の出力と要約・子の記録・子を起動した引数と環境・作業先のファイルとテストの結果）だけを見る純粋な関数にする（自己検査 s で模擬の記録を使う）。
+const DELEGATE_OK = "委任先の終了: 成功（終了コード 0）";
+const SUMMARY_RE = /委任先: (claude|codex) モデル: (\S+) 推論量: (\S+) 権限: (write|read-only)/;
+// コマンドの文字列から「--名前 値」の値を取り出す（無ければ undefined）
+const flagOf = (cmd, name) => { const m = new RegExp(`${name} (\\S+)`).exec(cmd); return m ? m[1].replace(/["']+$/, "") : undefined; };
+// 子の claude の引数から「名前 値」の値を取り出す（無ければ undefined）
+const argvOf = (argv, name) => { const i = (argv ?? []).indexOf(name); return i >= 0 ? argv[i + 1] : undefined; };
+// 5 つの場合。sample は模擬の記録に使う名前、modelRe は系統の判定（実機では版の付いた名前や別名になる）
+const F_CASES = [
+  { id: "f1", label: "Claude Code → Codex 読み取り専用", from: "claude", role: "review", orch: "sonnet", to: undefined, target: "codex", family: "terra", modelRe: /terra/, sample: "gpt-6.1-terra", effort: "medium", perm: "read-only", phrase: "CCSDD-F1-5" },
+  { id: "f2", label: "Claude Code → Codex 書き込み可", from: "claude", role: "implement", orch: "sonnet", to: undefined, target: "codex", family: "luna", modelRe: /luna/, sample: "gpt-6-luna", effort: "high", perm: "write", phrase: "CCSDD-F2-5" },
+  { id: "f3", label: "Codex → Claude Code 読み取り専用", from: "codex", role: "review", orch: "gpt-6.1-terra", to: undefined, target: "claude", family: "sonnet", modelRe: /sonnet/, sample: "sonnet", effort: "medium", perm: "read-only", phrase: "CCSDD-F3-5" },
+  { id: "f4", label: "Codex → Claude Code 書き込み可", from: "codex", role: "implement", orch: "gpt-6.1-terra", to: undefined, target: "claude", family: "haiku", modelRe: /haiku/, sample: "haiku", effort: "high", perm: "write", phrase: "CCSDD-F4-5" },
+  { id: "f5", label: "Claude Code → Claude Code（--to same）読み取り専用", from: "claude", role: "review", orch: "sonnet", to: "same", target: "claude", family: "haiku", modelRe: /haiku/, sample: "haiku", effort: "high", perm: "read-only", phrase: "CCSDD-F5-5", callerEnv: true },
+];
+// Codex の指揮役の記録（1 つのセッションの行の列）から、指示のファイルを含む入口の呼び出しと、その結果を取り出す（純粋な関数）。
+// 結果は、入口の呼び出し自身の出力と、その出力の session_id を引数に持つ後続の呼び出し（write_stdin など長い処理の続き）の出力だけを連ねる。
+// 無関係な後続の呼び出しの出力は含めない
+const codexEntryRuns = (lines, instr) => {
+  const calls = []; const outs = new Map();
+  for (const e of lines) {
+    if (e?.type !== "response_item") continue;
+    const p = e.payload;
+    if (p?.type === "function_call" || p?.type === "custom_tool_call") calls.push({ id: p.call_id, raw: String(p.arguments ?? p.input ?? "") });
+    if (p?.type === "function_call_output" || p?.type === "custom_tool_call_output") outs.set(p.call_id, typeof p.output === "string" ? p.output : JSON.stringify(p.output));
+  }
+  return calls.filter((c) => c.raw.includes(instr)).map((entry) => {
+    const sid = /session(?:_| )ID\W{0,4}(\d+)/i.exec(outs.get(entry.id) ?? "")?.[1];
+    const follow = sid ? calls.filter((c) => c.id !== entry.id && new RegExp(`session_id\\W{0,4}${sid}\\b`).test(c.raw)) : [];
+    return { command: entry.raw, out: [outs.get(entry.id), ...follow.map((c) => outs.get(c.id))].filter(Boolean).join("\n") };
+  });
+};
+// 子の記録の呼び出しの列から読み取り専用・書き込み可の確かめに使う判定（純粋な関数）
+// 書き込みの拒否の文言（Codex の読み取り専用サンドボックス・権限の拒否）
+const DENY_WORD = /read-only|EROFS|Permission denied|Operation not permitted|Read-only file system/i;
+const SHELL = /exec|shell|Bash/i;
+// Claude Code の子（--tools Read,Grep,Glob）は、ファイルを書けなかった旨を答えに含める。
+// 文（「。」か改行で区切る）の中に、書き込みに関わる語（書・作・ファイル・echo・child-。「書き込み」は「書」を含む）と、書けなかった旨の語を両方含む文があること
+const CANT_TOPIC = /書|作|ファイル|echo|child-/; // 「道具」「ツール」だけの文（検索ツールがありません、など）は書き込みの話ではない
+const CANT_NO = /できません|ありません|無い|ない|拒否|実行していません|書けません|作れません/;
+const claudeCantWrite = (text) => String(text).split(/[。\n]/).some((s) => CANT_TOPIC.test(s) && CANT_NO.test(s));
+// テストの出力が通ったことを示す: TAP の集計（# pass N（N ≥ 1）と # fail 0 の両方）が必要。終了コード 0 だけでは通ったとみなさない。
+// 子の出力は JSON が何重にも入れ子になって引用符と改行が逃がされている（\"exit_code\":0・\\n）ことがあるので、逃がしを外してから見る。失敗の表示（# fail N・非 0 の exit_code）は NG にする
+const unescapeOut = (t) => String(t).replace(/\\+"/g, '"').replace(/\\+n/g, "\n");
+const testPassedIn = (raw) => { const t = unescapeOut(raw);
+  if (/^# fail [1-9]/m.test(t) || /"exit_code":\s*[1-9]/.test(t)) return false;
+  return /^# pass [1-9]\d*\s*$/m.test(t) && /^# fail 0\s*$/m.test(t); };
+// 読み取り専用の子が書こうとして拒否されたこと。Codex: シェルの呼び出しに child-<id>.txt があり、その出力に拒否の文言。
+// Claude Code: 書ける道具（Write・Edit・Bash）を引数で外し、答えに書けなかった旨がある
+const writeDenied = (c, d) => c.target === "codex"
+  ? (d.childCalls ?? []).some((x) => SHELL.test(x.name) && JSON.stringify(x.input).includes(`child-${c.id}.txt`) && DENY_WORD.test(x.text))
+  : (() => { const tools = argvOf(d.launch?.argv, "--tools"); return typeof tools === "string" && !/Write|Edit|Bash/.test(tools) && claudeCantWrite(d.child?.said ?? ""); })();
+// 書き込み可の子が自分で npm test を実行し、通ったことを示す出力がある。
+// 実行は、コマンドの先頭が npm test（先頭の空白・「cd … &&」の前置は可）のものに限る。echo の引数などの中の文字列では一致しない
+// 実際に実行されたコマンドの文字列を取り出す（description などほかの項目や、JS のコメントの中の文字列は含めない）:
+//   Claude Code の Bash は input.command、シェル系の呼び出しは input.cmd。Codex の exec は input.input の JS のコードの中の exec_command({cmd:"…"}) の cmd の値（コメントを除いて見る）
+const stripJsComments = (js) => String(js).replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:"'\\])\/\/[^\n]*/g, "$1");
+const commandsOf = (input) => {
+  const out = [];
+  for (const k of ["command", "cmd"]) if (typeof input?.[k] === "string") out.push(input[k]);
+  if (typeof input?.input === "string") for (const m of stripJsComments(input.input).matchAll(/exec_command\s*\(\s*\{[^}]*?\bcmd\s*:\s*("(?:\\.|[^"\\])*")/g)) { try { out.push(JSON.parse(m[1])); } catch {} }
+  return out;
+};
+// npm test で始まる（先頭の空白・「cd … &&」の前置は可。echo の引数などの中の文字列では一致しない）
+const NPM_TEST_CMD = /^\s*(?:cd\s[^&;|]*&&\s*)?npm test(?![\w-])/;
+const childTested = (d) => (d.childCalls ?? []).some((x) => SHELL.test(x.name) && commandsOf(x.input).some((c) => NPM_TEST_CMD.test(c)) && testPassedIn(x.text));
+// 1 つの場合の判定。d = { runs（指揮役の Bash の実行: command・out）, child（子の記録: models・efforts・said）, childCount（子の記録の候補の件数）, launch（Claude Code の子の起動の記録: argv・env）, launchCount（起動の記録の件数）, fileExists, calcFixed, testsPass }
+const judgeDelegate = (c, d) => {
+  // 指揮役が入口を複数回呼ぶことがある。引数が合うもののうち、成功の行まで返った呼び出しを優先する
+  const calls = d.runs.filter((r) => /delegate\.mjs/.test(r.command) && flagOf(r.command, "--from") === c.from && flagOf(r.command, "--role") === c.role
+    && flagOf(r.command, "--orchestrator-model") === c.orch && flagOf(r.command, "--to") === c.to);
+  const run = calls.find((r) => r.out.includes(DELEGATE_OK)) ?? calls[0];
+  const sum = run ? SUMMARY_RE.exec(run.out) : null;
+  const child = d.child;
+  // 複数回呼ばれた場合、子・起動の記録をどの呼び出しのものか決められない。成功の呼び出しが 1 つで、子・起動の記録も 1 つずつの時だけ結び付く
+  // （成功の行まで返らない途中経過の呼び出しが混じるだけなら、成功が 1 つで結び付く）
+  const okCount = calls.filter((r) => r.out.includes(DELEGATE_OK)).length;
+  const ambiguous = calls.length > 1 && (okCount !== 1 || d.childCount !== 1 || d.launchCount !== 1);
+  const results = [
+    [`${c.id}. ${c.label}: 入口が指定の引数で呼ばれ、委任先の子が成功の行まで返る`, !!run && run.out.includes(DELEGATE_OK)],
+    [`${c.id}. 入口の呼び出しと子・起動の記録が 1 つの実行に結び付く（結び付けが曖昧でない）`, !ambiguous],
+    [`${c.id}. 入口の要約が委任先 ${c.target}・モデルの系統 ${c.family}・推論量 ${c.effort}・権限 ${c.perm} を示す`,
+      !!sum && sum[1] === c.target && c.modelRe.test(sum[2]) && sum[3] === c.effort && sum[4] === c.perm],
+    [`${c.id}. 子の記録が特定でき、モデルの系統が要約どおりで、推論量が要約の値と一致する`,
+      !!child && !!sum && child.models.length > 0 && child.models.every((m) => c.modelRe.test(m)) && child.efforts.length > 0 && child.efforts.every((e) => e === sum[3])],
+    [`${c.id}. 子の応答（合言葉）が子の記録にあり、入口の出力として指揮役に戻る`, !!child && child.said.includes(c.phrase) && !!run && run.out.includes(c.phrase)],
+  ];
+  results.push(c.perm === "read-only"
+    ? [`${c.id}. 読み取り専用の子は作業先に書けない（作ろうとしたファイルが無い）`, !d.fileExists]
+    : [`${c.id}. 書き込み可の子が編集し、テスト（npm test）が通る`, d.calcFixed && d.testsPass]);
+  results.push(c.perm === "read-only"
+    ? [`${c.id}. 読み取り専用の子が書けなかった（子の記録で、作ろうとして拒否された。Claude Code の子は起動の引数で書ける道具が無く、答えに書けなかった旨がある）`, writeDenied(c, d)]
+    : [`${c.id}. 子自身が npm test を実行し、通ったことを示す出力が子の記録にある`, childTested(d)]);
+  if (c.target === "claude") {
+    const a = d.launch?.argv;
+    results.push([`${c.id}. 子の claude が権限どおりの引数で起動した（${c.perm === "read-only" ? "--tools Read,Grep,Glob" : "--permission-mode acceptEdits"}）`,
+      !!a && (c.perm === "read-only" ? argvOf(a, "--tools") === "Read,Grep,Glob" : argvOf(a, "--permission-mode") === "acceptEdits")]);
+  }
+  if (c.callerEnv) {
+    results.push([`${c.id}. 呼び出し元の推論量の環境変数があっても、子には渡らず、子は --effort ${c.effort} で動く`,
+      !!d.launch && Object.values(d.launch.env).every((v) => v === null) && argvOf(d.launch.argv, "--effort") === c.effort]);
+  }
+  return results;
+};
+
+if (want("f")) {
+  console.log("== f. 実機: 別の提供元の入口による委任（5 つの場合を指揮役のセッションから入口で呼ぶ）");
+  // 一時のリポジトリの設定: 子の上限・推論量の上限と、両指揮役の実装役を別の提供元の書き込み可にする（既定のレビュー役は別の提供元の読み取り専用）
+  const F_CFG = { maxModel: { claude: "opus", codex: "sol" }, maxEffort: { default: "high", sonnet: "medium" },
+    roles: { claude: { implement: { provider: "other", permission: "write" } }, codex: { implement: { provider: "other", permission: "write" } } } };
+  const CALC_ORIG = "export function add(a, b) {\n  return a - b;\n}\n";
+  const TEST_SRC = 'import { test } from "node:test";\nimport assert from "node:assert/strict";\nimport { add } from "./calc.mjs";\n\ntest("add は 2 と 3 の和を返す", () => {\n  assert.equal(add(2, 3), 5);\n});\n';
+  const slugF = (repo) => path.join(os.homedir(), ".claude/projects", repo.replace(/[\/.]/g, "-"));
+  const cli = path.join(repoRoot, "bin/cc-sdd-bootstrap.mjs");
+  const frepo = mkrepo("f-repo");
+  const homeF = path.join(base, "f-home"); fs.mkdirSync(homeF, { recursive: true });
+  const homeAuth = path.join(homeF, "auth.json");
+  const shimDir = path.join(base, "f-shim"); fs.mkdirSync(shimDir, { recursive: true });
+  const shimLog = path.join(base, "f-claude-launch.log");
+  const readShim = () => (fs.existsSync(shimLog) ? parseLines(fs.readFileSync(shimLog, "utf8")) : []);
+  try {
+    const realClaude = execFileSync("which", ["claude"], { encoding: "utf8" }).trim();
+    // Claude Code の子の起動の記録: 入口が PATH で見つける claude を、引数と推論量の環境変数を記録してから実物に渡す薄い包み
+    fs.writeFileSync(path.join(shimDir, "claude-shim.mjs"), [
+      'import fs from "node:fs";',
+      'import { spawnSync } from "node:child_process";',
+      "// PoC（4.4）: 入口が起動した claude の引数と、推論量に関わる環境変数を記録してから、実物の claude に渡す",
+      'const KEYS = ["CLAUDE_CODE_EFFORT_LEVEL", "CLAUDE_EFFORT", "CLAUDECODE", "CLAUDE_CODE_ENTRYPOINT"];',
+      `fs.appendFileSync(${JSON.stringify(shimLog)}, JSON.stringify({ argv: process.argv.slice(2), env: Object.fromEntries(KEYS.map((k) => [k, process.env[k] ?? null])) }) + "\\n");`,
+      `const r = spawnSync(${JSON.stringify(realClaude)}, process.argv.slice(2), { stdio: "inherit", env: process.env });`,
+      "process.exit(r.status ?? 1);",
+    ].join("\n") + "\n");
+    fs.writeFileSync(path.join(shimDir, "claude"), `#!/bin/sh\nexec node ${JSON.stringify(path.join(shimDir, "claude-shim.mjs"))} "$@"\n`);
+    fs.chmodSync(path.join(shimDir, "claude"), 0o755);
+    const shimPath = `${shimDir}:${process.env.PATH}`;
+    // Codex の子の記録（CODEX_HOME）: 認証の写しと、一時のリポジトリを信頼する設定（終わったら認証の写しを消す）
+    fs.copyFileSync(path.join(os.homedir(), ".codex/auth.json"), homeAuth);
+    fs.writeFileSync(path.join(homeF, "config.toml"), `[projects.${JSON.stringify(frepo)}]\ntrust_level = "trusted"\n`);
+    try {
+      const sh = (cmd, args, cwd, extra = {}) => spawnSync(cmd, args, { cwd, env: { ...env, ...extra }, encoding: "utf8", input: "", timeout: 900000 });
+      const i = sh("node", [cli, "init"], frepo);
+      check("f. 一時のリポジトリで init が通り設定ファイルができる", i.status === 0 && fs.existsSync(path.join(frepo, ".cc-sdd-bootstrap.json")));
+      const cfgPath = path.join(frepo, ".cc-sdd-bootstrap.json");
+      fs.writeFileSync(cfgPath, `${JSON.stringify({ ...JSON.parse(fs.readFileSync(cfgPath, "utf8")), subagents: F_CFG }, null, 2)}\n`);
+      const u = sh("node", [cli, "update"], frepo);
+      check("f. 設定（両指揮役の実装役を別の提供元の書き込み可に）を書いてから update が通り、入口が配置される", u.status === 0 && fs.existsSync(path.join(frepo, ".agent-hooks/cc-sdd-bootstrap/delegate.mjs")));
+      fs.writeFileSync(path.join(frepo, "package.json"), `${JSON.stringify({ name: "f-repo", private: true, type: "module", scripts: { test: "node --test" } }, null, 2)}\n`);
+      fs.writeFileSync(path.join(frepo, "calc.test.mjs"), TEST_SRC);
+      // 作業先を場合ごとに戻す（書き込み可の子が直した calc.mjs と、読み取り専用の子が作ったファイルを消す）
+      const resetF = () => {
+        fs.writeFileSync(path.join(frepo, "calc.mjs"), CALC_ORIG);
+        for (const f of fs.readdirSync(frepo)) if (/^child-f\d\.txt$/.test(f)) fs.rmSync(path.join(frepo, f));
+      };
+      const instructionsFor = (c, nonce) => (c.perm === "read-only"
+        ? `あなたは別の提供元から委任された子です（読み取り専用の役割）。次を行ってください。\n1. シェルで echo x > child-${c.id}.txt を実行して、カレントディレクトリにファイルを作ろうとしてください（必ず試すこと。シェルの道具が無いときは、ファイルを作る道具が無い旨を答えてください）。成功か、拒否のエラーの文言を、そのまま引用して答えてください。\n2. 合言葉は「CCSDD-${c.id.toUpperCase()}-」の後ろに 2 + 3 の結果を続けた文字列です。合言葉だけを 1 行で答えてください。\n識別用: ${nonce}\n`
+        : `あなたは別の提供元から委任された子です（書き込み可の役割）。次を行ってください。\n1. カレントディレクトリの calc.mjs の add が 2 と 3 の和を返すように直してください。\n2. npm test を自分で実行し、テストが通ることを確かめてください。\n3. テストが通ったら、合言葉「CCSDD-${c.id.toUpperCase()}-」の後ろに 2 + 3 の結果を続けた文字列だけを 1 行で答えてください。通らなければ「テスト失敗」と答えてください。\n識別用: ${nonce}\n`);
+      const promptFor = (c, instr) => `次を 1 回だけ行ってください。シェルで次のコマンドを実行し、その出力のうち「委任先」で始まる行、「委任先の終了」の行、子の応答の行を、そのまま答えてください。\nnode .agent-hooks/cc-sdd-bootstrap/delegate.mjs --from ${c.from} --role ${c.role} --orchestrator-model ${c.orch}${c.to ? ` --to ${c.to}` : ""} --instructions ${instr}\nあなた自身はファイルを作ったり編集したりしないでください。`;
+      // 指揮役のセッションを起動する。Claude Code の指揮役は、呼び出し元の環境（推論量の環境変数・セッションの印）を持たせる
+      const runOrch = (c, instr) => {
+        if (c.from === "claude") {
+          const extra = { PATH: shimPath, CODEX_HOME: homeF, CLAUDE_CODE_EFFORT_LEVEL: "low",
+            ...(c.callerEnv ? { CLAUDE_EFFORT: "low", CLAUDECODE: "1", CLAUDE_CODE_ENTRYPOINT: "cli" } : {}) };
+          const r = sh(realClaude, ["-p", "--model", "sonnet", "--effort", "medium", "--setting-sources", "project", "--permission-mode", "acceptEdits", "--allowedTools", "Bash",
+            "--output-format", "stream-json", "--verbose", "--max-turns", "12", promptFor(c, instr)], frepo, extra);
+          return { runs: claudeCalls(r.stdout).filter((x) => x.name === "Bash").map((x) => ({ command: String(x.input?.command ?? ""), out: String(x.text ?? "") })) };
+        }
+        // Codex の指揮役は、作業先への書き込みとシェルの通信を許可し、子の claude が記録を書く ~/.claude も書き込み先に含める
+        const r = sh("codex", ["-a", "never", "exec", "--json", "--dangerously-bypass-hook-trust", "-s", "workspace-write",
+          "-c", "sandbox_workspace_write.network_access=true", "-c", `sandbox_workspace_write.writable_roots=${JSON.stringify([path.join(os.homedir(), ".claude"), base])}`,
+          "--model", "gpt-6.1-terra", "-c", 'model_reasoning_effort="high"', "--cd", frepo, promptFor(c, instr)], frepo, { CODEX_HOME: homeF, PATH: shimPath });
+        if (process.env.POC_DEBUG) console.log(`     デバッグ: codex 終了=${r.status} 出力の末尾=${String(r.stdout ?? "").slice(-1500)} 標準エラー=${String(r.stderr ?? "").slice(-500)}`);
+        // この Codex は command_execution を出さないので、指揮役の記録（CODEX_HOME のセッション）から、指示のファイルを含む入口の呼び出しと、その結果を取り出す
+        const runs = codexSessions(homeF).flatMap((f) => codexEntryRuns(parseLines(fs.readFileSync(f, "utf8")), instr));
+        return { runs };
+      };
+      // POC_CASES=f3,f4 のように、場合を選んで再実行できる
+      for (const c of F_CASES.filter((x) => !process.env.POC_CASES || process.env.POC_CASES.split(",").includes(x.id))) {
+        resetF();
+        fs.rmSync(shimLog, { force: true });
+        const nonce = `NONCE-${c.id.toUpperCase()}-${Date.now()}`;
+        const instr = path.join(base, `${c.id}-instructions.md`);
+        fs.writeFileSync(instr, instructionsFor(c, nonce));
+        console.log(`-- ${c.id}: ${c.label}`);
+        const o = runOrch(c, instr);
+        // 起動の記録（Claude Code の子の shim の記録）は、この場合に書かれた件数を持つ。最後の 1 件を子の起動として使い、件数は判定に渡す
+        const launches = c.target === "claude" ? readShim() : [];
+        const launch = launches.at(-1) ?? null;
+        // 子の記録: Codex の子は nonce を含む CODEX_HOME のセッション、Claude Code の子は nonce を含む利用者の入力（ツールの結果は除く。指揮役のセッションにも nonce が出るため）を持つ一時の記録（起動の引数の推論量を添える）。候補の件数を childCount に持たせ、1 件の時だけ使う
+        let childCount = 0;
+        const child = c.target === "codex"
+          ? (() => { const cands = codexSessions(homeF).filter((x) => fs.readFileSync(x, "utf8").includes(nonce)); childCount = cands.length; const f = cands[0]; if (!f) return null; const s = sessionInfo(f);
+            return { models: s.ctxs.map((x) => x.split("/")[0]), efforts: s.ctxs.map((x) => x.split("/")[1]), said: s.said, calls: codexCallsOf(f) }; })()
+          : (() => { const dir = slugF(frepo); let files = []; try { files = fs.readdirSync(dir).filter((x) => x.endsWith(".jsonl")).map((x) => path.join(dir, x)); } catch {}
+            const cands = files.filter((x) => parseLines(fs.readFileSync(x, "utf8")).some((e) => e.type === "user" && !(Array.isArray(e.message?.content) && e.message.content.some((y) => y.type === "tool_result")) && JSON.stringify(e.message?.content ?? "").includes(nonce)));
+            childCount = cands.length; const f = cands[0];
+            if (!f) return null; const as = parseLines(fs.readFileSync(f, "utf8")).filter((e) => e.type === "assistant");
+            return { models: as.map((e) => e.message?.model).filter(Boolean), efforts: launch ? [argvOf(launch.argv, "--effort")] : [],
+              said: as.flatMap((e) => (Array.isArray(e.message?.content) ? e.message.content : []).filter((x) => x.type === "text").map((x) => x.text)).join("\n"), calls: claudeCalls(fs.readFileSync(f, "utf8")) }; })();
+        const testsPass = c.perm === "write" && spawnSync("npm", ["test"], { cwd: frepo, env, encoding: "utf8", timeout: 120000 }).status === 0;
+        // launchCount: Codex の子には起動の記録（shim）が無いので 1 とみなす。childCount・launchCount が 1 でない時、複数の入口の呼び出しとは結び付けられない
+        const d = { runs: o.runs, child, childCount, childCalls: child?.calls ?? [], launch, launchCount: c.target === "claude" ? launches.length : 1,
+          fileExists: fs.existsSync(path.join(frepo, `child-${c.id}.txt`)), calcFixed: fs.readFileSync(path.join(frepo, "calc.mjs"), "utf8") !== CALC_ORIG, testsPass };
+        if (process.env.POC_DEBUG) for (const x of o.runs) console.log(`     デバッグ: コマンド=${x.command.slice(0, 300)} 出力=${x.out.slice(0, 600)}`);
+        console.log(`     観測: 入口の出力の要約=${JSON.stringify(o.runs.map((x) => x.out.split("\n").filter((l) => /委任先|CCSDD|合言葉/.test(l)).slice(0, 4)))}`);
+        console.log(`     観測: 子の記録=${JSON.stringify(child ? { models: child.models, efforts: child.efforts, said: child.said.slice(0, 80) } : null)} 起動の引数=${JSON.stringify(launch?.argv ?? null)} 環境=${JSON.stringify(launch?.env ?? null)}`);
+        if (c.perm === "write") console.log(`     観測: 子の npm test の呼び出しと出力=${JSON.stringify((child?.calls ?? d.childCalls ?? []).filter((x) => /npm test/.test(JSON.stringify(x.input))).map((x) => ({ 呼び出し: JSON.stringify(x.input).slice(0, 160), 出力: String(x.text).slice(0, 1500) })))}`);
+        console.log(`     観測: child-${c.id}.txt=${d.fileExists ? "あり" : "なし"} calc.mjs=${d.calcFixed ? "変更あり" : "変更なし"} npm test=${d.testsPass ? "通った" : "通らない"}`);
+        for (const [l, ok] of judgeDelegate(c, d)) check(l, ok);
+      }
+    } finally {
+      fs.rmSync(homeAuth, { force: true });
+      fs.rmSync(slugF(frepo), { recursive: true, force: true });
+    }
+  } catch (error) { check(`f. 委任の確認を最後まで実行（${error.message}）`, false); }
+}
+
 // ---- 判定の自己検査（実機を使わない）: わざと失敗させた記録で NG になることを確かめる。node run.mjs s ----
 if (only.includes("s")) {
   console.log("== s. 判定の自己検査（模擬の記録。期待どおりなら「期待どおり」）");
@@ -678,6 +900,93 @@ if (only.includes("s")) {
   expectBool("retry 起動の前に拒否された echo だけ", readBeforeSpawn("claude", [{ name: "Bash", input: { command: "echo .claude/skills/kiro-spec-status/SKILL.md" }, denied: true, text: "blocked", isError: true }, clSp("cc-sdd-implement-haiku", {}, GATE, true)]), false);
   expectBool("retry 起動の前に読みが失敗", readBeforeSpawn("claude", [{ ...readCl(), isError: true, text: "error" }, clSp("cc-sdd-implement-haiku", {}, GATE, true)]), false);
   expectBool("retry 先に起動し、その後に読んだ", readBeforeSpawn("claude", [clSp("cc-sdd-implement-haiku", {}, GATE, true), readCl()]), false);
+
+  // ---- f の判定の自己検査（模擬の記録。正常は全項目 OK、わざと失敗させたものは該当の項目だけが NG になること） ----
+  // expectNG: NG になった項目の名前（部分一致）が、指定の順で過不足なく並ぶこと
+  const expectNG = (label, results, keys) => {
+    const ng = results.filter(([, ok]) => !ok).map(([l]) => l);
+    const as = ng.length === keys.length && keys.every((k, n) => ng[n].includes(k));
+    console.log(`${as ? "期待どおり" : "想定外"}: ${label} → NG ${JSON.stringify(ng)}`);
+    if (!as) fail++;
+  };
+  // 子の記録の呼び出しの模擬（実機の書式に合わせる）: 読み取り専用の Codex は拒否された書き込み、書き込み可は npm test の成功
+  const fChildCalls = (c) => c.perm === "read-only"
+    ? (c.target === "codex" ? [{ name: "exec_command", input: { cmd: `echo x > child-${c.id}.txt` }, text: "/bin/bash: child-f1.txt: Read-only file system" }] : [])
+    : [c.target === "codex" ? { name: "exec_command", input: { cmd: "npm test" }, text: "# pass 1\n# fail 0" } : { name: "Bash", input: { command: "npm test" }, text: "# tests 1\n# pass 1\n# fail 0" }];
+  const fGood = (c) => {
+    const cmd = `node .agent-hooks/cc-sdd-bootstrap/delegate.mjs --from ${c.from} --role ${c.role} --orchestrator-model ${c.orch}${c.to ? ` --to ${c.to}` : ""} --instructions /x/i.md`;
+    return {
+      runs: [{ command: cmd, out: `委任先: ${c.target} モデル: ${c.sample} 推論量: ${c.effort} 権限: ${c.perm}\n${c.phrase}\n${DELEGATE_OK}` }],
+      child: { models: [c.sample], efforts: [c.effort], said: c.perm === "read-only" && c.target === "claude" ? `${c.phrase}\nWrite ツールが無いため、作れませんでした。` : c.phrase },
+      childCalls: fChildCalls(c),
+      launch: c.target === "claude" ? { argv: ["-p", ...(c.perm === "read-only" ? ["--tools", "Read,Grep,Glob"] : ["--permission-mode", "acceptEdits"]), "--effort", c.effort],
+        env: { CLAUDE_CODE_EFFORT_LEVEL: null, CLAUDE_EFFORT: null, CLAUDECODE: null, CLAUDE_CODE_ENTRYPOINT: null } } : null,
+      childCount: 1, launchCount: 1, fileExists: false, calcFixed: true, testsPass: true,
+    };
+  };
+  for (const c of F_CASES) expect(`f ${c.id} 正常な記録は全項目 OK`, judgeDelegate(c, fGood(c)), []);
+  const [f1, f2, , , f5] = F_CASES;
+  const mut = (c, edit) => { const d = fGood(c); edit(d); return d; };
+  const cmdOf = (c) => fGood(c).runs[0].command;
+  expectNG("f1 入口の出力に成功の行が無い（合言葉だけ）", judgeDelegate(f1, mut(f1, (d) => { d.runs[0].out = d.runs[0].out.replace(DELEGATE_OK, "失敗"); })), ["入口が指定の引数"]);
+  expectNG("f1 要約の権限が違う（write と出た）", judgeDelegate(f1, mut(f1, (d) => { d.runs[0].out = d.runs[0].out.replace("権限: read-only", "権限: write"); })), ["入口の要約"]);
+  expectNG("f1 子のモデルが別の系統（sol）", judgeDelegate(f1, mut(f1, (d) => { d.child.models = ["gpt-6.1-sol"]; })), ["子の記録が特定"]);
+  expectNG("f1 子の推論量が要約と違う（high）", judgeDelegate(f1, mut(f1, (d) => { d.child.efforts = ["high"]; })), ["子の記録が特定"]);
+  expectNG("f1 読み取り専用なのに作ろうとしたファイルがある", judgeDelegate(f1, mut(f1, (d) => { d.fileExists = true; })), ["読み取り専用の子は作業先に書けない"]);
+  expectNG("f1 子の記録が見つからない", judgeDelegate(f1, mut(f1, (d) => { d.child = null; d.childCalls = []; })), ["子の記録が特定", "子の応答", "読み取り専用の子が書けなかった"]);
+  expectNG("f1 子の記録に合言葉がない（入口の出力にだけある）", judgeDelegate(f1, mut(f1, (d) => { d.child.said = "別の答え"; })), ["子の応答"]);
+  expectNG("f1 入口の出力に合言葉がない（子の記録にだけある）", judgeDelegate(f1, mut(f1, (d) => { d.runs[0].out = d.runs[0].out.replace(f1.phrase, "x"); })), ["子の応答"]);
+  expectNG("f1 指定と違う --role の実行しか無い（要約と子の記録も実行に依存する）", judgeDelegate(f1, mut(f1, (d) => { d.runs[0].command = cmdOf(f1).replace("--role review", "--role debug"); })), ["入口が指定の引数", "入口の要約", "子の記録が特定", "子の応答"]);
+  expectNG("f2 書き込み可の子が編集もテストもできなかった", judgeDelegate(f2, mut(f2, (d) => { d.calcFixed = false; d.testsPass = false; })), ["書き込み可の子が編集"]);
+  expectNG("f2 子の推論量が要約と違う（medium）", judgeDelegate(f2, mut(f2, (d) => { d.child.efforts = ["medium"]; })), ["子の記録が特定"]);
+  expectNG("f5 --to same の実行が無い（--to の無い実行だけ）", judgeDelegate(f5, mut(f5, (d) => { d.runs[0].command = cmdOf(f5).replace(" --to same", ""); })), ["入口が指定の引数", "入口の要約", "子の記録が特定", "子の応答"]);
+  expectNG("f5 呼び出し元の推論量の環境変数が子に渡っている", judgeDelegate(f5, mut(f5, (d) => { d.launch.env.CLAUDE_CODE_EFFORT_LEVEL = "low"; })), ["呼び出し元の推論量"]);
+  expectNG("f5 読み取り専用の子の引数に --tools が無い", judgeDelegate(f5, mut(f5, (d) => { d.launch.argv = ["-p", "--permission-mode", "acceptEdits", "--effort", "high"]; })), ["読み取り専用の子が書けなかった", "子の claude が権限どおり"]);
+  expectNG("f4 書き込み可の子の引数に acceptEdits が無い", judgeDelegate(F_CASES[3], mut(F_CASES[3], (d) => { d.launch.argv = ["-p", "--tools", "Read,Grep,Glob", "--effort", "high"]; })), ["子の claude が権限どおり"]);
+  // 読み取り専用の子が書こうとしなかった・拒否の文言がない・書ける道具が残っている場合は NG になること
+  expectNG("f1 読み取り専用の子が書こうとしなかった（シェルの呼び出しが無い）", judgeDelegate(f1, mut(f1, (d) => { d.childCalls = []; })), ["読み取り専用の子が書けなかった"]);
+  expectNG("f1 シェルの出力に書き込みの拒否の文言がない（作れた旨の出力）", judgeDelegate(f1, mut(f1, (d) => { d.childCalls[0].text = "created"; })), ["読み取り専用の子が書けなかった"]);
+  expectNG("f1 拒否の文言は出たが、作ろうとしたのが別のファイル", judgeDelegate(f1, mut(f1, (d) => { d.childCalls[0].input = { cmd: "echo x > other.txt" }; })), ["読み取り専用の子が書けなかった"]);
+  expectNG("f5 答えに書けなかった旨がない（書こうとした記述が無い）", judgeDelegate(f5, mut(f5, (d) => { d.child.said = f5.phrase; })), ["読み取り専用の子が書けなかった"]);
+  expectNG("f5 --tools に Write を含む（書ける道具が残っている）", judgeDelegate(f5, mut(f5, (d) => { d.launch.argv = ["-p", "--tools", "Read,Write,Grep,Glob", "--effort", "high"]; })), ["読み取り専用の子が書けなかった", "子の claude が権限どおり"]);
+  // 書き込み可の子のテスト実行: 子がテストを実行していない・失敗している場合は NG になること
+  expectNG("f2 子が npm test を実行していない（作業先の結果だけ通る）", judgeDelegate(f2, mut(f2, (d) => { d.childCalls = []; })), ["子自身が npm test"]);
+  // 実機で観測した形（JSON が入れ子になり、引用符と改行が逃がされている）。通ったものは OK、# fail 1 のものは NG
+  expectNG("f2 子の npm test の出力が入れ子の JSON（実機の形）で通っている", judgeDelegate(f2, mut(f2, (d) => { d.childCalls[0].text = String.raw`[{"type":"input_text","text":"Script completed\nWall time 0.2 seconds\nOutput:\n"},{"type":"input_text","text":"{\"exit_code\":0,\"output\":\"\\n> test\\n\\nTAP version 13\\n# pass 1\\n# fail 0\\n# todo 0\\n\"}"}]`; })), []);
+  expectNG("f2 子の npm test の出力が入れ子の JSON（実機の形）で # fail 1", judgeDelegate(f2, mut(f2, (d) => { d.childCalls[0].text = String.raw`[{"type":"input_text","text":"Script completed\nWall time 0.2 seconds\nOutput:\n"},{"type":"input_text","text":"{\"exit_code\":0,\"output\":\"\\n> test\\n\\nTAP version 13\\n# pass 1\\n# fail 1\\n# todo 0\\n\"}"}]`; })), ["子自身が npm test"]);
+  expectNG("f2 指揮役が入口を 2 回呼び、最初は途中経過だけ（成功の行まで返った呼び出しを使う）", judgeDelegate(f2, mut(f2, (d) => { d.runs = [{ command: d.runs[0].command, out: d.runs[0].out.split("\n")[0] }, ...d.runs]; })), []);
+  expectNG("f3 子が「シェルの道具がありません」と答えた（書けなかった旨の言い回し）", judgeDelegate(F_CASES[2], mut(F_CASES[2], (d) => { d.child.said = "1. シェルの道具がありません。そのため `echo x > child-f3.txt` は実行していません。ファイルを作る道具もないので、作っていません。\n2. " + F_CASES[2].phrase; })), []);
+  // 実機で観測した、npm test の呼び出しの形（Codex は JS のコードの中の cmd、Claude Code は npm test に続けて echo）
+  const TAP_OK = "\n> test\n# pass 1\n# fail 0\n";
+  expectNG("f2 Codex の子の呼び出しが JS のコードの中の cmd:\"npm test\"（実機の形）", judgeDelegate(f2, mut(f2, (d) => { d.childCalls[0] = { name: "exec", input: { input: 'const r = await tools.exec_command({cmd:"npm test",yield_time_ms:10000}); text(JSON.stringify(r));' }, text: TAP_OK }; })), []);
+  expectNG("f4 Claude Code の子の呼び出しが npm test; echo の形（実機の形）", judgeDelegate(F_CASES[3], mut(F_CASES[3], (d) => { d.childCalls[0] = { name: "Bash", input: { command: 'npm test; echo "EXIT=$?"' }, text: `${TAP_OK}EXIT=0` }; })), []);
+  expectNG("f2 Codex の子の呼び出しが echo の引数に npm test があるだけ", judgeDelegate(f2, mut(f2, (d) => { d.childCalls[0] = { name: "exec", input: { input: 'const r = await tools.exec_command({cmd:"echo \\"npm test\\"",yield_time_ms:10000});' }, text: TAP_OK }; })), ["子自身が npm test"]);
+  expectNG("f2 実行されたコマンドは echo で、description に cmd: \"npm test\" があるだけ", judgeDelegate(f2, mut(f2, (d) => { d.childCalls[0] = { name: "Bash", input: { command: "echo fake", description: 'cmd: "npm test"' }, text: TAP_OK }; })), ["子自身が npm test"]);
+  expectNG("f2 Codex の JS のコメントの中に exec_command({cmd:\"npm test\"}) があるだけ（実行は echo）", judgeDelegate(f2, mut(f2, (d) => { d.childCalls[0] = { name: "exec", input: { input: '// exec_command({cmd:"npm test"})\nconst r = await tools.exec_command({cmd:"echo fake"});' }, text: TAP_OK }; })), ["子自身が npm test"]);
+  expectNG("f3 書き込みと無関係な「検索ツールがありません」だけ", judgeDelegate(F_CASES[2], mut(F_CASES[2], (d) => { d.child.said = "1. 検索ツールがありません。\n2. " + F_CASES[2].phrase; })), ["読み取り専用の子が書けなかった"]);
+  expectNG("f2 子の npm test が終了コード 0 でも、TAP に # fail 1 がある（npm test; true の形）", judgeDelegate(f2, mut(f2, (d) => { d.childCalls[0].text = '{"exit_code":0,"output":"# pass 1\\n# fail 1\\n"}'; })), ["子自身が npm test"]);
+  expectNG("f2 子の npm test の出力が JSON の中でも失敗（exit_code 1・# fail 1）", judgeDelegate(f2, mut(f2, (d) => { d.childCalls[0].text = '{"exit_code":1,"output":"# pass 1\\n# fail 1\\n"}'; })), ["子自身が npm test"]);
+  expectNG("f2 子の npm test の出力が失敗（# fail 1）", judgeDelegate(f2, mut(f2, (d) => { d.childCalls[0].text = "# pass 1\n# fail 1"; })), ["子自身が npm test"]);
+  expectNG("f4 子の Bash が npm test でなく、別のコマンドの成功だけ", judgeDelegate(F_CASES[3], mut(F_CASES[3], (d) => { d.childCalls = [{ name: "Bash", input: { command: "ls" }, text: "# pass 1\n# fail 0" }]; })), ["子自身が npm test"]);
+  expectNG("f2 子の Bash が echo の引数に npm test を含むだけ（実行は別のコマンド）", judgeDelegate(f2, mut(f2, (d) => { d.childCalls[0].input = { command: 'echo "npm test"' }; })), ["子自身が npm test"]);
+  expectNG("f2 子の npm test が TAP なしで終了コード 0 だけ（npm test; true の形）", judgeDelegate(f2, mut(f2, (d) => { d.childCalls[0].text = "Process exited with code 0"; })), ["子自身が npm test"]);
+  expectNG("f2 子の npm test の出力が終了コード 0 だけ（JSON の exit_code のみ）", judgeDelegate(f2, mut(f2, (d) => { d.childCalls[0].text = '{"exit_code":0,"output":"done"}'; })), ["子自身が npm test"]);
+  // 複数回の呼び出しと子・起動の記録の結び付け: 成功が 2 つ、または記録が複数ある時は曖昧で NG。途中経過が混じるだけなら OK
+  expectNG("f2 入口が成功の行まで返る呼び出しを 2 回（子の記録が 2 件）", judgeDelegate(f2, mut(f2, (d) => { d.runs = [...d.runs, { ...d.runs[0] }]; d.childCount = 2; })), ["結び付けが曖昧でない"]);
+  expectNG("f5 入口が成功を 2 回、起動の記録も 2 件（Claude Code の子）", judgeDelegate(f5, mut(f5, (d) => { d.runs = [...d.runs, { ...d.runs[0] }]; d.launchCount = 2; })), ["結び付けが曖昧でない"]);
+  expectNG("f2 入口を 2 回呼び、子の記録が 2 件（成功は 1 つ）", judgeDelegate(f2, mut(f2, (d) => { d.runs = [{ command: d.runs[0].command, out: d.runs[0].out.split("\n")[0] }, ...d.runs]; d.childCount = 2; })), ["結び付けが曖昧でない"]);
+  // Claude Code の書き込み拒否: 書き込みと無関係な拒否・不能の文だけでは、書けなかった旨にならない
+  expectNG("f5 書き込みと無関係な拒否・不能の文だけ（外部 API の拒否）", judgeDelegate(f5, mut(f5, (d) => { d.child.said = `外部 API の呼び出しは拒否されました。\n${f5.phrase}`; })), ["読み取り専用の子が書けなかった"]);
+  // 入口の結果の対応づけ（Codex の指揮役）: 無関係な後続の呼び出しの成功行は、入口の結果にならない。session_id の続きだけが連なる
+  const EXC = (id, raw) => ({ type: "response_item", payload: { type: "function_call", call_id: id, arguments: raw } });
+  const EXO = (id, output) => ({ type: "response_item", payload: { type: "function_call_output", call_id: id, output } });
+  const instrS = "/x/i.md";
+  const entryC = EXC("e", JSON.stringify({ cmd: `node delegate.mjs --instructions ${instrS}` }));
+  const unrelated = [entryC, EXO("e", "失敗"), EXC("u", '{"cmd":"echo x"}'), EXO("u", DELEGATE_OK)];
+  expectBool("codex 入口の結果に、無関係な後続の呼び出しの成功行が入らない", codexEntryRuns(unrelated, instrS)[0].out.includes(DELEGATE_OK), false);
+  const continued = [entryC, EXO("e", "Process running with session ID 42"), EXC("u", '{"cmd":"echo x"}'), EXO("u", `別の応答\n${DELEGATE_OK}`), EXC("w", '{"session_id":42,"chars":""}'), EXO("w", "子の応答")];
+  const cr = codexEntryRuns(continued, instrS);
+  expectBool("codex 入口の結果は session_id の続きの出力だけを連ねる（無関係な出力は含まない）", cr.length === 1 && cr[0].out.includes("子の応答") && !cr[0].out.includes("別の応答"), true);
 }
 
 console.log(`結果: OK ${pass} 件、NG ${fail} 件`);

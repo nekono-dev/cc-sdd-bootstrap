@@ -107,7 +107,7 @@
   - 結果を `poc/subagent-defs/result.md` に記録し、確かめた項目がすべて OK になる
   - _Depends: 4.1, 4.2_
   - _Requirements: 1.12, 2.1, 3.1, 3.2, 3.8, 3.10_
-- [ ] 4.4 実機で、別の提供元の入口による委任を確かめる
+- [x] 4.4 実機で、別の提供元の入口による委任を確かめる
   - 前提: 認証済みの `claude`・`codex`。Codex から `claude -p` を呼ぶ確認ではシェルの通信の許可
   - 4.4 用の一時のリポジトリを `init`・`update` で作り、試験用に両指揮役の実装役を別の提供元に割り当てた設定（書き込み可の別の提供元の役割）と、既定のレビュー役（読み取り専用の別の提供元の役割）を用意する。指揮役のモデルは、両方向で子を選べる格（Claude Code は Sonnet、Codex は Terra）を `--orchestrator-model` に渡す。同じ提供元への委任を含む 5 つの場合を再実行できるよう `poc/subagent-defs/run.mjs` を更新し、結果は `result.md` の委任の節に記録する。呼び出し元に別の値の推論量の環境変数を設定しても、Claude Code の子が確かめ済みの推論量で動くことを子の記録で確かめる。Codex から Claude Code への場合は、対象のリポジトリへの書き込みとシェルの通信を許可した実際の Codex のセッションの中から入口を呼び、読み取り専用の子が書けず書き込み可の子が編集とテストの実行をできることをファイルの有無とテストの結果で確かめ、子の応答と終了の結果がそのセッションに戻ることを確かめる（要件 5.11）。Claude Code から Codex（読み取り専用・書き込み可）と、Codex から Claude Code（読み取り専用・書き込み可）への委任と、Claude Code のセッションの中から `--to same` で Claude Code（読み取り専用）への委任を入口で行い（セッションの環境変数が入口に渡る状態から、子の応答と指定した推論量を子の記録で確かめる）、応答と成否が返ること、読み取り専用の子が書けないこと、書き込み可の子が編集とテストの実行をできることを確かめる
   - 結果を `poc/subagent-defs/result.md` に記録し、確かめた項目がすべて OK になる
@@ -155,3 +155,4 @@
 - 3.5: 区画の書き直しは `decideInstall` の `rewrite-section`（材料 `sectionStale`）と `performSectionRewrite`（導入中の印を取って読み直し、文書ごとに一時ファイル → rename、配置物の文章の目印を書き込む直前に検証）。書き直しの経路の失敗はすべて `SectionRewriteError` で、失敗の記録を作らない。4.1 でカタログに登録するまで、`node bin/cc-sdd-bootstrap.mjs update` は未登録の配置物（delegate.mjs・subagent-check.mjs）を消すので実行しない。
 - 4.1: カタログに generated を足したので、計画の試験の snapshot には生成済みの役割定義（generatedFiles）を含める。既定の設定でも Codex の読み取り専用の役割の知らせが update のたびに出る。差分が無くても知らせは「変更はありません。」の後に表示される。別の提供元（Codex）が利用上限で一時的に使えなくなることがある（2026-11-24 16:15 UTC まで）。
 - 4.2: 区画の文章は `lib/catalog.mjs` の `delegationSection(tool)` で組み立てる（役割の案内 `ROLE_GUIDE`、同じ提供元に候補が無い場合 `NO_CANDIDATE`）。案内の正しさは入口（delegate.mjs）とフック（subagent-check.mjs）の実際の振る舞いに合わせて確かめる（役割ごとの `--role`、`--resolve-model` の出力は `<名前> <推論量>`、未指定の拒否は起動の引数と定義のどちらにもモデルが無い場合）。
+- 4.4: 実機の通しは `node poc/subagent-defs/run.mjs f`（`POC_CASES=f3,f4` で場合を選べ、`POC_DEBUG=1` で詳細、`POC_KEEP=1` で作業場所を残す）。この版の Codex は指揮役の実行を `command_execution` で出さないので、指揮役の記録（CODEX_HOME のセッション）の `function_call`・`custom_tool_call` から呼び出しと出力を取る。Codex の子の `npm test` の出力は JSON が入れ子で引用符・改行が逃がされるため、逃がしを外してから判定する。Codex の指揮役のサンドボックスは、書き込み先に `~/.claude` と作業場所を足し、通信を許可する。判定の既知の限界は `result.md` の末尾に記載。

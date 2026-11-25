@@ -83,3 +83,48 @@
 - 指揮役のモデルの従い方による不安定さ（Codex）: kiro-gate は入力のときに「作業の前に手順書を先に読む」旨を開発者の文脈に足すため、Codex の指揮役（sol）は利用者の指示の順序（手順書を読む前に起動）を守らず、先に読んでしまうことがあった（読む前の拒否を観測できない）。この場合だけ、`-c developer_instructions=…` で試験の順序を開発者の指示の側で明示し、それでも先に読んだときだけ最大 3 回までやり直す（判定は緩めない。やり直しは観測の行に残る）。最終の実行はやり直しなしで通った。Claude Code では起きなかった。
 - 実行のたびに最初の入力の導入で `npx` の通信が要る。
 - `run.mjs` は開始時に作業場所を消すので、`p` の実行中に `s`・ほかの節を同じ作業場所で動かさない（途中で消えて失敗する）。
+
+## 委任: 別の提供元の入口（`delegate.mjs`）による委任（タスク 4.4）
+
+- 実行日: 2026-11-25
+- 環境: Claude Code 2.1.329（指揮役 sonnet）、Codex CLI 0.167.0（指揮役 gpt-6.1-terra、推論量 high）。生ログ `~/.cache/cc-sdd-bootstrap-logs/f-final12.log`（最終の 5 つの場合の通し。OK 41・NG 0）。場合を選んだ再実行は `POC_CASES=f3,f4`、詳細の表示は `POC_DEBUG=1`、作業場所を残すのは `POC_KEEP=1`
+- 実行: `node poc/subagent-defs/run.mjs f`（判定の自己検査は `node poc/subagent-defs/run.mjs s`。実機なしで確かめ済み）
+- 設定: 一時のリポジトリで `init` → `subagents`（`maxModel`: Claude Code は opus・Codex は sol、`maxEffort`: 既定 high・sonnet だけ medium、`roles`: 両指揮役の実装役を別の提供元の書き込み可）→ `update`。レビュー役は既定の別の提供元の読み取り専用
+- 指揮役からの呼び出し: 指揮役のセッション（`claude -p`・`codex exec`）の Bash から入口を呼ぶ。作業先は一時のリポジトリ。指示のファイルは `~/.cache/cc-sdd-bootstrap-scratch/subagent-defs/` に置く
+- 子の記録: Claude Code の子は、入口が PATH の先頭で見つける薄い包み（起動の引数と推論量の環境変数を記録してから実物に渡す）で記録する。Codex の子は CODEX_HOME のセッションの turn_context（モデル・推論量）で確かめる。子の特定は、指示のファイルに入れた識別用の文字列で行う
+- 注意: Codex の指揮役では、子の claude がセッションを書く `~/.claude` を書き込み先に含め、シェルの通信を許可する（`sandbox_workspace_write.network_access`・`writable_roots`）。この設定で子は起動できた（下の「食い違いと注意」）
+
+| 確かめたこと | 結果 | 観測 |
+|---|---|---|
+| 1. Claude Code → Codex 読み取り専用（review）。入口が指定の引数で呼ばれ、子が成功の行まで返り、要約（codex・terra 系統・medium・read-only）と子の記録が一致し、子の応答が入口の出力として戻る | OK | 要約 `codex・gpt-6.1-terra・medium・read-only`。子の記録が Terra/medium |
+| 1. 入口の呼び出し・要約・子の記録・子の応答（Claude Code → Codex 読み取り専用） | OK | 要約 `codex・gpt-6.1-terra・medium・read-only`。子の記録が Terra/medium |
+| 1. 読み取り専用の子が書けなかった（子の記録で、シェルの `child-f1.txt` の呼び出しが書き込みの拒否を返した。作業先にファイルも無い） | OK | 子の記録に `child-f1.txt` を含むシェルの呼び出しがあり、出力が書き込みの拒否。作業先にファイル無し（直す前は「ファイル無し」だけで OK としていた） |
+| 2. Claude Code → Codex 書き込み可（implement）の入口・要約（codex・luna 系統・high・write）・子の記録 | OK | 要約 `codex・gpt-6-luna・high・write`。calc.mjs が変わった |
+| 2. 子自身が `npm test` を実行し、通ったことを示す出力が子の記録にある | OK | 子（Codex）の記録に `npm test` の実行と `# pass 1`・`# fail 0` の出力（Codex の子は JSON の `exit_code:0` も、Claude Code の子は `EXIT=0` も付く。実物は `f-final12.log`）（直す前は作業先で runner が実行した結果だけを見ていた） |
+| 3. Codex → Claude Code 読み取り専用（review）の入口・要約（claude・sonnet・medium・read-only）・子の記録・子の応答。子の起動が `--tools Read,Grep,Glob` で行われる | OK | 要約 `claude・sonnet・medium・read-only`。起動の引数 `-p --model sonnet --effort medium --tools Read,Grep,Glob` |
+| 3. 読み取り専用の子が書けなかった（起動の引数に書ける道具が無く、答えに書けなかった旨がある） | OK | 起動の引数 `--tools Read,Grep,Glob`（Write・Edit・Bash を含まない）、答えに書けなかった旨、作業先にファイル無し（直す前は「ファイル無し」だけで OK としていた。子は書こうとしなかった） |
+| 4. Codex → Claude Code 書き込み可（implement）の入口・要約（claude・haiku 系統・high・write）・子の記録。子の起動が `--permission-mode acceptEdits` で行われる | OK | 要約 `claude・haiku・high・write`。起動の引数 `--permission-mode acceptEdits`。calc.mjs が変わった |
+| 4. 子自身が `npm test` を実行し、通ったことを示す出力が子の記録にある | OK | 子（Claude Code）の記録の Bash に `npm test` と、通った出力 |
+| 5. Claude Code → Claude Code（`--to same`）読み取り専用（review）の入口・要約（claude・haiku 系統・high・read-only）・子の記録・子の応答 | OK | 要約 `claude・haiku・high・read-only`。子の記録の推論量 high |
+| 5. 呼び出し元の推論量の環境変数（`CLAUDE_CODE_EFFORT_LEVEL=low` など）と session の印を設定しても、子には渡らず、子は `--effort high` で動く（起動の記録で確かめる） | OK | 起動の記録で 4 つの環境変数がすべて null、引数は `--effort high` |
+| 5. 読み取り専用の子が書けなかった（起動の引数に書ける道具が無く、答えに書けなかった旨がある） | OK | 起動の引数 `--tools Read,Grep,Glob`、答えに書けなかった旨（書き込みの道具が無い）、作業先にファイル無し |
+
+### 食い違いと注意
+
+- 製品側の不具合は見つからなかった。確認の側の直しだけを行った。
+  - 子の claude の起動の記録（`claude-shim.mjs` の記録の書き先）が Codex のサンドボックスの書き込み先の外で、読み取り専用（EROFS）になり、子が終了コード 1 で失敗した。書き込み先に作業場所を足して直した。
+  - この Codex は指揮役の実行を `command_execution` で出さない。指揮役の記録（CODEX_HOME のセッション）の `function_call`・`custom_tool_call` から、この場合の指示のファイルを含む呼び出しを取り出し、長い処理の続き（待ち受けの呼び出し）の出力も同じ実行の出力に連ねる判定にした。
+- Codex の指揮役で `network_access=true` と `writable_roots`（`~/.claude` と作業場所）の設定で、子の claude は起動し、終了コード 0 で応答が戻った（`~/.claude.json` の追加の許可は要らなかった）。
+- 場合 5 は、指揮役に `CLAUDECODE`・`CLAUDE_CODE_ENTRYPOINT` を持たせたままの入れ子の `claude -p` が通った。
+- 読み取り専用の子が書けないことの判定（直した後）: 作業先にファイルが無いことだけでは、子が書こうとしたかが分からないので足りない。Codex の子は、子の記録にある `child-<id>.txt` を含むシェルの呼び出しが、書き込みの拒否の文言（read-only・EROFS・Permission denied など）を返したことを見る。Claude Code の子は、起動の引数に `--tools` があって Write・Edit・Bash を含まず、答えに書けなかった旨があることを見る。直す前の場合 3 では、子は書こうとしなかった（観測）。
+- 書き込み可の子のテスト実行の判定（直した後）: 子の記録に、`npm test` の呼び出しと、通ったことを示す出力（TAP の `# pass N`（N ≥ 1）と `# fail 0` の両方。終了コード 0 だけでは通ったとしない）があることを見る。実行されたコマンドは、`command`・`cmd` の値と、Codex の JS のコードの中の `exec_command({cmd:"…"})` の値（コメントは除く）から取り出し、`npm test` で始まるものに限る（description などほかの項目や echo の引数は除く）。作業先で runner が行う npm test の結果は、子が実行したことの証拠にしない。
+- 入口の出力の対応づけ（直した後）: Codex の指揮役では、指示のファイルを含む入口の呼び出し自身の出力と、その出力の `session_id` を引数に持つ後続の呼び出しの出力だけを連ねる。無関係な後続の呼び出しの成功行は、入口の結果にならない（自己検査で確かめた）。
+- 直した判定の実機での確かめ直し（2026-11-25）: 判定を厳しくした後の実機の実行で、検証の側の取りこぼしが順に見つかり、そのたびに直した。最終の通し（`f-final12.log`）は OK 41・NG 0。製品側の不具合は見つからなかった。
+  - 子の `npm test` の出力の書式: Codex の子の出力は JSON が入れ子になり、引用符と改行が逃がされている（`\"exit_code\":0`・`\\n`）。逃がしを外してから `# pass N`・`# fail 0` を見る（`unescapeOut`）。失敗の表示（`# fail N`・非 0 の `exit_code`）は終了コード 0 より優先して NG（`npm test; true` の形も NG）。実機の形の通ったものと `# fail 1` のものを自己検査に足した。子の出力の実物は、各実行の「子の npm test の呼び出しと出力」の行に残る（`f-final5.log`・`f-final8.log` など。Codex の子は `exit_code:0`、Claude Code の子は `exit=0`）。
+  - 指揮役（Claude Code の sonnet）が入口を 2 回呼ぶことがあり、最初の途中経過の呼び出しを拾って NG になった（`f-final8.log` の f2）。引数が合う呼び出しのうち、成功の行まで返ったものを使う。
+  - 子の言い回し（`f-final8.log` の f3）: 「シェルの道具がありません。そのため `echo x > child-f3.txt` は実行していません」は書けなかった旨に当たるのに、言い回しの一覧に無く NG になった。一覧に「道具・ツールがありません」の形を足した。その後のレビューで「検索ツールがありません」のような書き込みと無関係な文が通ると指摘され、現在は「道具」「ツール」だけの文は書き込みの話として扱わず、書き込みに関わる語（書・作・ファイル・echo・child-）と書けなかった旨の語を同じ文に持つことを要件にしている。権限の証拠は、起動の引数（`--tools` に Write・Edit・Bash が無い）と、その答えの両方を見る。
+  - 子の記録の特定（`f-final8.log` の f5）: 指揮役のセッションにも nonce が出る（ツールの結果）ため、指揮役の記録を子の記録として拾った。ツールの結果を除いた利用者の入力で特定する。
+  - レビューの指摘で、偽陽性の経路を塞いだ: (1) 入口の呼び出しが複数あるときは、成功した呼び出しが 1 つで、子の記録・起動の記録がそれぞれ 1 件でなければ NG（別々の起動の証拠を混ぜて通さない）。(2) 子の `npm test` は、コマンドの値（`cmd`・`command`）が `npm test` で始まるものに限り（`echo "npm test"` の引数は不可）、TAP の `# pass N`（N ≥ 1）と `# fail 0` の両方を必須にする（終了コード 0 だけでは通らない）。コマンドの取り出しは、実行されたコマンドの値（`command`・`cmd`、Codex の JS のコードの中の `exec_command({cmd:"…"})`）から行う（Codex は JS のコードの中の `cmd:"npm test"`、Claude Code は `npm test; echo "EXIT=$?"` の形。直した直後の通し `f-final10.log` で、取り出しが厳しすぎて f2・f4 が NG になり、実機の形で直した）。(3) Claude Code の子の「書けなかった」答えは、書き込みに関わる語（書・作・ファイル・echo・child-。「道具」「ツール」だけの文は含めない）と書けなかった旨の語を同じ文に持つことを要件にする（書き込みと無関係な拒否の文や「検索ツールがありません」では通らない）。実行されたコマンドの取り出しも、description や JS のコメントの中の文字列を含めないよう直した。
+  - 以上の判定の自己検査（節 s）は全件が期待どおり（実機の 2 つの呼び出しの形と、echo の引数・TAP の無い終了コード 0・成功 2 回・子の記録 2 件・無関係な拒否の否定例を含む）。場合ごとの実機の確かめ直しの履歴は `f-final2.log`〜`f-final12.log`。
+- 子の推論量は、Claude Code の子は起動の引数、Codex の子は記録の turn_context で確かめた（Claude Code の子の会話の記録には推論量が残らない）。
+- 既知の限界（レビューの指摘。判定の再実行用の厳しさとして残す）: Codex の子の `npm test` の取り出し（`commandsOf`）は、JS のコメントは除くが文字列リテラルは区別しない。子が同じ呼び出しの中で別のテストを実行しつつ、`exec_command({cmd:"npm test"})` という文字列を表示した場合は、`npm test` を実行したと誤判定しうる。実機の通し（`f-final12.log`）ではこの形は起きておらず、子の `npm test` の実物（呼び出しと TAP の出力）は各実行の観測の行に残っている。判定を JS の字句解析まで厳密にするかは、必要になったときに決める（2026-11-25、利用者の判断で 4.4 はこの限界を明記して完了とした）。
