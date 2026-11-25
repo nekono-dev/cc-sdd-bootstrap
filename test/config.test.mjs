@@ -9,12 +9,38 @@ import {
   serializeConfig,
 } from "../lib/config.mjs";
 
+test("設定処理: workflow の項目が無ければ既定値で補い、入力済みの値は保つ", () => {
+  const parsed = parseConfig('{"format":1,"workflow":{"branchGate":false}}');
+  assert.equal(validateConfig(parsed.config, configFields), null);
+  const filled = fillDefaults(parsed.config, configFields);
+  assert.equal(filled.config.workflow.branchGate, false);
+  assert.equal(filled.config.workflow.prAfterValidate, true);
+  assert.equal(filled.config.workflow.baseBranches, "main,master,develop");
+  assert.ok(filled.filled.includes("workflow.prAfterValidate"));
+  assert.ok(filled.filled.includes("workflow.baseBranches"));
+  assert.ok(!filled.filled.includes("workflow.branchGate"));
+});
+
+test("設定処理: workflow.baseBranches の不正値は項目つきで拒否する", () => {
+  const bad = parseConfig('{"format":1,"workflow":{"baseBranches":"main,,develop"}}');
+  const error = validateConfig(bad.config, configFields);
+  assert.equal(error.code, "CONFIG_INVALID");
+  assert.match(error.messages[0], /^workflow\.baseBranches: /);
+});
+
 test("設定処理: format だけを必須にし、欠けた項目を補う", () => {
   const parsed = parseConfig('{"format":1,"extra":{"keep":true},"ccSdd":{"version":"3.2.0"}}');
   assert.equal(parsed.ok, true);
   assert.equal(validateConfig(parsed.config, configFields), null);
   const filled = fillDefaults(parsed.config, configFields);
-  assert.deepEqual(filled.filled, ["ccSdd.lang", "codex.trustHooks", "subagents"]);
+  assert.deepEqual(filled.filled, [
+    "ccSdd.lang",
+    "codex.trustHooks",
+    "workflow.branchGate",
+    "workflow.prAfterValidate",
+    "workflow.baseBranches",
+    "subagents",
+  ]);
   assert.equal(filled.config.ccSdd.version, "3.2.0");
   assert.deepEqual(filled.config.extra, { keep: true });
   assert.equal(serializeConfig(filled.config).endsWith("\n"), true);
