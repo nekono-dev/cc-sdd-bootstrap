@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
-import { OWNED_MARKER, computeTrustEntries, planTrustEdit } from "../.agent-hooks/cc-sdd-bootstrap/codex-trust-rules.mjs";
+import { OWNED_MARKER, computeTrustEntries, planTrustEdit, messageTrust, trustIsEffective } from "../.agent-hooks/cc-sdd-bootstrap/codex-trust-rules.mjs";
 import { OWNED_MARKER as CATALOG_MARKER } from "../lib/catalog.mjs";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -986,4 +986,212 @@ test("remove の出力も tomllib で解析でき、対象の記録だけが外�
     };
     assert.deepEqual(strip(after), strip(before), "hooks 以外の設定が変わった");
   }
+});
+
+// ---- 結果の表示文（タスク 2.4・要件 1.6, 2.3, 4.3, 4.4） ----
+
+const TRUST_LINE =
+  "プロジェクトを Codex が信頼していないと、フックは読まれません。最初の確認画面か codex exec --trust で信頼してください。シンボリックリンク経由で開いたリポジトリでは、承認が効かない場合があります。";
+const MANUAL_LINE =
+  "手で承認するには、対話の codex を起動して「Hooks need review」の画面で承認してください（codex exec は未承認のフックを黙って飛ばします）。未承認の間は AGENTS.md の指示に従い、手順書を直接読んでください。";
+const CONFIG_PATH = "/home/u/.codex/config.toml";
+
+test("messageTrust: written は書いた場所・件数と、プロジェクトの信頼の行を返す", () => {
+  const lines = messageTrust({
+    status: "written",
+    configPath: CONFIG_PATH,
+    counts: { added: 2, updated: 1, unchanged: 5, removed: 0 },
+    reason: null,
+    notes: [],
+  });
+  assert.deepEqual(lines, [
+    `Codex のフックの承認の記録を書きました: ${CONFIG_PATH}（追加 2・更新 1・変更なし 5）`,
+    TRUST_LINE,
+  ]);
+});
+
+test("messageTrust: unchanged は最新である旨・件数と、プロジェクトの信頼の行を返す", () => {
+  const lines = messageTrust({
+    status: "unchanged",
+    configPath: CONFIG_PATH,
+    counts: { added: 0, updated: 0, unchanged: 8, removed: 0 },
+    reason: null,
+    notes: [],
+  });
+  assert.deepEqual(lines, [
+    `Codex のフックの承認の記録は最新です: ${CONFIG_PATH}（変更なし 8）`,
+    TRUST_LINE,
+  ]);
+});
+
+test("messageTrust: removed は取り除いた件数と残した件数を返し、案内を足さない", () => {
+  const lines = messageTrust({
+    status: "removed",
+    configPath: CONFIG_PATH,
+    counts: { added: 0, updated: 0, unchanged: 3, removed: 1 },
+    reason: null,
+    notes: [],
+  });
+  assert.deepEqual(lines, [
+    `Codex のフックの承認の記録を取り除きました: ${CONFIG_PATH}（取り除き 1・残した 3）`,
+  ]);
+});
+
+test("messageTrust: skipped は理由と手での承認の案内を返す", () => {
+  const lines = messageTrust({
+    status: "skipped",
+    configPath: null,
+    counts: null,
+    reason: "Codex の設定ディレクトリがありません",
+    notes: [],
+  });
+  assert.deepEqual(lines, [
+    "Codex のフックの承認の記録は変更していません: Codex の設定ディレクトリがありません",
+    MANUAL_LINE,
+  ]);
+});
+
+test("messageTrust: failed は設定を変えていない旨・理由と手での承認の案内を返す", () => {
+  const lines = messageTrust({
+    status: "failed",
+    configPath: CONFIG_PATH,
+    counts: null,
+    reason: "読み取り専用です",
+    notes: [],
+  });
+  assert.deepEqual(lines, [
+    "Codex のフックの承認の記録を書けませんでした（設定は変更していません）: 読み取り専用です",
+    MANUAL_LINE,
+  ]);
+});
+
+test("messageTrust: disabled は設定 codex.trustHooks が false である旨と手での承認の案内を返す", () => {
+  const lines = messageTrust({
+    status: "disabled",
+    configPath: CONFIG_PATH,
+    counts: null,
+    reason: "設定で止めています",
+    notes: [],
+  });
+  assert.deepEqual(lines, [
+    "Codex のフックの承認の記録は変更していません: 設定 codex.trustHooks が false です。",
+    MANUAL_LINE,
+  ]);
+});
+
+test("messageTrust: notes は最後に「注意:」の行として並ぶ", () => {
+  const lines = messageTrust({
+    status: "written",
+    configPath: CONFIG_PATH,
+    counts: { added: 1, updated: 0, unchanged: 0, removed: 0 },
+    reason: null,
+    notes: ["本体の hooks.json が違います", "二つ目の注意"],
+  });
+  assert.deepEqual(lines.slice(-2), ["注意: 本体の hooks.json が違います", "注意: 二つ目の注意"]);
+  assert.equal(lines.length, 4);
+  assert.equal(lines[1], TRUST_LINE);
+
+  const skipped = messageTrust({ status: "skipped", reason: "理由", notes: ["補足"] });
+  assert.deepEqual(skipped.slice(-1), ["注意: 補足"]);
+});
+
+test("messageTrust: reason が無いときは「理由は不明です」とする", () => {
+  for (const status of ["skipped", "failed"]) {
+    const lines = messageTrust({ status, configPath: CONFIG_PATH, counts: null, reason: null, notes: [] });
+    assert.ok(lines[0].endsWith("理由は不明です"), `${status}: ${lines[0]}`);
+  }
+  const noReason = messageTrust({ status: "failed" });
+  assert.ok(noReason[0].endsWith("理由は不明です"));
+});
+
+test("messageTrust: configPath が無いときは「（設定ファイルの場所は不明）」とする", () => {
+  const written = messageTrust({
+    status: "written",
+    configPath: null,
+    counts: { added: 1, updated: 0, unchanged: 0, removed: 0 },
+    reason: null,
+    notes: [],
+  });
+  assert.equal(written[0], "Codex のフックの承認の記録を書きました: （設定ファイルの場所は不明）（追加 1・更新 0・変更なし 0）");
+
+  const removed = messageTrust({ status: "removed", counts: { added: 0, updated: 0, unchanged: 0, removed: 2 } });
+  assert.equal(removed[0], "Codex のフックの承認の記録を取り除きました: （設定ファイルの場所は不明）（取り除き 2・残した 0）");
+
+  const unchanged = messageTrust({ status: "unchanged", counts: null });
+  assert.equal(unchanged[0], "Codex のフックの承認の記録は最新です: （設定ファイルの場所は不明）");
+});
+
+test("messageTrust: counts が無いときは件数の括弧を省く", () => {
+  const written = messageTrust({ status: "written", configPath: CONFIG_PATH, counts: null, notes: [] });
+  assert.equal(written[0], `Codex のフックの承認の記録を書きました: ${CONFIG_PATH}`);
+  const removed = messageTrust({ status: "removed", configPath: CONFIG_PATH });
+  assert.equal(removed[0], `Codex のフックの承認の記録を取り除きました: ${CONFIG_PATH}`);
+});
+
+test("messageTrust: 想定外の status は 1 行の判別できない旨を返し、例外を投げない", () => {
+  assert.deepEqual(messageTrust({ status: "bogus", configPath: CONFIG_PATH, counts: null, reason: null, notes: [] }), [
+    "Codex のフックの承認の記録: 結果を判別できませんでした（bogus）",
+  ]);
+  assert.deepEqual(messageTrust({ status: undefined }), [
+    "Codex のフックの承認の記録: 結果を判別できませんでした（undefined）",
+  ]);
+  assert.deepEqual(messageTrust(null), [
+    "Codex のフックの承認の記録: 結果を判別できませんでした（undefined）",
+  ]);
+});
+
+test("messageTrust: 行はどれも空でなく、改行を含まず、プロジェクトの信頼の行は written と unchanged だけにある", () => {
+  const cases = [
+    { status: "written", configPath: CONFIG_PATH, counts: { added: 1, updated: 0, unchanged: 0, removed: 0 }, notes: ["n"] },
+    { status: "unchanged", configPath: CONFIG_PATH, counts: { added: 0, updated: 0, unchanged: 1, removed: 0 } },
+    { status: "removed", configPath: CONFIG_PATH, counts: { added: 0, updated: 0, unchanged: 0, removed: 1 } },
+    { status: "skipped", reason: "r" },
+    { status: "failed", reason: "r" },
+    { status: "disabled" },
+    { status: "bogus" },
+  ];
+  for (const result of cases) {
+    const lines = messageTrust(result);
+    for (const line of lines) {
+      assert.ok(line.length > 0, `空行がある: ${result.status}`);
+      assert.ok(!line.includes("\n"), `改行を含む: ${result.status}`);
+    }
+    const hasTrust = lines.some((l) => l.includes("プロジェクトを Codex が信頼していない"));
+    const expectTrust = result.status === "written" || result.status === "unchanged";
+    assert.equal(hasTrust, expectTrust, `信頼の行の有無が違う: ${result.status}`);
+  }
+});
+
+test("messageTrust: removed は手での承認の案内を含まず、skipped・failed・disabled は含む", () => {
+  const removed = messageTrust({ status: "removed", configPath: CONFIG_PATH, counts: null });
+  assert.ok(!removed.some((l) => l.includes("Hooks need review")));
+  for (const status of ["skipped", "failed", "disabled"]) {
+    const lines = messageTrust({ status, reason: "r", configPath: CONFIG_PATH, counts: null });
+    assert.ok(lines.some((l) => l.includes("「Hooks need review」の画面で承認")), status);
+  }
+});
+
+test("messageTrust: 入力を変更しない（純粋）", () => {
+  const input = {
+    status: "written",
+    configPath: CONFIG_PATH,
+    counts: { added: 1, updated: 2, unchanged: 3, removed: 0 },
+    reason: null,
+    notes: ["注意"],
+  };
+  const before = structuredClone(input);
+  const first = messageTrust(input);
+  const second = messageTrust(input);
+  assert.deepEqual(input, before);
+  assert.deepEqual(first, second);
+});
+
+test("trustIsEffective: written と unchanged だけ true", () => {
+  assert.equal(trustIsEffective({ status: "written" }), true);
+  assert.equal(trustIsEffective({ status: "unchanged" }), true);
+  for (const status of ["removed", "skipped", "failed", "disabled", "bogus"]) {
+    assert.equal(trustIsEffective({ status }), false, status);
+  }
+  assert.equal(trustIsEffective(null), false);
+  assert.equal(trustIsEffective({}), false);
 });

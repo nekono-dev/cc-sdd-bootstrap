@@ -692,3 +692,89 @@ function planRemove(configText, entries, { recs, contents, lex }) {
   const text = out.map((rec) => rec.content + rec.term).join("");
   return { ok: true, text, counts };
 }
+
+/** 承認の記録が効く見込みがあるときに添える案内（要件 4.3）。プロジェクトが未信頼だとフックは読まれない */
+const TRUST_NOTE =
+  "プロジェクトを Codex が信頼していないと、フックは読まれません。最初の確認画面か codex exec --trust で信頼してください。シンボリックリンク経由で開いたリポジトリでは、承認が効かない場合があります。";
+
+/** 承認の記録を書けなかった・書かなかったときに添える手での承認の案内（要件 4.4） */
+const MANUAL_NOTE =
+  "手で承認するには、対話の codex を起動して「Hooks need review」の画面で承認してください（codex exec は未承認のフックを黙って飛ばします）。未承認の間は AGENTS.md の指示に従い、手順書を直接読んでください。";
+
+/** 設定ファイルの道筋。無いときは「不明」と書く */
+function describeConfigPath(configPath) {
+  return typeof configPath === "string" && configPath !== "" ? configPath : "（設定ファイルの場所は不明）";
+}
+
+/** 理由。無いときは「理由は不明です」と書く */
+function describeReason(reason) {
+  return typeof reason === "string" && reason !== "" ? reason : "理由は不明です";
+}
+
+/** 件数の括弧。counts が無いときは括弧ごと省く（describe は件数の並び方を受け取る） */
+function countsSuffix(counts, describe) {
+  if (!counts || typeof counts !== "object") return "";
+  return `（${describe(counts)}）`;
+}
+
+/**
+ * 結果の表示行を作る（4.3・4.4・2.3・1.6）。純粋: 入力を変更せず、表示行の配列を新しく作る。
+ * 末尾の改行は付けず、空行も含めない。想定外の status や null でも例外を投げない。
+ * @param {{ status?: string, configPath?: string | null, counts?: object | null, reason?: string | null, notes?: string[] } | null} result
+ * @returns {string[]}
+ */
+export function messageTrust(result) {
+  const r = result ?? {};
+  const where = describeConfigPath(r.configPath);
+  const counts = r.counts;
+  let lines;
+  switch (r.status) {
+    case "written":
+      lines = [
+        `Codex のフックの承認の記録を書きました: ${where}${countsSuffix(counts, (c) => `追加 ${c.added ?? 0}・更新 ${c.updated ?? 0}・変更なし ${c.unchanged ?? 0}`)}`,
+        TRUST_NOTE,
+      ];
+      break;
+    case "unchanged":
+      lines = [
+        `Codex のフックの承認の記録は最新です: ${where}${countsSuffix(counts, (c) => `変更なし ${c.unchanged ?? 0}`)}`,
+        TRUST_NOTE,
+      ];
+      break;
+    case "removed":
+      // 取り除いたあとは、案内を足さない
+      lines = [
+        `Codex のフックの承認の記録を取り除きました: ${where}${countsSuffix(counts, (c) => `取り除き ${c.removed ?? 0}・残した ${c.unchanged ?? 0}`)}`,
+      ];
+      break;
+    case "skipped":
+      lines = [`Codex のフックの承認の記録は変更していません: ${describeReason(r.reason)}`, MANUAL_NOTE];
+      break;
+    case "failed":
+      lines = [
+        `Codex のフックの承認の記録を書けませんでした（設定は変更していません）: ${describeReason(r.reason)}`,
+        MANUAL_NOTE,
+      ];
+      break;
+    case "disabled":
+      lines = ["Codex のフックの承認の記録は変更していません: 設定 codex.trustHooks が false です。", MANUAL_NOTE];
+      break;
+    default:
+      // 想定外の status は判別できないことだけを 1 行で返す
+      lines = [`Codex のフックの承認の記録: 結果を判別できませんでした（${String(r.status)}）`];
+  }
+  // notes は各要素を「注意: …」の行として最後に足す
+  const notes = Array.isArray(r.notes) ? r.notes.map((note) => `注意: ${String(note)}`) : [];
+  return [...lines, ...notes];
+}
+
+/**
+ * 承認の記録が効いていると言えるかを返す（written か unchanged なら true）。
+ * 導入コマンドが「信頼の承認が必要です」の案内を出すかどうかの判定に使う。
+ * @param {{ status?: string } | null} result
+ * @returns {boolean}
+ */
+export function trustIsEffective(result) {
+  const status = result?.status;
+  return status === "written" || status === "unchanged";
+}
