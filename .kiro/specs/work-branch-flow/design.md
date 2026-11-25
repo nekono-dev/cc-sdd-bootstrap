@@ -106,10 +106,11 @@ poc/work-branch-flow/
 stateDiagram-v2
     [*] --> NoTurn
     NoTurn --> Turn: 対象の入力
-    Turn --> NoTurn: 対象外の入力
+    Turn --> NoTurn: 別の kiro コマンドの入力
+    Turn --> Turn: 通常の入力で拒否の回数を 0 に戻す
     Turn --> Turn: 作業の操作 かつ 基底 かつ 拒否 2 回未満 かつ 切り替え未試行 を拒否 回数加算
     Turn --> Switched: ブランチの作成や切り替えを試みた
-    Switched --> NoTurn: 対象外の入力
+    Switched --> NoTurn: 別の kiro コマンドの入力
     Switched --> Turn: 次の対象の入力
     state Validated {
         [*] --> Pending
@@ -117,7 +118,7 @@ stateDiagram-v2
     }
 ```
 
-- `Turn` は「対象の入力を受けたターン」の状態（スキル名・拒否の回数・切り替えを試みたか）。`Validated` はセッションの間続く別の状態（`kiro-validate-impl` の入力を受けたか・終了を止めたか）。2 つは独立に持つ。
+- `Turn` は「対象の入力を受けてから、別の kiro コマンドの入力か基底ブランチでなくなるまで」の状態（スキル名・拒否の回数・切り替えを試みたか）。コマンドを含まない通常の入力では解除せず、拒否の回数だけ 0 に戻す（対話を挟む `kiro-discovery` でも、書き込みの前に拒否が効く。対話中に誤って作業と分類された操作が回数を使い切ることも避ける）。切り替えを試みたかは戻さない。`Validated` はセッションの間続く別の状態（`kiro-validate-impl` の入力を受けたか・終了を止めたか）。2 つは独立に持つ。
 - 作業の拒否は PreToolUse で判断する: ① 設定が有効 ② `turn` がある ③ 切り替え未試行 ④ 拒否が 2 回未満 ⑤ 操作が「作業」と分類される ⑥ 現在のブランチが基底ブランチ（ブランチなしを含む）または git で判定できて基底。⑥ で判定できなければ通す。
 - 終了の停止は Stop で判断する: ① 設定が有効 ② `validated` があり未停止 ③ `stop_hook_active` が偽 ④ 現在のブランチが基底ブランチではない ⑤ `gh` で「PR が無い」と判定できた。1 つでも満たさなければ通す。止めたら `validated` の未停止を既停止にする。
 
@@ -135,14 +136,14 @@ stateDiagram-v2
 | 2.1 | 5 つのコマンドを対象に | Rules | `targetSkill` | NoTurn→Turn |
 | 2.2 | コマンド名の直後が空白か末尾 | Rules | `detectCommand`（kiro-gate-rules） | — |
 | 2.3 | 先頭以外の言及は対象外 | Rules | `detectCommand` | — |
-| 2.4 | 対象外の入力で解除 | Gate | `turn` を消す | Turn→NoTurn |
+| 2.4 | 別の kiro コマンドか基底でなくなるまで保つ | Gate | `turn` の保持・上書き・消去 | Turn→NoTurn |
 | 2.5 | 次の対象の入力で記録を引き継がない | Gate | `turn` の上書き | →Turn |
 | 2.6 | その他のコマンドは対象外 | Rules | `TARGET_SKILLS` | — |
 | 3.1 | 基底での最初の作業を拒否 | Rules, Gate | `decidePreToolUse` | Turn（拒否） |
 | 3.2 | ブランチなしを基底と同じに | Rules | `isBaseBranch` | — |
 | 3.3 | 拒否の理由の内容 | Rules | `messageDeny` | — |
 | 3.4 | `kiro-impl` の追加の案内 | Rules | `messageDeny`・`messageGuidance` | — |
-| 3.5 | 最大 2 回まで拒否 | Rules, Gate | `decidePreToolUse`・`turn.denials` | Turn |
+| 3.5 | 入力ごとに最大 2 回まで拒否 | Rules, Gate | `decidePreToolUse`・`turn.denials`（入力ごとに 0 へ） | Turn |
 | 3.6 | 読み取りと切り替えは拒否しない | Rules | `classifyToolCall` | — |
 | 3.7 | 別の仕組みの拒否の後は拒否しない | Rules, Gate | `turn.switchTried` | Turn→Switched |
 | 3.8 | 作れないときは利用者に伝えて止まる | Rules | `messageDeny` の文言 | — |
@@ -153,7 +154,7 @@ stateDiagram-v2
 | 4.1 | `kiro-validate-impl` の入力で PR の案内 | Rules, Gate | `messagePrContext` | Validated |
 | 4.2 | 既定の運用で事前の指示と明記 | Rules | `messagePrContext` | — |
 | 4.3 | 通常の操作で試み、別の仕組みの案内に従う | Rules | `messagePrContext` | — |
-| 4.4 | 基底のときは PR を求めない | Gate | 基底なら案内せず `validated` を作らない | — |
+| 4.4 | 基底の上では PR を求めない | Rules | 案内の文章の条件（案内自体は常に出す） | — |
 | 4.5 | タイトル・本文は固定しない | Rules | `messagePrContext`（文言に含めない） | — |
 | 5.1 | PR が無ければ終了を 1 回止める | Rules, Gate | `decideStop` | Validated |
 | 5.2 | 2 回目は通す | Rules | `decideStop`（`stop_hook_active`・停止済み） | — |
@@ -240,7 +241,7 @@ function messageStop(branch: string): string;
 **Implementation Notes**
 - `classifyToolCall` は粗い分類: 読み取り専用の道具名（`Read`・`Glob`・`Grep`・`LS`・`ToolSearch`・`WebFetch`・`WebSearch`・`TodoWrite` など）は `read`。シェル（`Bash`）は、リダイレクト・連結・サブシェルを含まない単純なコマンドで、先頭の語が `git switch|checkout|branch|worktree` なら `branch`、`ls`・`cat`・`head`・`tail`・`nl`・`pwd`・`grep`・`rg`・`find`・`git status|log|diff|show|fetch|rev-parse|remote|ls-remote` なら `read`。それ以外はすべて `work`。誤って `work` と分類しても、最大 2 回の拒否で済む。
 - `messageDeny`・`messageGuidance` は、現在のブランチ名、作業用ブランチへ切り替えてから続けること、既存の作業用ブランチがあればそこへ・無ければ新規作成、どれか分からなければ利用者に尋ねること、作れないときは理由を利用者に伝えて止まること、を含める。`kiro-impl` では「その spec を格納した作業用ブランチがリモートにある場合はそこへ切り替える。ローカルに spec が無い可能性がある」を足す。
-- `messagePrContext` は、`kiro-validate-impl` が GO で現在のブランチが基底でなければ、作業ブランチの push と PR の作成を通常の操作で試みること（設定の既定の運用であり利用者の事前の指示として扱うこと）、NO-GO なら PR を作らず報告すること、別の仕組みが拒否して別の手順を案内したら従うこと、タイトル・本文は作業の内容から作ることを含める。
+- `messagePrContext` は、`kiro-validate-impl` が GO で、エージェントが基底ブランチの上にいなければ（基底の上なら PR を求めない）、作業ブランチの push と PR の作成を通常の操作で試みること（設定の既定の運用であり利用者の事前の指示として扱うこと）、NO-GO なら PR を作らず報告すること、別の仕組みが拒否して別の手順を案内したら従うこと、タイトル・本文は作業の内容から作ることを含める。
 
 ### 入出力
 
@@ -268,7 +269,7 @@ function messageStop(branch: string): string;
 **Contracts**: Event [x] / State [x]
 
 ##### Event Contract
-- UserPromptSubmit: 対象の入力なら `turn` を作り、設定が有効で現在のブランチが基底なら `messageGuidance` を追加の文脈として出す。`kiro-validate-impl` の入力なら、設定が有効で現在のブランチが基底でなければ `validated` を作り `messagePrContext` を出す（基底なら作らず出さない）。どちらでもない入力は `turn` を消す（`validated` は残す）。
+- UserPromptSubmit: 対象の入力なら `turn` を作り（既存を上書き）、設定が有効で現在のブランチが基底なら `messageGuidance` を追加の文脈として出す。`kiro-validate-impl` の入力なら、設定が有効なら現在のブランチによらず `validated` を作り `messagePrContext` を出す（4.1・4.4。案内の文章が「基底ブランチの上なら PR を求めない」と条件を示す）。対象でも `kiro-validate-impl` でもない別の kiro コマンドの入力は `turn` を消す。コマンドを含まない通常の入力は `turn` を残し、`denials` だけ 0 に戻し、設定が有効で `turn` があり現在のブランチが基底で切り替え未試行なら `messageGuidance` を改めて出す（`validated` は残す）。
 - PreToolUse: `turn` があるときだけ判断し、拒否なら理由を出力し `turn` を保存する。
 - Stop: `validated` があるときだけ判断し、止めたら `validated.stopped` を真にして保存する。
 
@@ -280,7 +281,10 @@ function messageStop(branch: string): string;
 **Implementation Notes**
 - Integration: `kiro-gate.mjs` と同じ時点で動く。拒否は並んで出うるが、理由は 1 つしか届かない（上の「拒否の理由の届き方」）。
 - Validation: 入力の JSON が不正、`session_id` が無い、`stop_hook_active` が真偽値でない（Stop）は、通す側で失敗とする。
-- Risks: Claude Code の `cwd` は Bash の `cd` に追随しない。brw の worktree で作業中でも、本体が基底のままなら誤って拒否される場合がある（再試行で収まる）。
+- Risks:
+  - 作業の判定が `turn` の保持に依存するため、基底ブランチのまま別の作業を頼むと、入力ごとに最大 2 回拒否される（ブランチを作ると止まる）。
+  - PR の流れは、フックが見るブランチが基底（`brw create` と同じセッションで worktree へ移った場合など）だと、Stop が判定できず通す。案内（4.1）だけに頼る。作業ブランチの上で始めたセッション（`brw resume` など）では Stop の停止が効く。
+  - Claude Code の `cwd` は Bash の `cd` に追随しない。brw の worktree で作業中でも、本体が基底のままなら誤って拒否される場合がある（再試行で収まる）。
 
 ### データ
 
@@ -322,8 +326,9 @@ function messageStop(branch: string): string;
 
 ### Integration Tests（`test/work-branch-gate.test.mjs`、一時の git リポジトリ）
 - 基底ブランチで対象の入力 → 追加の文脈（3.12）→ `Write` を拒否 → `git switch -c` を許可 → 以後の `Write` を許可（3.1・3.5・3.7）。
+- 対話を挟む場面: 対象の入力 → 通常の入力 → `Write` を拒否（2.4）。入力ごとに拒否の回数が 0 に戻る（3.5）。別の kiro コマンドで解除される（2.4）。
 - 作業ブランチでは入力・操作ともに何も出さない（3.10）。設定を無効にすると何も出さない（1.4・1.5）。設定ファイルが壊れていると通す（1.6）。
-- `kiro-validate-impl` の入力 → PR の案内 → Stop で（偽の `gh` を PATH に置いて）PR 無しなら 1 回止まり、2 回目は通る（4.1・5.1・5.2）。`gh` が無い・失敗は通る（5.3）。
+- `kiro-validate-impl` の入力 → 基底ブランチでも PR の案内が出る（4.1・4.4）→ Stop で（偽の `gh` を PATH に置いて）PR 無しなら 1 回止まり、2 回目は通る（4.1・5.1・5.2）。`gh` が無い・失敗は通る（5.3）。
 - 状態ファイルが os.tmpdir の下にだけ作られ、リポジトリの中に何も作られない（3.11・5.6）。
 - カタログ・設定項目・`package.json` の `files` の一致、運用の区画に特定の仕組みの名前が無いこと（6.5）。
 

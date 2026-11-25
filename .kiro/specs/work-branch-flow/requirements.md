@@ -60,7 +60,7 @@ work-branch-flow は、cc-sdd の作業を作業用ブランチの上で進め�
 1. When Claude Code または Codex が利用者の入力を受け取り、先頭の空白を除いた入力が `kiro-discovery`・`kiro-spec-init`・`kiro-spec-quick`・`kiro-spec-batch`・`kiro-impl` のいずれかのコマンド（`/` で始まる形と、Codex でスキルを明示して呼ぶ `$` で始まる形を含む）で始まる, the work-branch-flow shall その入力を作業前のブランチ確保の対象にする。
 2. The work-branch-flow shall コマンド名の直後が空白または入力の末尾である場合に限り、先頭のコマンドを対象として扱う。
 3. When 対象のコマンドの名前が入力の先頭以外に現れる, the work-branch-flow shall その記述を理由として作業前のブランチ確保を始めない。
-4. When 利用者が対象外の入力を送る, the work-branch-flow shall 以前の入力による作業前のブランチ確保の対象を解除する。
+4. The work-branch-flow shall 作業前のブランチ確保の対象を、利用者が別の `/kiro-*`・`$kiro-*` のコマンドを送るか、現在のブランチが基底ブランチでなくなるまで保つ（コマンドを含まない通常の入力では解除しない。`kiro-discovery` のように利用者との対話を挟んでから書き込む手順でも、書き込みの前に効かせるため）。
 5. When 利用者が次の対象の入力を送る, the work-branch-flow shall 以前の入力による拒否済みの記録を引き継がず、最新の入力について改めて判定する。
 6. The work-branch-flow shall `kiro-spec-requirements`・`kiro-spec-design`・`kiro-spec-tasks`・`kiro-validate-*`・`kiro-spec-status`・`kiro-steering` など、上に挙げた以外のコマンドを作業前のブランチ確保の対象にしない。
 
@@ -70,11 +70,11 @@ work-branch-flow は、cc-sdd の作業を作業用ブランチの上で進め�
 
 #### 受け入れ基準
 
-1. While 作業前のブランチ確保が有効であり、対象の入力を受けたターンで、現在のブランチが基底ブランチである, when エージェントが最初の作業の開始を試みる, the work-branch-flow shall その操作を拒否する。
+1. While 作業前のブランチ確保が有効であり、対象の入力を受けた後（2.4 の解除まで）で、現在のブランチが基底ブランチである, when エージェントが最初の作業の開始を試みる, the work-branch-flow shall その操作を拒否する。
 2. While 現在のブランチがどのブランチにも属さない状態（ブランチなしの状態）である, the work-branch-flow shall その状態を基底ブランチと同じに扱う。
 3. When work-branch-flow が操作を拒否する, the work-branch-flow shall 拒否の理由として、現在のブランチ名、作業用ブランチへ切り替えてから続けること、既存の作業用ブランチがあればそこへ切り替え無ければ新しく作ること、どれか分からなければ利用者に尋ねることを、エージェントが読める形で伝える。
 4. When 入力が `kiro-impl` で始まる, the work-branch-flow shall 拒否の理由に、その spec を格納した作業用ブランチがリモートにある場合はそのブランチへ切り替えること、ローカルに spec が無い可能性があることを含める。
-5. The work-branch-flow shall 拒否を、1 つの対象の入力につき最大 2 回まで行い、それ以降のそのターンの操作を拒否しない（別の仕組みの拒否と重なって理由が届かない場合に、もう 1 回で届くようにするため。2026-11-25 の PoC で、同じ操作への複数の拒否は理由が 1 つしか届かないことを確認した）。
+5. The work-branch-flow shall 拒否を、利用者の入力 1 回につき最大 2 回まで行い、それ以降のその入力の間の操作を拒否しない。次の入力では回数を 0 に戻す（対話の間に誤って作業と分類された操作が回数を使い切って、後の書き込みが素通りすることを避けるため。別の仕組みの拒否と重なって理由が届かない場合に、もう 1 回で届くようにするため。2026-11-25 の PoC で、同じ操作への複数の拒否は理由が 1 つしか届かないことを確認した）。
 6. The work-branch-flow shall 読み取りの操作と、作業ブランチへ移るためのブランチの作成・切り替えの操作を拒否しない。
 7. If エージェントがブランチの作成・切り替えを試み、別の仕組みがそれを拒否して別の手順を案内する, then the work-branch-flow shall その後の操作をさらに拒否せず、エージェントが案内に従って進められるようにする。
 8. If エージェントが実行環境の制約でブランチを作れない, then the work-branch-flow shall 作れない理由を利用者に伝えて作業を止めるよう、拒否の理由に含める。
@@ -89,10 +89,10 @@ work-branch-flow は、cc-sdd の作業を作業用ブランチの上で進め�
 
 #### 受け入れ基準
 
-1. When 検証後の PR 作成が有効であり、利用者が `kiro-validate-impl` で始まる入力（`/` と `$` の形を含む）を送る, the work-branch-flow shall エージェントが受け取る指示に、検証が GO で、現在のブランチが基底ブランチではない場合は作業ブランチの PR を作ること、NO-GO の場合は PR を作らず結果を報告することを含める。
+1. When 検証後の PR 作成が有効であり、利用者が `kiro-validate-impl` で始まる入力（`/` と `$` の形を含む）を送る, the work-branch-flow shall エージェントが受け取る指示に、検証が GO で、作業ブランチの上にいる（基底ブランチの上ではない）場合は作業ブランチの PR を作ること、NO-GO の場合は PR を作らず結果を報告することを含める。この案内は、現在のブランチの判定によらず出す（フックが見るブランチが、エージェントの作業中のブランチと一致しない場合があるため）。
 2. The work-branch-flow shall 案内に、この PR の作成が設定の既定の運用であり、利用者が事前に求めたものとして扱うことを含める。
 3. The work-branch-flow shall 案内に、PR の作成を通常の操作（作業ブランチの push と PR の作成）で試みること、別の仕組みがその操作を拒否して別の手順を案内した場合はそれに従うことを含める。
-4. While 現在のブランチが基底ブランチである, the work-branch-flow shall PR の作成を求めない。
+4. While エージェントが基底ブランチの上にいる, the work-branch-flow shall 案内の中で PR の作成を求めない（案内の文章で条件を示す。フックが基底ブランチと判定した場合でも案内自体は省かない）。
 5. The work-branch-flow shall PR のタイトルと本文を、エージェントが作業の内容から作ることを前提とし、固定の文章を強制しない。
 
 ### Requirement 5: PR を作らないままの終了の停止
@@ -101,7 +101,7 @@ work-branch-flow は、cc-sdd の作業を作業用ブランチの上で進め�
 
 #### 受け入れ基準
 
-1. While 検証後の PR 作成が有効であり、同じセッションで `kiro-validate-impl` の入力があり、現在のブランチが基底ブランチではなく、そのブランチの PR が存在しない, when エージェントが応答を終えようとする, the work-branch-flow shall 1 回だけ終了を止め、PR を作るか、NO-GO などで作らない理由を示してから終えるよう伝える。
+1. While 検証後の PR 作成が有効であり、同じセッションで `kiro-validate-impl` の入力があり、フックが判定した現在のブランチが基底ブランチではなく（基底ブランチと判定された場合は止めない。同じセッションで別の worktree へ移った場合などは判定できず、案内だけに頼る）、そのブランチの PR が存在しない, when エージェントが応答を終えようとする, the work-branch-flow shall 1 回だけ終了を止め、PR を作るか、NO-GO などで作らない理由を示してから終えるよう伝える。
 2. When 1 回止めた後にエージェントが再び応答を終えようとする, the work-branch-flow shall 終了を止めずに通す。
 3. If そのブランチの PR の有無を判定できない（PR の確認に使う道具が無い、認証されていない、GitHub 以外のリモートである、など）, then the work-branch-flow shall 終了を止めずに通す。
 4. While そのブランチの PR が既に存在する, the work-branch-flow shall 終了を止めない。
