@@ -94,7 +94,7 @@
   - _Requirements: 3.1, 6.4_
 
 - [ ] 5. 実機の確認と自己適用
-- [ ] 5.1 試験一式を通し、自己適用する
+- [x] 5.1 試験一式を通し、自己適用する
   - 試験一式（`npm test`）が通る
   - `node bin/cc-sdd-bootstrap.mjs update` で配置物・設定ファイルを反映し、結果をコミットする。実際の承認の記録の書き込みの結果が表示される
   - 設定ファイルに `codex.trustHooks` が入り、`.agent-hooks/` の新しい配置物が自己適用の結果として揃う
@@ -127,3 +127,4 @@
 - 4.2: `delegate.mjs` は `codex-trust.mjs`（と、それが読む `codex-trust-rules.mjs`）を import する。これらの配置物を `lib/catalog.mjs` の配置一覧と `package.json` の `files` に登録するまで（4.5）、導入先では `delegate.mjs` が動かない。5.1 の自己適用の前に必ず 4.5 を済ませる。
 - 4.3: `test/helpers/entry-harness.mjs` の `isolatedEnv(repo, extra)` は `CODEX_HOME`・`HOME` を必ず一時ディレクトリにする。`install-cc-sdd.mjs` を起動する試験は必ずこれを通す（通さないと、導入後の承認の記録の書き込みが利用者の実際の `~/.codex` に及びうる）。ほかの試験（`cli`・`cli.e2e` など、4.4 以降で導入コマンドから承認の段階を呼ぶもの）も同じ分離を使うこと。
 - 4.4: `lib/cli.mjs` が配置物（`codex-trust.mjs`・`codex-trust-rules.mjs`）を静的に import するため、配布の登録（`lib/catalog.mjs` の `files`・`package.json` の `files`・それを確かめる試験）は 4.5 から 4.4 に前倒しした（タスク計画の抜け。登録が無いと、展開した配布物から導入コマンドが起動できない）。4.5 に残るのは運用の区画の文章の更新だけ。導入コマンドを実行する試験は、`CODEX_HOME`・`HOME` を一時ディレクトリにする分離を必ず使う（`io.env`・`io.home` で差し込む）。
+- 5.1: 自己適用は、まず一時の `CODEX_HOME`・`HOME` で `update` を実行して差分と表示を確かめ（記録 8 件が一時の設定へ書かれ、実際の `~/.codex` は変わらない）、続けて実際の環境で実行した（実際の `~/.codex/config.toml` は『最新です（変更なし 8）』で、更新時刻は変わらなかった）。自己適用で変わったのは `.cc-sdd-bootstrap.json`（`codex.trustHooks: true` が入った）と、`.agent-hooks/cc-sdd-bootstrap/agent-section-claude.md`・`agent-section-codex.md`（運用の区画の文章）の 3 ファイル。この作業は命令の実行と生成物の確認だけなので、個別のレビューは行っていない（4.5 までの実装がレビュー済み）。

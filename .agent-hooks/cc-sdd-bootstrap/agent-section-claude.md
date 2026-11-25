@@ -66,6 +66,7 @@ cc-sdd の導入は起動前（環境の準備スクリプト）か最初の入�
 cc-sdd の手順が「Agent ツールで子に任せる」と書く箇所は、次のように読み替えます。
 - 子の起動のたびに、今の自分のモデルを渡して名前を求めます: `node .agent-hooks/cc-sdd-bootstrap/delegate.mjs --resolve-model --from claude --role implement --orchestrator-model <今の自分のモデル>`
 - 出力は `<名前> <推論量>` の 1 行です。先頭の名前を `subagent_type` に入れて起動します（モデルと推論量は定義に入っています）。フックは起動の引数の `model` か定義から子のモデルを取り、起動の引数と定義のどちらにもモデルが無い起動は、未指定として拒否され、使う定義の名前を求めるコマンドが示される。
+- Codex の子を起動する入口（`delegate.mjs`）は、設定 `codex.trustHooks` が false でなければ、その起動の間だけ承認の確認を省く指定（`--dangerously-bypass-hook-trust`）を付けます。指定は設定ファイルには保存されません。この Codex が指定を受け付けないときは子を起動せず案内します。
 - 入口の役割は作業ごとに指定します: レビューは `--role review`、デバッグの原因調査は `--role debug`、調査は `--role investigate`（役割ごとに既定のモデルが違います。例: Sonnet の指揮役で investigate は Luna、review は Terra）。
 - 別の提供元の入口の例（役割ごとに指定を変え、同じ依頼内容と成果物の形式のまま渡します）: `node .agent-hooks/cc-sdd-bootstrap/delegate.mjs --from claude --role review --orchestrator-model <今の自分のモデル> --instructions <指示のファイル>`、`node .agent-hooks/cc-sdd-bootstrap/delegate.mjs --from claude --role debug --orchestrator-model <今の自分のモデル> --instructions <指示のファイル>`、`node .agent-hooks/cc-sdd-bootstrap/delegate.mjs --from claude --role investigate --orchestrator-model <今の自分のモデル> --instructions <指示のファイル>`
 - 環境変数 `CLAUDE_CODE_EFFORT_LEVEL` が設定されていると、指揮役と子の推論量がすべてその値になり、役割定義の推論量は効きません。
