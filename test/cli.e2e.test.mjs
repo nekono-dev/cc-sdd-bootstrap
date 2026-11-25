@@ -9,16 +9,39 @@ import { fileURLToPath } from "node:url";
 const packageRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const entry = path.join(packageRoot, "bin/cc-sdd-bootstrap.mjs");
 
+/** 対象ごとの分離（CODEX_HOME・HOME を一時ディレクトリにした環境）。利用者の ~/.codex に触れないため */
+const isolations = new Map();
+
 function temporary(t) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "cli-e2e-new-"));
   const initialized = spawnSync("git", ["init", "--quiet"], { cwd: root, encoding: "utf8" });
   assert.equal(initialized.status, 0, initialized.stderr);
-  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const base = fs.mkdtempSync(path.join(os.tmpdir(), "cli-e2e-codex-"));
+  const codexHome = path.join(base, "codex");
+  const home = path.join(base, "home");
+  fs.mkdirSync(codexHome);
+  fs.mkdirSync(home);
+  isolations.set(root, { codexHome, home, env: { ...process.env, CODEX_HOME: codexHome, HOME: home } });
+  t.after(() => {
+    fs.rmSync(root, { recursive: true, force: true });
+    fs.rmSync(base, { recursive: true, force: true });
+  });
   return root;
 }
 
+/** cwd を含む対象の分離環境を求める。対応が無ければ例外（分離なしでの実行を防ぐ） */
+function isolationOf(cwd) {
+  let dir = cwd;
+  while (!isolations.has(dir)) {
+    const parent = path.dirname(dir);
+    if (parent === dir) throw new Error(`分離の環境がありません: ${cwd}`);
+    dir = parent;
+  }
+  return isolations.get(dir);
+}
+
 function run(root, args) {
-  return spawnSync(process.execPath, [entry, ...args], { cwd: root, encoding: "utf8" });
+  return spawnSync(process.execPath, [entry, ...args], { cwd: root, encoding: "utf8", env: isolationOf(root).env });
 }
 
 function runOrSkip(t, root, args) {
@@ -218,4 +241,28 @@ test("定義のファイルに差分が無く設定の変更で新しい知ら�
   assert.equal(changed.status, 0, changed.stderr);
   assert.match(changed.stdout, /変更はありません。/);
   assert.match(changed.stdout, novel);
+});
+
+test("一時の git リポジトリで init すると承認の記録が 8 件書かれ、uninstall で取り除かれる", (t) => {
+  const root = temporary(t);
+  const initialized = runOrSkip(t, root, ["init"]);
+  if (!initialized) return;
+  assert.equal(initialized.status, 0, initialized.stderr);
+  assert.match(initialized.stdout, /Codex のフックの承認の記録を書きました/);
+  assert.ok(!initialized.stdout.includes("信頼の承認が必要です"), initialized.stdout);
+
+  const config = path.join(isolationOf(root).codexHome, "config.toml");
+  const written = fs.readFileSync(config, "utf8");
+  assert.equal((written.match(/trusted_hash/g) ?? []).length, 8);
+  for (const name of ["codex-trust.mjs", "codex-trust-rules.mjs"]) {
+    assert.ok(fs.existsSync(path.join(root, ".agent-hooks/cc-sdd-bootstrap", name)), `${name} が導入先に写されていません`);
+  }
+
+  const removed = runOrSkip(t, root, ["uninstall"]);
+  if (!removed) return;
+  assert.equal(removed.status, 0, removed.stderr);
+  assert.match(removed.stdout, /Codex のフックの承認の記録を取り除きました/);
+  assert.equal((fs.readFileSync(config, "utf8").match(/trusted_hash/g) ?? []).length, 0);
+  const hooks = path.join(root, ".codex/hooks.json");
+  assert.ok(!fs.existsSync(hooks) || !fs.readFileSync(hooks, "utf8").includes(".agent-hooks/cc-sdd-bootstrap/"));
 });

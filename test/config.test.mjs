@@ -14,7 +14,7 @@ test("設定処理: format だけを必須にし、欠けた項目を補う", ()
   assert.equal(parsed.ok, true);
   assert.equal(validateConfig(parsed.config, configFields), null);
   const filled = fillDefaults(parsed.config, configFields);
-  assert.deepEqual(filled.filled, ["ccSdd.lang", "subagents"]);
+  assert.deepEqual(filled.filled, ["ccSdd.lang", "codex.trustHooks", "subagents"]);
   assert.equal(filled.config.ccSdd.version, "3.2.0");
   assert.deepEqual(filled.config.extra, { keep: true });
   assert.equal(serializeConfig(filled.config).endsWith("\n"), true);
@@ -50,7 +50,8 @@ test("設定処理: 役割表の誤りを問題の項目つきで返し、旧項
   const old = parseConfig('{"format":1,"codex":{"enabled":true},"models":{"x":1}}');
   assert.equal(validateConfig(old.config, configFields), null);
   const filled = fillDefaults(old.config, configFields);
-  assert.deepEqual(filled.config.codex, { enabled: true });
+  // 旧項目の中身は保つ。項目 codex.trustHooks の既定値だけが補われる
+  assert.deepEqual(filled.config.codex, { enabled: true, trustHooks: true });
   assert.deepEqual(filled.config.models, { x: 1 });
   assert.deepEqual(filled.config.subagents, {});
 });

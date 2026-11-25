@@ -175,6 +175,14 @@ test("subagent-delegation のスクリプト・フック・生成物が登録さ
   assert.deepEqual(rendered.files.filter((file) => file.path.startsWith(".codex/agents/")).map((file) => file.path), [".codex/agents/cc_sdd_implement.toml"]);
 });
 
+test("承認の記録の 2 ファイルが配置一覧と配る範囲に登録される", () => {
+  for (const name of ["codex-trust.mjs", "codex-trust-rules.mjs"]) {
+    const file = `${DEPLOY_DIR}/${name}`;
+    assert.ok(catalog.files.some((item) => item.path === file), file);
+    assert.ok(pkg.files.includes(file), file);
+  }
+});
+
 test("subagent-delegation の区画に分担・目安・流れ・読み替え・拒否時の扱いが入り、ツールごとの文章が他方に入らない", () => {
   const section = catalog.agentSections.find((item) => item.id === "subagent-delegation");
   assert.ok(section);
@@ -239,4 +247,81 @@ test("subagent-delegation の Claude Code の文章は、モデル未指定の�
   assert.ok(section.claude.includes("起動の引数と定義のどちらにもモデルが無い起動は、未指定として拒否され、使う定義の名前を求めるコマンドが示される"));
   assert.doesNotMatch(section.claude, /名前を付けない起動/);
   assert.doesNotMatch(section.codex, /名前を付けない起動/);
+});
+
+// 文章の中の 1 項目を取り出す。項目は Codex の session-install では段落（"\n\n"）、委任の運用では行（"\n"）で区切られる
+function pieceContaining(text, marker, separator) {
+  return text.split(separator).find((piece) => piece.includes(marker)) ?? "";
+}
+
+// Codex の承認の項目に必要な要素。すべて同じ 1 項目の中になければならない
+const CODEX_TRUST_CHECKS = [
+  /承認の記録は導入・更新（`init`・`update`）と起動前の導入で自動で書かれます/,
+  /`codex\.trustHooks` が false なら書かれません/,
+  /「Hooks need review」の画面で承認/,
+  /`codex exec` は未承認のフックを黙って飛ばします/,
+  /プロジェクトを Codex が信頼していないとフックは読まれない/,
+  /`codex exec --trust`/,
+  /シンボリックリンク経由.*効かない場合/,
+  /クラウド.*書けない場合/,
+];
+
+// 委任の承認を省く指定の項目に必要な要素
+const DELEGATE_TRUST_CHECKS = [
+  /`codex\.trustHooks` が false でなければ/,
+  /その起動の間だけ/,
+  /設定ファイルには保存されません/,
+  /この Codex が指定を受け付けないときは子を起動せず案内します/,
+];
+
+function matchesAll(text, checks) {
+  return checks.every((check) => check.test(text));
+}
+
+// 逆転の変異: 各句を意味が反対の句に置き換えた文章。検査は必ず落ちなければならない
+const CODEX_TRUST_MUTATIONS = [
+  ["書かれます", "書かれません"],
+  ["false なら書かれません", "true なら書かれません"],
+  ["「Hooks need review」の画面で承認", "「Hooks need review」の画面では承認しない"],
+  ["黙って飛ばします", "実行します"],
+  ["信頼していないと", "信頼していれば"],
+  ["`codex exec --trust`", "`codex exec --no-trust`"],
+  ["効かない場合", "効く場合"],
+  ["書けない場合", "書ける場合"],
+];
+
+const DELEGATE_TRUST_MUTATIONS = [
+  ["false でなければ", "false なら"],
+  ["その起動の間だけ", "常に"],
+  ["設定ファイルには保存されません", "設定ファイルに保存されます"],
+  ["子を起動せず案内します", "子を起動します"],
+];
+
+test("Codex の session-install の承認の項目は各要素を同じ 1 項目に含み、句を逆転すると検査が落ちる", () => {
+  const section = catalog.agentSections.find((item) => item.id === "session-install");
+  assert.ok(section);
+  const item = pieceContaining(section.codex, "Hooks need review", "\n\n");
+  assert.notEqual(item, "", "承認の項目が見つかる");
+  assert.equal(matchesAll(item, CODEX_TRUST_CHECKS), true, "正しい文章は検査を通る");
+  for (const [from, to] of CODEX_TRUST_MUTATIONS) {
+    assert.ok(item.includes(from), `変異の元の句がある: ${from}`);
+    const mutated = item.replace(from, to);
+    assert.equal(matchesAll(mutated, CODEX_TRUST_CHECKS), false, `逆転が通ってしまう: ${from} -> ${to}`);
+  }
+  assert.equal(section.claude.includes("Hooks need review"), false);
+});
+
+test("subagent-delegation の承認を省く指定の項目は各要素を同じ 1 項目に含み、句を逆転すると検査が落ちる", () => {
+  const section = catalog.agentSections.find((item) => item.id === "subagent-delegation");
+  assert.ok(section);
+  const line = pieceContaining(section.claude, "--dangerously-bypass-hook-trust", "\n");
+  assert.notEqual(line, "", "指定の項目が見つかる");
+  assert.equal(matchesAll(line, DELEGATE_TRUST_CHECKS), true, "正しい文章は検査を通る");
+  for (const [from, to] of DELEGATE_TRUST_MUTATIONS) {
+    assert.ok(line.includes(from), `変異の元の句がある: ${from}`);
+    const mutated = line.replace(from, to);
+    assert.equal(matchesAll(mutated, DELEGATE_TRUST_CHECKS), false, `逆転が通ってしまう: ${from} -> ${to}`);
+  }
+  assert.equal(pieceContaining(section.codex, "--dangerously-bypass-hook-trust", "\n"), "", "Codex 向けに指定の案内が入らない");
+  assert.equal(section.codex.includes("codex.trustHooks"), false, "Codex 向けに trustHooks の案内が入らない");
 });

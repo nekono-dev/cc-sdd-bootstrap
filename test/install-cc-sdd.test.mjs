@@ -1,9 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { spawn, spawnSync } from 'node:child_process';
-import { makeRepo, runEntry } from './helpers/entry-harness.mjs';
+import { fileURLToPath } from 'node:url';
+import { makeRepo, runEntry, isolatedEnv } from './helpers/entry-harness.mjs';
 import { FAILURE_RECORD, LOCK_PATH, STATE_PATH, SECTION_BEGIN_MARKER, RETRY_COMMAND, decideInstall } from '../.agent-hooks/cc-sdd-bootstrap/install-rules.mjs';
 import { AGENT_SECTION_MARKERS } from '../lib/catalog.mjs';
 import { readInstallFacts } from '../.agent-hooks/cc-sdd-bootstrap/install-cc-sdd.mjs';
@@ -66,7 +68,7 @@ function runSessionStart(repo, tool, input = '{"session_id":"test"}') {
   const logPath = path.join(repo.fakeBin, `npx-calls-session-${process.pid}-${Date.now()}-${Math.random().toString(16).slice(2)}.jsonl`);
   const result = spawnSync(process.execPath, [repo.entry, 'session-start', '--tool', tool], {
     cwd: repo.root, encoding: 'utf8', input,
-    env: { ...process.env, PATH: `${repo.fakeBin}${path.delimiter}${process.env.PATH ?? ''}`, FAKE_NPX_LOG: logPath },
+    env: { ...isolatedEnv(repo), PATH: `${repo.fakeBin}${path.delimiter}${process.env.PATH ?? ''}`, FAKE_NPX_LOG: logPath },
   });
   try { result.npxLog = fs.readFileSync(logPath, 'utf8'); }
   catch (error) { if (error.code !== 'ENOENT') throw error; result.npxLog = ''; }
@@ -78,7 +80,7 @@ function runPromptHook(repo, tool, prompt = '最初の依頼', { mode = 'ok', en
   const logPath = path.join(repo.fakeBin, `npx-calls-prompt-${process.pid}-${Date.now()}-${Math.random().toString(16).slice(2)}.jsonl`);
   const result = spawnSync(process.execPath, [repo.entry, 'user-prompt-submit', '--tool', tool], {
     cwd: repo.root, encoding: 'utf8', input: input ?? JSON.stringify({ prompt }),
-    env: { ...process.env, ...env, PATH: `${repo.fakeBin}${path.delimiter}${process.env.PATH ?? ''}`, FAKE_NPX_MODE: mode, FAKE_NPX_LOG: logPath },
+    env: { ...isolatedEnv(repo, env), PATH: `${repo.fakeBin}${path.delimiter}${process.env.PATH ?? ''}`, FAKE_NPX_MODE: mode, FAKE_NPX_LOG: logPath },
   });
   try { result.npxCalls = fs.readFileSync(logPath, 'utf8').split(/\r?\n/).filter(Boolean).map((line) => JSON.parse(line)); }
   catch (error) { if (error.code !== 'ENOENT') throw error; result.npxCalls = []; }
@@ -160,7 +162,7 @@ test('ほぼ同時の入力では一つだけ導入し、もう一方を止め�
   const logPath = path.join(repo.fakeBin, `npx-calls-race-${process.pid}-${Date.now()}.jsonl`);
   const run = () => new Promise((resolve, reject) => {
     const child = spawn(process.execPath, [repo.entry, 'user-prompt-submit', '--tool', 'claude'], {
-      cwd: repo.root, env: { ...process.env, PATH: `${repo.fakeBin}${path.delimiter}${process.env.PATH ?? ''}`, FAKE_NPX_LOG: logPath, FAKE_NPX_DELAY_MS: '150' },
+      cwd: repo.root, env: { ...isolatedEnv(repo), PATH: `${repo.fakeBin}${path.delimiter}${process.env.PATH ?? ''}`, FAKE_NPX_LOG: logPath, FAKE_NPX_DELAY_MS: '150' },
       stdio: ['pipe', 'pipe', 'pipe'],
     });
     let stdout = '', stderr = '';
@@ -624,7 +626,7 @@ test('区画の書き直し: 両方の入口を同時に動かしても片方だ
   const logPath = path.join(repo.fakeBin, `npx-calls-rewrite-race-${process.pid}-${Date.now()}.jsonl`);
   const run = (args) => new Promise((resolve, reject) => {
     const child = spawn(process.execPath, [repo.entry, ...args], {
-      cwd: repo.root, env: { ...process.env, PATH: `${repo.fakeBin}${path.delimiter}${process.env.PATH ?? ''}`, FAKE_NPX_LOG: logPath },
+      cwd: repo.root, env: { ...isolatedEnv(repo), PATH: `${repo.fakeBin}${path.delimiter}${process.env.PATH ?? ''}`, FAKE_NPX_LOG: logPath },
       stdio: ['pipe', 'pipe', 'pipe'],
     });
     let stdout = '';
@@ -727,5 +729,141 @@ test('区画の書き直し: 終わりの目印の無い配置物の文章では
     assert.equal(repo.read('AGENTS.md'), before.a);
     assert.equal(repo.read(FAILURE_RECORD), null);
     assert.equal(repo.read(LOCK_PATH), null);
+  }
+});
+
+// --- 承認の記録（タスク 4.3）: 引数なしの導入の成功後に書き、フックの経路では書かない ---
+
+const HOOKS_FIXTURE = fileURLToPath(new URL('./fixtures/codex-hooks-sample.json', import.meta.url));
+/** 導入先の .codex/hooks.json に、自分のフック 8 件の試験データを置く */
+function putCodexHooks(repo) {
+  repo.write('.codex/hooks.json', fs.readFileSync(HOOKS_FIXTURE, 'utf8'));
+}
+/** 試験用の CODEX_HOME の config.toml（無ければ null） */
+function readCodexConfig(repo) {
+  try { return fs.readFileSync(path.join(repo.codexHome, 'config.toml'), 'utf8'); }
+  catch (error) { if (error.code === 'ENOENT') return null; throw error; }
+}
+/** 承認の記録の件数（表の見出しと trusted_hash の行の両方を数える） */
+function countTrustRecords(text) {
+  return {
+    tables: (text.match(/^\[hooks\.state\."/gm) ?? []).length,
+    hashes: (text.match(/^trusted_hash = "sha256:[0-9a-f]{64}"/gm) ?? []).length,
+  };
+}
+
+test('引数なしの導入は成功後に承認の記録を CODEX_HOME へ書き、結果の行を出す', (t) => {
+  const repo = makeRepo(); t.after(repo.cleanup); repo.putSections(); putCodexHooks(repo);
+  const result = runEntry(repo);
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /導入しました/);
+  assert.match(result.stdout, /Codex のフックの承認の記録を書きました/);
+  assert.deepEqual(countTrustRecords(readCodexConfig(repo)), { tables: 8, hashes: 8 });
+});
+
+test('導入済みで省く実行でも承認の記録を確かめ、揃っていれば最新と出す', (t) => {
+  const repo = makeRepo(); t.after(repo.cleanup); repo.putSections(); putCodexHooks(repo);
+  assert.equal(runEntry(repo).status, 0);
+  const before = readCodexConfig(repo);
+  const skipped = runEntry(repo);
+  assert.equal(skipped.status, 0, skipped.stderr);
+  assert.match(skipped.stdout, /省きました/);
+  assert.match(skipped.stdout, /Codex のフックの承認の記録は最新です/);
+  assert.deepEqual(skipped.npxCalls, []);
+  assert.equal(readCodexConfig(repo), before);
+});
+
+test('セッション開始と最初の入力のフックの経路では承認の記録を書かない', (t) => {
+  for (const scenario of [
+    { name: '導入済み', setup(repo) { prepareComplete(repo); repo.putSections(); } },
+    { name: '未導入', setup(repo) { repo.putSections(); } },
+  ]) {
+    for (const hook of ['session-start', 'user-prompt-submit']) {
+      const repo = makeRepo(); t.after(repo.cleanup);
+      scenario.setup(repo);
+      putCodexHooks(repo);
+      const result = hook === 'session-start' ? runSessionStart(repo, 'codex') : runPromptHook(repo, 'codex');
+      assert.equal(result.status, 0, `${scenario.name}/${hook}: ${result.stderr}`);
+      assert.doesNotMatch(result.stdout, /承認の記録/, `${scenario.name}/${hook}`);
+      assert.equal(readCodexConfig(repo), null, `${scenario.name}/${hook} で設定ファイルが作られました`);
+    }
+  }
+  // 既存の設定ファイルも変更されないこと
+  const repo = makeRepo(); t.after(repo.cleanup);
+  prepareComplete(repo); repo.putSections(); putCodexHooks(repo);
+  fs.writeFileSync(path.join(repo.codexHome, 'config.toml'), 'marker = true\n');
+  assert.equal(runSessionStart(repo, 'codex').status, 0);
+  assert.equal(runPromptHook(repo, 'codex').status, 0);
+  assert.equal(readCodexConfig(repo), 'marker = true\n');
+});
+
+test('導入が失敗して止まる実行では承認の記録を書かない', (t) => {
+  const repo = makeRepo(); t.after(repo.cleanup); repo.putSections(); putCodexHooks(repo);
+  const result = runEntry(repo, [], { mode: 'fail' });
+  assert.equal(result.status, 1);
+  assert.doesNotMatch(result.stdout, /承認の記録/);
+  assert.equal(readCodexConfig(repo), null);
+});
+
+test('設定の codex.trustHooks が false なら書かず、理由の行を出して導入は成功する', (t) => {
+  const repo = makeRepo({ config: { format: 1, ccSdd: { version: '3.1.0', lang: 'ja' }, codex: { trustHooks: false } } });
+  t.after(repo.cleanup); repo.putSections(); putCodexHooks(repo);
+  const result = runEntry(repo);
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /導入しました/);
+  assert.match(result.stdout, /codex\.trustHooks が false/);
+  assert.equal(readCodexConfig(repo), null);
+});
+
+test('CODEX_HOME のディレクトリが無ければ書かず、理由の行を出して導入は成功する', (t) => {
+  const repo = makeRepo(); t.after(repo.cleanup); repo.putSections(); putCodexHooks(repo);
+  fs.rmSync(repo.codexHome, { recursive: true, force: true });
+  const result = runEntry(repo);
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /導入しました/);
+  assert.match(result.stdout, /承認の記録は変更していません/);
+  assert.match(result.stdout, /設定ディレクトリ/);
+  assert.equal(fs.existsSync(repo.codexHome), false);
+});
+
+test('承認の記録の配置物が無い導入先でも、引数なしの導入は成功する', (t) => {
+  const repo = makeRepo({ trust: false }); t.after(repo.cleanup); repo.putSections(); putCodexHooks(repo);
+  assert.equal(fs.existsSync(path.join(repo.root, '.agent-hooks/cc-sdd-bootstrap/codex-trust.mjs')), false);
+  const result = runEntry(repo);
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /導入しました/);
+  assert.match(result.stderr, /承認の記録を扱えませんでした（/);
+});
+
+test('承認の記録の書き込みが失敗しても導入の終了コードは 0', { skip: isRoot }, (t) => {
+  const repo = makeRepo(); t.after(() => { fs.chmodSync(repo.codexHome, 0o755); repo.cleanup(); });
+  repo.putSections(); putCodexHooks(repo);
+  // 設定ディレクトリを読み取り専用にすると、一時ファイルを作れず書き込みが失敗する
+  fs.chmodSync(repo.codexHome, 0o555);
+  const result = runEntry(repo);
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /導入しました/);
+  assert.match(result.stdout, /承認の記録を書けませんでした/);
+  assert.equal(readCodexConfig(repo), null);
+});
+
+test('isolatedEnv は CODEX_HOME と HOME を試験用の一時ディレクトリにし、実際の HOME と違う', (t) => {
+  const repo = makeRepo(); t.after(repo.cleanup);
+  const env = isolatedEnv(repo, { CODEX_HOME: '/実際の場所を指定しても無視される' });
+  assert.equal(env.CODEX_HOME, repo.codexHome);
+  assert.equal(env.HOME, repo.home);
+  assert.notEqual(env.HOME, os.homedir());
+  assert.notEqual(env.CODEX_HOME, path.join(os.homedir(), '.codex'));
+});
+
+test('install-cc-sdd を起動するすべての試験は isolatedEnv を通す', () => {
+  const lines = fs.readFileSync(fileURLToPath(import.meta.url), 'utf8').split(/\r?\n/);
+  // この試験より前の行だけを見る（この試験自身の検索文字列には一致させない）
+  const self = lines.findIndex((line) => line.includes('install-cc-sdd を起動するすべての試験'));
+  const launches = lines.flatMap((line, i) => (i < self && /\[repo\.entry[,\]]/.test(line) ? [i] : []));
+  assert.ok(launches.length >= 4, `起動の箇所が見つかりません: ${launches.length}`);
+  for (const i of launches) {
+    const block = lines.slice(i, i + 4).join('\n');
+    assert.match(block, /isolatedEnv\(/, `${i + 1} 行目の起動が isolatedEnv を通していません`);
   }
 });

@@ -214,3 +214,38 @@ test("init は agent 文書を変更せず、存在案内と Codex・既定値�
   assert.ok(result.notices.some((notice) => notice.code === "CODEX_TRUST"));
   assert.ok(result.notices.some((notice) => notice.code === "CONFIG_CREATED"));
 });
+
+// 実際の項目定義（lib/config-schema.mjs）で計画を立て、codex.trustHooks の既定値の扱いを確かめる
+import { configFields as realFields } from "../lib/config-schema.mjs";
+const realRun = (operation, config) => computePlan({
+  operation,
+  snapshot: { ...empty(), config },
+  catalog,
+  fields: realFields,
+});
+const configWrite = (result) => result.changes.find((change) => change.kind === "write" && change.path === ".cc-sdd-bootstrap.json");
+
+test("init が作る設定の本文に codex.trustHooks: true が入る", () => {
+  const result = realRun("init", null);
+  assert.equal(result.ok, true);
+  const write = configWrite(result);
+  assert.ok(write, "設定ファイルの書き込みが計画に無い");
+  assert.deepEqual(JSON.parse(write.content).codex, { trustHooks: true });
+});
+
+test("codex.trustHooks を欠く既存設定に対する update が項目を補う", () => {
+  const result = realRun("update", '{"format":1,"ccSdd":{"version":"3.1.0","lang":"ja"},"subagents":{}}');
+  assert.equal(result.ok, true);
+  const write = configWrite(result);
+  assert.ok(write, "項目を補う書き込みが計画に無い");
+  assert.deepEqual(JSON.parse(write.content).codex, { trustHooks: true });
+});
+
+test("既存の codex.trustHooks: false を update が保つ", () => {
+  // ccSdd.lang を欠かせて書き込みを起こし、その上で false が true に変わらないことを確かめる
+  const result = realRun("update", '{"format":1,"ccSdd":{"version":"3.1.0"},"codex":{"trustHooks":false},"subagents":{}}');
+  assert.equal(result.ok, true);
+  const write = configWrite(result);
+  assert.ok(write, "項目を補う書き込みが計画に無い");
+  assert.deepEqual(JSON.parse(write.content).codex, { trustHooks: false });
+});
