@@ -21,7 +21,9 @@
     ".agent-hooks/cc-sdd-bootstrap/subagent-check.mjs",
     ".agent-hooks/cc-sdd-bootstrap/delegate.mjs",
     ".agent-hooks/cc-sdd-bootstrap/codex-trust.mjs",
-    ".agent-hooks/cc-sdd-bootstrap/codex-trust-rules.mjs"
+    ".agent-hooks/cc-sdd-bootstrap/codex-trust-rules.mjs",
+    ".agent-hooks/cc-sdd-bootstrap/work-branch-gate.mjs",
+    ".agent-hooks/cc-sdd-bootstrap/work-branch-gate-rules.mjs"
   ],
   "scripts": {
     "test": "node --test \"test/**/*.test.mjs\""
