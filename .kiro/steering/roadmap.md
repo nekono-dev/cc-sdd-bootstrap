@@ -76,6 +76,7 @@ cc-sdd（Kiro 方式の仕様駆動開発のスキル集）の運用一式を、
 - [x] subagent-delegation -- 役割表、両ベンダのエージェント定義の生成、子のモデルの拒否（未指定・指揮役と同じ）、別ベンダの CLI を起動する入口と委任の手順の文章. Dependencies: installer-core
 - [ ] feasibility-review -- 設計・タスクのレビュー（`/kiro-validate-design`・`/kiro-spec-tasks`）に実現性の観点（一次資料か実機の PoC による根拠）を外から渡し、通るまで `/kiro-spec-tasks`・`/kiro-impl` を止める。実機の確認をタスク計画の最初に置く文章. Dependencies: installer-core, kiro-gate
 - [x] codex-hook-trust -- 導入・更新の行程で Codex のフックの信頼の承認の記録（`~/.codex/config.toml` の `trusted_hash`）を自動で書き、Claude から起動する `codex exec` の子には `--dangerously-bypass-hook-trust` を付ける（併用）。最初にハッシュの計算方法を PoC で特定する. Dependencies: installer-core, subagent-delegation
+- [ ] work-branch-flow -- 設定のオプション（既定 on）で、新機能追加系の作業（kiro-discovery・spec-init/quick/batch・kiro-impl）の前に作業ブランチにいることをフックで強制し、kiro-validate-impl の後は PR を作る（文章＋終了時の停止）。brw を知らない前提で、ブランチ作成・PR 作成の操作を試みるだけにし、brw 導入済みならそのフックの拒否で brw の手順へ移る. Dependencies: installer-core, kiro-gate
 
 ## 経緯
 
@@ -88,3 +89,4 @@ cc-sdd（Kiro 方式の仕様駆動開発のスキル集）の運用一式を、
 - 2026-11-25: installer-core・session-install・kiro-gate・subagent-delegation の実装が develop に入った（subagent-delegation は PR #4。worktree の Codex での確認 4.8 も OK）。残りは feasibility-review。
 - 2026-11-25: Codex のフックの承認の手間を省くため、codex-hook-trust を足した（利用者の指示。承認の記録の自動書き込みと子の回避指定の併用）。
 - 2026-11-25: codex-hook-trust を実装し、develop に取り込んだ（PR #6）。取り込み後の worktree と普通の checkout での確認（5.3）も PASS。Codex のクラウドセッションとプロジェクトの信頼の付与は範囲外。
+- 2026-11-25: 利用者の指示で work-branch-flow を足した（作業前のブランチ作成と検証後の PR 作成の運用フロー。設定で on/off、既定 on。brw は知らない前提）。brief を書いた。

@@ -1,0 +1,126 @@
+#!/usr/bin/env node
+// PoC（feasibility-review の設計の前提の確認）
+//   A: 入力時の追加の文脈が、/kiro-validate-design（Codex は $kiro-validate-design）のレビューの出力に反映されるか
+//   B: 子のレビュー役の起動（Claude Code の Agent・Codex の spawn_agent）の依頼文を PreToolUse で扱えるか
+//      B1 依頼文に印が無ければ拒否し、理由で入れさせる（拒否→呼び直し）
+//      B2 依頼文の末尾に印を足す（updatedInput）。子が受け取ったかは、子が最後の 1 行を引用して答えるので分かる
+//   C: 関門（入力の停止）は session-install・kiro-gate の PoC（poc/req-feasibility/result.md）で両ツール確認済みのため、ここでは流さない
+// 使い方: node poc/feasibility-review/run.mjs [A] [B]   認証済みの claude・codex、git、Node.js 22、cc-sdd の導入に使うネットワークが要る。
+import fs from 'node:fs';
+import path from 'node:path';
+import { check, observe, summary, run, git, makeRepo, registerHooks, records, invoke, succeeded, finalAnswer } from '../work-branch-flow/common.mjs';
+
+const repoRoot = path.resolve(import.meta.dirname, '../..');
+const want = process.argv.slice(2).map((s) => s.toUpperCase());
+const enabled = (name) => want.length === 0 || want.includes(name);
+const tools = ['claude', 'codex'];
+
+/** 既存の登録（導入コマンドの init が書いたもの）に、PoC のフックを足す */
+function addHooks(dir, entries) {
+  for (const tool of tools) {
+    const file = path.join(dir, tool === 'claude' ? '.claude/settings.json' : '.codex/hooks.json');
+    const config = fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, 'utf8')) : {};
+    config.hooks ??= {};
+    for (const { event, matcher, args } of entries) {
+      const command = tool === 'claude' ? `node "$CLAUDE_PROJECT_DIR/.poc/probe.mjs" ${args}` : `node "$(git rev-parse --show-toplevel)/.poc/probe.mjs" ${args}`;
+      (config.hooks[event] ??= []).push({ ...(matcher ? { matcher } : {}), hooks: [{ type: 'command', command, timeout: 30 }] });
+    }
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, `${JSON.stringify(config, null, 2)}\n`);
+  }
+}
+
+function setupWithSkills(name) {
+  const dir = makeRepo(name);
+  const init = run(process.execPath, [path.join(repoRoot, 'bin/cc-sdd-bootstrap.mjs'), 'init'], { cwd: dir });
+  if (init.status !== 0) throw new Error(`init に失敗: ${init.stderr}`);
+  const install = run(process.execPath, ['.agent-hooks/cc-sdd-bootstrap/install-cc-sdd.mjs'], { cwd: dir });
+  if (install.status !== 0) throw new Error(`cc-sdd の導入に失敗: ${install.stderr}`);
+  const spec = path.join(dir, '.kiro/specs/demo');
+  fs.mkdirSync(spec, { recursive: true });
+  fs.writeFileSync(path.join(spec, 'spec.json'), `${JSON.stringify({
+    feature_name: 'demo', language: 'ja', phase: 'design-generated',
+    approvals: { requirements: { generated: true, approved: true }, design: { generated: true, approved: false }, tasks: { generated: false, approved: false } }, ready_for_implementation: false,
+  }, null, 2)}\n`);
+  fs.writeFileSync(path.join(spec, 'requirements.md'), '# 要件\n\n## 1. あいさつ\n1.1 コマンド `hello` は標準出力に「こんにちは」と 1 行出力する。\n1.2 引数 `--name X` があれば「こんにちは、X」と出力する。\n');
+  fs.writeFileSync(path.join(spec, 'design.md'), '# 設計\n\n## 概要\nNode.js の単一ファイル `hello.mjs` で実装する。引数は `process.argv` を直接読む。\n\n## 前提\n- Node.js 22 が使える。\n- Codex は追加の文脈に必ず従う（根拠は無い）。\n\n## 要件の対応\n- 1.1・1.2: `hello.mjs`。\n');
+  git(dir, 'add', '-A'); git(dir, 'commit', '-q', '-m', 'spec');
+  return dir;
+}
+
+// ---- A: 追加の文脈がレビューに反映されるか ----
+if (enabled('A')) {
+  console.log('\n## A: /kiro-validate-design に追加の文脈を渡す');
+  const marker = 'FEAS-CHECK-7F3A';
+  const context = `実現性の観点（この設計のレビューに必ず適用する）: 設計の各前提に、一次資料（URL・版）か実機の PoC（再実行できるスクリプトと結果）の根拠があるかを確認する。レビューの出力の最後に「${marker}:」で始まる 1 行を付け、根拠の無い前提の数を書くこと。`;
+  for (const tool of tools) {
+    const dir = setupWithSkills(`fr-a-${tool}`);
+    addHooks(dir, [{ event: 'UserPromptSubmit', args: `context:${context}` }]);
+    const command = tool === 'claude' ? '/kiro-validate-design demo' : '$kiro-validate-design demo';
+    const result = invoke(tool, dir, `${command}\n対話はせず、そのまま最後までレビューして結果を出してください。`, { tools: 'Bash,Read,Write,Edit,Glob,Grep,Agent' });
+    check(`A ${tool}: 実行が成功した`, succeeded(result));
+    const answer = finalAnswer(tool, result);
+    observe(`A ${tool}: 最終の答えの末尾`, answer.slice(-240).replace(/\n/g, ' '));
+    fs.writeFileSync(path.join(dir, '.poc/answer.txt'), answer);
+    check(`A ${tool}: 追加の文脈の指示（${marker} の行）がレビューの出力に反映された`, answer.includes(marker));
+    observe(`A ${tool}: 出力に「根拠」が現れた回数`, String((answer.match(/根拠/g) ?? []).length));
+  }
+}
+
+// ---- B: 子の起動の依頼文を扱えるか ----
+if (enabled('B')) {
+  console.log('\n## B: 子（Agent・spawn_agent）の依頼文');
+  const mark = '[[FEAS-7F3A]]';
+  const parent = (tool, extra) => tool === 'claude'
+    ? `Agent ツール（subagent_type は general-purpose、model は haiku）で子を 1 回だけ起動し、子に「受け取った依頼文の最後の 1 行を、そのまま引用して答えてください」と頼んでください。子の返事をそのまま報告してください。${extra}`
+    : `spawn_agent を agent_type probe_quoter・fork_turns none・model gpt-6-luna で 1 回だけ使い、子に「受け取った依頼文の最後の 1 行を、そのまま引用して答えてください」と頼み、wait で子の返事を待って、その返事をそのまま報告してください。子の返事を推測で作らないでください。${extra}`;
+  for (const [mode, label] of [['agent-require', 'B1 拒否して入れさせる'], ['agent-update', 'B2 末尾に足す（updatedInput）']]) {
+    for (const tool of tools) {
+      const dir = makeRepo(`fr-b-${mode}-${tool}`);
+      fs.mkdirSync(path.join(dir, '.codex/agents'), { recursive: true });
+      fs.writeFileSync(path.join(dir, '.codex/agents/probe_quoter.toml'), 'name = "probe_quoter"\ndescription = "PoC 用。受け取った依頼文の最後の 1 行を引用して答える。"\ndeveloper_instructions = "受け取った依頼文の最後の 1 行を、そのまま引用して答える。それ以外は書かない。"\n');
+      registerHooks(dir, [{ event: 'PreToolUse', matcher: tool === 'claude' ? 'Agent|Task' : '', args: `${mode}:${mark}` }]);
+      const result = invoke(tool, dir, parent(tool, mode === 'agent-require' ? '拒否されたら理由に従って、もう 1 回だけ呼び直してください。' : ''));
+      const list = records(dir).filter((r) => r.input?.hook_event_name === 'PreToolUse' && /Agent|Task|spawn_agent/.test(r.input.tool_name ?? ''));
+      observe(`${label} ${tool}: 子の起動`, list.map((r) => `${r.input.tool_name}[keys=${Object.keys(r.input.tool_input ?? {}).join(',')}]${r.output?.hookSpecificOutput?.permissionDecision === 'deny' ? '(拒否)' : r.output ? '(更新)' : ''}`).join(' → '));
+      const answer = finalAnswer(tool, result);
+      observe(`${label} ${tool}: 最終の答え`, answer.slice(0, 200).replace(/\n/g, ' '));
+      check(`${label} ${tool}: 子の起動を PreToolUse で観測できた`, list.length >= 1);
+      if (mode === 'agent-require') {
+        const denied = list.some((r) => r.output?.hookSpecificOutput?.permissionDecision === 'deny');
+        const second = list.filter((r) => !r.output).at(0);
+        check(`${label} ${tool}: 印の無い起動が拒否された`, denied);
+        check(`${label} ${tool}: 呼び直しの依頼文に印が入った`, Boolean(second) && JSON.stringify(second.input.tool_input).includes(mark));
+      } else {
+        const updated = list.some((r) => r.output?.hookSpecificOutput?.updatedInput);
+        observe(`${label} ${tool}: 更新を返した`, String(updated));
+        const reached = answer.includes(mark);
+        if (tool === 'claude') check(`${label} ${tool}: 子が印を受け取った（子の引用に印がある）`, reached);
+        else observe(`${label} ${tool}: 子が印を受け取った（子の引用に印がある）`, String(reached));
+      }
+    }
+  }
+}
+
+// ---- B3: フックを使わず、運用の区画の文章で親に依頼文へ入れさせる ----
+if (enabled('B')) {
+  console.log('\n## B3: 運用の区画の文章で、子の依頼文に観点を入れさせる（フックなし）');
+  const mark = '[[FEAS-DOC-9C21]]';
+  for (const tool of tools) {
+    const dir = makeRepo(`fr-b3-${tool}`);
+    fs.mkdirSync(path.join(dir, '.codex/agents'), { recursive: true });
+    fs.writeFileSync(path.join(dir, '.codex/agents/probe_quoter.toml'), 'name = "probe_quoter"\ndescription = "PoC 用。受け取った依頼文の最後の 1 行を引用して答える。"\ndeveloper_instructions = "受け取った依頼文の最後の 1 行を、そのまま引用して答える。それ以外は書かない。"\n');
+    const rule = `\n## 運用の決まり\n- 子のエージェントを起動するときは、子への依頼文の最後の 1 行に、必ず ${mark} とだけ書く。\n`;
+    fs.writeFileSync(path.join(dir, tool === 'claude' ? 'CLAUDE.md' : 'AGENTS.md'), `# PoC${rule}`);
+    registerHooks(dir, [{ event: 'PreToolUse', matcher: tool === 'claude' ? 'Agent|Task' : '', args: 'log' }]);
+    const prompt = tool === 'claude'
+      ? 'Agent ツール（subagent_type は general-purpose、model は haiku）で子を 1 回だけ起動し、子に「受け取った依頼文の最後の 1 行を、そのまま引用して答えてください」と頼んでください。子の返事をそのまま報告してください。'
+      : 'spawn_agent を agent_type probe_quoter・fork_turns none・model gpt-6-luna で 1 回だけ使い、子に「受け取った依頼文の最後の 1 行を、そのまま引用して答えてください」と頼み、wait で子の返事を待って、その返事をそのまま報告してください。子の返事を推測で作らないでください。';
+    const result = invoke(tool, dir, prompt);
+    const answer = finalAnswer(tool, result);
+    observe(`B3 ${tool}: 最終の答え`, answer.slice(0, 200).replace(/\n/g, ' '));
+    check(`B3 ${tool}: 運用の決まりに従い、子が印を受け取った（子の引用に印がある）`, answer.includes(mark));
+  }
+}
+
+summary();
