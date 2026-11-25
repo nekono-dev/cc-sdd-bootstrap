@@ -292,17 +292,17 @@ Codex を起動する前に、`readTrustSetting(root)` が true なら `bypassFl
 - `OWNED_MARKER` が `lib/catalog.mjs` の値と一致する。`messageTrust` の各 `status`（4.3・4.4）。
 
 ### 入出力 — `test/codex-trust.test.mjs`（一時ディレクトリ）
-- 書き込み・変更なし・設定ディレクトリが無いとき `skipped`・設定が false のとき `write`・`remove` とも `disabled`・`remove`・worktree からの `remove` は `skipped` で記録を残す・書く直前に別のプロセスが本文を変えたときのやり直しと `failed`・`CODEX_HOME` の優先・シンボリックリンクの `config.toml` で実体へ書く・読み取り専用で `failed`・worktree から実行して本体の道筋で書く・本体の `hooks.json` が違うとき `notes`（1.x、2.x、3.2、4.2、6.1）。
+- 書き込み・変更なし・設定ディレクトリが無いとき `skipped`・設定が false のとき `write`・`remove` とも `disabled`・`remove`・worktree からの `remove` は `skipped` で記録を残す・書く直前に別のプロセスが本文を変えたときのやり直しと `failed`・`CODEX_HOME` の優先・シンボリックリンクの `config.toml` で実体へ書く・読み取り専用で `failed`・worktree から実行して本体の道筋で書く・本体の `hooks.json` が違うとき `notes`（1.x、2.x、3.2、4.2、6.1、6.2）。
 - `bypassFlagSupported`: 偽の `codex` を `PATH` に置いて、指定が出る・出ない・起動できないを確かめる（5.4）。
 
 ### 統合
 - `test/cli.test.mjs`: `init`・`update` の後に結果行が出る、計画が 0 件でも呼ばれる、`uninstall` は外す前に呼ばれる、失敗しても終了コードが変わらない、設定が false のとき書かない、`written`・`unchanged` のとき「承認が必要です」の案内が出ない（1.1、1.6、4.x、6.1）。
 - `test/install-cc-sdd.test.mjs`・`test/entry-harness.test.mjs`: 引数なしの経路で呼ばれ、`session-start`・`user-prompt-submit` では呼ばれない・設定が false のとき理由が出る（3.1・3.3・4.4）。
 - `test/subagent-roles.test.mjs`・`test/delegate.test.mjs`: Codex の子の引数に指定が入る・`--config` に入らない・設定が false なら入らない・使えない Codex で `Stop`・指定を付けた子が終了コード 2 で終わったときの案内（5.1〜5.4）。
-- `test/config-schema.test.mjs`・`test/catalog.test.mjs`: 新しい項目と登録（4.1）、運用の区画の文章に手での承認の方法がある（6.3）。
+- `test/config-schema.test.mjs`・`test/catalog.test.mjs`: 新しい項目と登録（4.1）、運用の区画の文章に手での承認の方法がある（6.4）。
 
 ### 実機（再実行できる確認）
-- `poc/codex-hook-trust/run.mjs --e2e`・`probe.mjs`: Codex の版を上げたときに再実行する（6.4）。
+- `poc/codex-hook-trust/run.mjs --e2e`・`probe.mjs`: Codex の版を上げたときに再実行する（6.5）。
 - 自己適用: `update` の後に、実際に書かれた記録で Codex が確認画面なしでフックを動かす（このリポジトリの普通の checkout と worktree）。
 
 ## Migration Strategy
