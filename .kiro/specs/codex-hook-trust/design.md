@@ -12,7 +12,7 @@
 - `init`・`update`・起動前の導入で、自分のフックの承認の記録を正しく書く（1.x・2.x・3.x）。
 - 書き込みを設定で止められ、書いた内容を表示し、`uninstall` で取り除ける（4.x・6.1）。
 - Claude から起動する Codex の子で承認の確認を省く（5.x）。
-- 記録が効かなくなっても壊れず、手での承認と文章の補いに戻れる（6.2〜6.4）。
+- 記録が効かなくなっても壊れず、手での承認と文章の補いに戻れる（6.3〜6.5）。
 
 ### Non-Goals
 - フックの登録そのもの・役割表・子のモデルの決まり（既存の仕様）。
@@ -151,10 +151,11 @@ sequenceDiagram
 | 5.2 | 付けたことを表示 | `delegate.mjs` | 標準エラー出力へ 1 行 |
 | 5.3 | 設定に保存しない | `subagent-roles.mjs` | 引数だけ（`--config` は使わない） |
 | 5.4 | 使えない指定は起動せず案内 | `codex-trust.mjs`、`delegate.mjs` | `codex exec --help` に指定が無ければ `Stop` |
-| 6.1 | uninstall で自分の記録だけ外す | `lib/cli.mjs`、`codex-trust.mjs`、`codex-trust-rules.mjs` | `applyCodexTrust(remove)`（外す前の `hooks.json` から求め、現在のハッシュと一致する記録だけを外す。worktree からは外さない） |
-| 6.2 | 合わなくなっても壊れない | Codex の挙動 | 未承認になるだけ。設計での対応は不要 |
-| 6.3 | 手での承認の方法を文章で案内 | `lib/catalog.mjs` | Codex 向けの運用の区画の文章 |
-| 6.4 | 再実行できる確認手順 | `poc/codex-hook-trust/` | `run.mjs`・`probe.mjs`・`result.md` |
+| 6.2 | worktree からの uninstall は外さず理由を表示 | `lib/cli.mjs`、`codex-trust.mjs` | `applyCodexTrust(remove)` が `skipped` を返す |
+| 6.1 | 本体の checkout の uninstall で一致する記録だけ外す | `lib/cli.mjs`、`codex-trust.mjs`、`codex-trust-rules.mjs` | `applyCodexTrust(remove)`（外す前の `hooks.json` から求め、現在のハッシュと一致する記録だけを外す。worktree からは外さない） |
+| 6.3 | 合わなくなっても壊れない | Codex の挙動 | 未承認になるだけ。設計での対応は不要 |
+| 6.4 | 手での承認の方法を文章で案内 | `lib/catalog.mjs` | Codex 向けの運用の区画の文章 |
+| 6.5 | 再実行できる確認手順 | `poc/codex-hook-trust/` | `run.mjs`・`probe.mjs`・`result.md` |
 
 ## Components and Interfaces
 
@@ -273,7 +274,7 @@ Codex を起動する前に、`readTrustSetting(root)` が true なら `bypassFl
 | 設定が false | `disabled`（`write`・`remove` とも変更しない）。理由を表示 | 4.2、4.4 |
 | 書き込み中に利用者側の更新が起きた | 1 回だけやり直し、だめなら `failed` | 1.4 |
 | 承認を省く指定が使えない Codex | 子を起動せず `Stop` と案内 | 5.4 |
-| 記録が効かない（Codex の版の変更） | Codex は未承認として扱う。文章の補いに戻る | 6.2、6.3 |
+| 記録が効かない（Codex の版の変更） | Codex は未承認として扱う。文章の補いに戻る | 6.3、6.4 |
 
 ## 既知の制約
 - **シンボリックリンク経由で開いたリポジトリ**: Codex は起動した道筋でキーを照合する（`poc/codex-hook-trust/probe.mjs` の A1・A2）。導入側は実体の道筋（`git` が返すもの）で書くので、リンク経由で開くと効かず、未承認として扱われる。手での承認か、実体の道筋で起動することで対処する。運用の区画の文章に 1 文で書く。
