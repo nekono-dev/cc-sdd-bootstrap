@@ -119,7 +119,7 @@ stateDiagram-v2
 ```
 
 - `Turn` は「対象の入力を受けてから、別の kiro コマンドの入力か基底ブランチでなくなるまで」の状態（スキル名・拒否の回数・切り替えを試みたか）。コマンドを含まない通常の入力では解除せず、拒否の回数だけ 0 に戻す（対話を挟む `kiro-discovery` でも、書き込みの前に拒否が効く。対話中に誤って作業と分類された操作が回数を使い切ることも避ける）。切り替えを試みたかは戻さない。`Validated` はセッションの間続く別の状態（`kiro-validate-impl` の入力を受けたか・終了を止めたか）。2 つは独立に持つ。
-- 作業の拒否は PreToolUse で判断する: ① 設定が有効 ② `turn` がある ③ 切り替え未試行 ④ 拒否が 2 回未満 ⑤ 操作が「作業」と分類される ⑥ 3.13 の判定による現在のブランチが基底ブランチ（ブランチなしを含む）。⑥ で判定できなければ通す。⑥ で基底でないと判定できたら `turn` を消す。判定のたびに、求められた作業場所を状態の `location` に記録する。
+- 作業の拒否は PreToolUse で判断する: ① 設定が有効 ② `turn` がある ③ 切り替え未試行 ④ 拒否が 2 回未満 ⑤ 操作が「作業」と分類される ⑥ 3.13 の判定による現在のブランチが基底ブランチ（ブランチなしを含む）。⑥ で判定できなければ通す。⑥ で基底でないと判定できたら `turn` を消す。求められた作業場所は、操作が「作業」と分類されたときだけ状態の `location` に記録する（読み取りの操作は記録しない。スキルの手順書は本体の checkout にあり、worktree での作業の後に `Read` で上書きされると、Stop が基底と誤判定するため）。
 - 終了の停止は Stop で判断する: ① 設定が有効 ② `validated` があり未停止 ③ `stop_hook_active` が偽 ④ 現在のブランチ（3.13。操作の入力が無いので、状態の `location`、無ければ入力の `cwd`）が基底ブランチではない ⑤ `gh` で「PR が無い」と判定できた。1 つでも満たさなければ通す。止めたら `validated` の未停止を既停止にする。
 
 ## Requirements Traceability
@@ -283,7 +283,7 @@ function messageStop(branch: string): string;
 
 ##### Event Contract
 - UserPromptSubmit: 対象の入力なら `turn` を作り（既存を上書き）、設定が有効で現在のブランチ（3.13。操作の入力が無いので `location` → `cwd`）が基底なら `messageGuidance` を追加の文脈として出す（対象の入力ごとに 1 回。3.12）。`kiro-validate-impl` の入力なら、設定が有効なら現在のブランチによらず `validated` を作り `messagePrContext` を出す（4.1・4.4。案内の文章が「基底ブランチの上なら PR を求めない」と条件を示す）。対象でも `kiro-validate-impl` でもない別の kiro コマンドの入力は `turn` を消す。コマンドを含まない通常の入力（`classifyPrompt` が null）は `turn` を残し、`resetDenials` で `denials` だけ 0 に戻す（案内は出さない。`validated` は残す）。
-- PreToolUse: 操作の入力から作業場所を求め（`workDirOf`）、求められたら `location` に記録する（`turn` が無くても記録する。Stop が使うため）。`turn` があるときだけ判断し、拒否なら理由を出力し `turn` を保存する。
+- PreToolUse: 操作の入力から作業場所を求め（`workDirOf`）、操作が「作業」と分類されて場所を求められたときだけ `location` に記録する（`turn` が無くても記録する。Stop が使うため。`read` の操作では更新しない）。`turn` があるときだけ判断し、拒否なら理由を出力し `turn` を保存する。
 - Stop: `validated` があるときだけ判断し、止めたら `validated.stopped` を真にして保存する。
 
 ##### State Management
@@ -295,7 +295,7 @@ function messageStop(branch: string): string;
 - Integration: `kiro-gate.mjs` と同じ時点で動く。拒否は並んで出うるが、理由は 1 つしか届かない（上の「拒否の理由の届き方」）。
 - Validation: 入力の JSON が不正、`session_id` が無い、`stop_hook_active` が真偽値でない（Stop）は、通す側で失敗とする。
 - Risks:
-  - 作業場所の記録（3.13）は、パスを持つ操作（Write・Edit・Read・apply_patch など）で更新される。パスの無い操作（`cd x && npm test` だけなど）が続くと、記録が古いまま使われる。直前の作業場所のブランチを使うだけで、誤判定の影響は 5.1 の停止の有無に限られる。
+  - 作業場所の記録（3.13）は、「作業」と分類されたパスを持つ操作（Write・Edit・apply_patch など）で更新される。パスの無い操作（`cd x && npm test` だけなど）が続くと、記録が古いまま使われる。直前の作業場所のブランチを使うだけで、誤判定の影響は 5.1 の停止の有無に限られる。
   - 別の仕組みのブランチ作成のコマンドを最初に実行すると、`classifyToolCall` が「作業」と分類するため、最大 2 回拒否される（`git switch` などを先に試みていない場合）。3 回目で通る。特定の仕組みの許可リストは持たない（その名前を知らない前提のため）。
   - 作業の判定が `turn` の保持に依存するため、基底ブランチのまま別の作業を頼むと、入力ごとに最大 2 回拒否される（ブランチを作ると止まる）。
   - PR の流れは、フックが見るブランチが基底（`brw create` と同じセッションで worktree へ移った場合など）だと、Stop が判定できず通す。案内（4.1）だけに頼る。作業ブランチの上で始めたセッション（`brw resume` など）では Stop の停止が効く。
@@ -332,6 +332,7 @@ function messageStop(branch: string): string;
 ## Testing Strategy
 
 ### Unit Tests（`test/work-branch-gate-rules.test.mjs`）
+- `location` の更新: worktree への `Write` の後、本体の checkout の `Read` を挟んでも `location` は worktree のまま（3.13・5.1）。
 - `workDirOf`: `Write` の絶対パス、`Bash` の `cd /x && …`、`apply_patch` の `*** Add File: a/b`（`cwd` からの相対）、パスの無い操作・相対の `cd` は null（3.13）。
 - `classifyPrompt`: `/kiro-discovery`・`$kiro-spec-init`・`/kiro-impl foo`・`/kiro-validate-impl`（2.1）、`kiro-spec-requirements` は `other-kiro`・通常の文章は null（2.4・2.6）、直後が空白でない・先頭以外の言及（2.2・2.3）。
 - `isBaseBranch`・`parseBaseBranches`: 既定の一覧・設定の一覧・origin の既定・ブランチなし（1.3・3.2・3.10）。
