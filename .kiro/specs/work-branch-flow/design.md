@@ -16,7 +16,7 @@
 
 ### Non-Goals
 - brw の検出・呼び出し・宣言ファイルの読み取り。ブランチ名の決め方。リモートのブランチの探索。PR のタイトル・本文の生成。GO・NO-GO の機械的な判定。
-- 基底ブランチでの commit・push の拒否。編集ツールごとの対象パスの解析。
+- 基底ブランチでの commit・push の拒否。編集ツールごとの対象パスの網羅的な解析（作業場所の判定に使うパスの取り出しだけを持つ）。
 
 ## Boundary Commitments
 
@@ -68,7 +68,7 @@ graph TB
 
 - **Selected pattern**: 新しい入口＋純粋な判定（既存の型）。kiro-gate を拡張しない（その spec の境界は「先読みの強制だけ」）。
 - **Domain boundaries**: 「いまどのブランチか」の判定（git）と「何を拒否するか」の判断（rules）を分け、判断は入力（ブランチ・状態・設定）から結果だけを計算する。
-- **現在のブランチの取得**: スクリプトの位置ではなく、入力の `cwd`（無ければプロセスの作業場所）で `git branch --show-current` を実行する。Claude Code のフックの `cwd` は Bash の `cd` に追随しないため、worktree へ移った後は本体の checkout のブランチを見ることがある。拒否を最大 2 回に限り、ブランチの作成・切り替えを試みた後は拒否しないことで、この誤検出を再試行 1〜2 回に収める（`poc/work-branch-flow/result.md` の E3）。
+- **現在のブランチの取得（3.13）**: 判定する場所は、次の順で最初に求められたもの。① 操作の入力から求めた作業場所（`workDirOf`: Claude Code の `Write`・`Edit`・`Read` などの対象の絶対パスのディレクトリ、`Bash` の先頭の `cd <絶対パス> &&`、Codex の `apply_patch` の対象パス（`cwd` からの相対を解く）と Bash の `cwd`＝`workdir`）② 状態に記録した直近の作業場所 ③ 入力の `cwd`（無ければプロセスの作業場所）。そこで `git branch --show-current` を実行する。Claude Code のフックの `cwd` は Bash の `cd` に追随せず、worktree へ移った同じセッションでは本体の checkout のブランチが見える。①②で実際の作業場所のブランチを使うことで、この誤検出と、PR の停止が働かない穴（4.4・5.1）を減らす（`poc/work-branch-flow/result.md` の C・E3 で、対象パスの場所からのブランチが worktree の作業に正しく効くことを確認済み）。パスの無い操作が続くと記録が古いままになりうるが、その場合も直前の作業場所のブランチを使う。
 - **brw との併存**: 拒否の対象から「ブランチの作成・切り替え」（`git switch`・`git checkout`・`git branch`・`git worktree`）を除き、それを試みた時点で拒否をやめる。brw がその操作を拒否して `brw create` を案内しても、work-branch-flow は以後拒否しないので行き詰まらない（E2 の失敗を避ける）。
 - **拒否の理由の届き方**: 同じ操作への複数の拒否は理由が 1 つしか届かない（Claude Code は後に登録したもの、Codex は先に登録したもの）。そのため、対象の入力を受けた時点で追加の文脈として案内を先に届け（3.12）、拒否は最大 2 回にする（3.5）。
 
@@ -119,8 +119,8 @@ stateDiagram-v2
 ```
 
 - `Turn` は「対象の入力を受けてから、別の kiro コマンドの入力か基底ブランチでなくなるまで」の状態（スキル名・拒否の回数・切り替えを試みたか）。コマンドを含まない通常の入力では解除せず、拒否の回数だけ 0 に戻す（対話を挟む `kiro-discovery` でも、書き込みの前に拒否が効く。対話中に誤って作業と分類された操作が回数を使い切ることも避ける）。切り替えを試みたかは戻さない。`Validated` はセッションの間続く別の状態（`kiro-validate-impl` の入力を受けたか・終了を止めたか）。2 つは独立に持つ。
-- 作業の拒否は PreToolUse で判断する: ① 設定が有効 ② `turn` がある ③ 切り替え未試行 ④ 拒否が 2 回未満 ⑤ 操作が「作業」と分類される ⑥ 現在のブランチが基底ブランチ（ブランチなしを含む）または git で判定できて基底。⑥ で判定できなければ通す。
-- 終了の停止は Stop で判断する: ① 設定が有効 ② `validated` があり未停止 ③ `stop_hook_active` が偽 ④ 現在のブランチが基底ブランチではない ⑤ `gh` で「PR が無い」と判定できた。1 つでも満たさなければ通す。止めたら `validated` の未停止を既停止にする。
+- 作業の拒否は PreToolUse で判断する: ① 設定が有効 ② `turn` がある ③ 切り替え未試行 ④ 拒否が 2 回未満 ⑤ 操作が「作業」と分類される ⑥ 3.13 の判定による現在のブランチが基底ブランチ（ブランチなしを含む）。⑥ で判定できなければ通す。⑥ で基底でないと判定できたら `turn` を消す。判定のたびに、求められた作業場所を状態の `location` に記録する。
+- 終了の停止は Stop で判断する: ① 設定が有効 ② `validated` があり未停止 ③ `stop_hook_active` が偽 ④ 現在のブランチ（3.13。操作の入力が無いので、状態の `location`、無ければ入力の `cwd`）が基底ブランチではない ⑤ `gh` で「PR が無い」と判定できた。1 つでも満たさなければ通す。止めたら `validated` の未停止を既停止にする。
 
 ## Requirements Traceability
 
@@ -150,13 +150,14 @@ stateDiagram-v2
 | 3.9 | 判定できなければ通す | Gate | `currentBranch` が null | — |
 | 3.10 | 基底以外では拒否しない | Rules | `isBaseBranch` | — |
 | 3.11 | 回数の記録をリポジトリに残さない | Gate | `statePath`（os.tmpdir） | — |
-| 3.12 | 入力時に案内を先に届ける | Rules, Gate | `messageGuidance`（追加の文脈） | NoTurn→Turn |
+| 3.12 | 入力時に案内を先に届ける（対象の入力ごとに 1 回） | Rules, Gate | `messageGuidance`（追加の文脈） | NoTurn→Turn |
+| 3.13 | 実際の作業場所のブランチを優先して判定 | Rules, Gate | `workDirOf`・`location`（状態）・`currentBranch` | — |
 | 4.1 | `kiro-validate-impl` の入力で PR の案内 | Rules, Gate | `messagePrContext` | Validated |
 | 4.2 | 既定の運用で事前の指示と明記 | Rules | `messagePrContext` | — |
 | 4.3 | 通常の操作で試み、別の仕組みの案内に従う | Rules | `messagePrContext` | — |
 | 4.4 | 基底の上では PR を求めない | Rules | 案内の文章の条件（案内自体は常に出す） | — |
 | 4.5 | タイトル・本文は固定しない | Rules | `messagePrContext`（文言に含めない） | — |
-| 5.1 | PR が無ければ終了を 1 回止める | Rules, Gate | `decideStop` | Validated |
+| 5.1 | PR が無ければ終了を 1 回止める（作業場所の判定による） | Rules, Gate | `decideStop`・`location` | Validated |
 | 5.2 | 2 回目は通す | Rules | `decideStop`（`stop_hook_active`・停止済み） | — |
 | 5.3 | PR の有無が判定できなければ通す | Gate | `prExists` が null | — |
 | 5.4 | PR があれば止めない | Rules | `decideStop` | — |
@@ -189,7 +190,7 @@ stateDiagram-v2
 | Field | Detail |
 |-------|--------|
 | Intent | 入力から結果だけを計算する。ファイル・git・gh・環境変数を読まない |
-| Requirements | 2.1〜2.6, 3.1〜3.10, 3.12, 4.1〜4.5, 5.1〜5.5 |
+| Requirements | 2.1〜2.6, 3.1〜3.10, 3.12, 3.13, 4.1〜4.5, 5.1〜5.5 |
 
 **Responsibilities & Constraints**
 - 対象の入力を決め、基底ブランチか・「作業」の操作かを判定し、拒否と停止の判断（理由つき）を返す。
@@ -213,6 +214,11 @@ function classifyPrompt(prompt: string):
   | { kind: "validate-impl" }              // 検証後の PR の対象（4.1）
   | { kind: "other-kiro" }                 // 上以外の kiro コマンド。作業前のブランチ確保の対象を解除する（2.4）
   | null;
+
+/** 操作の入力から作業場所（ディレクトリの絶対パス）を求める。求められなければ null。tool は呼び出し元（claude・codex）。
+ *  claude: `file_path`・`notebook_path`・`path` を持つ道具は対象のディレクトリ、`Bash` は先頭の `cd <絶対パス> &&`。
+ *  codex: `apply_patch` は対象パス（cwd からの相対を解く）、Bash は `cwd`（＝workdir）。 */
+function workDirOf(tool: "claude" | "codex", toolName: string, toolInput: unknown, cwd: string | null): string | null;
 
 /** 通常の入力を受けたときに拒否の回数だけ 0 に戻す（切り替えを試みたかは保つ。3.5）。 */
 function resetDenials(turn: Turn): Turn;
@@ -257,14 +263,14 @@ function messageStop(branch: string): string;
 | Field | Detail |
 |-------|--------|
 | Intent | フックの入力を読み、設定・git・gh・状態を使って Rules に判断させ、出力する |
-| Requirements | 1.1〜1.7, 3.9, 3.11, 4.4, 5.3, 5.6, 7.1, 7.3, 7.5 |
+| Requirements | 1.1〜1.7, 3.9, 3.11, 3.13, 4.4, 5.1, 5.3, 5.6, 7.1, 7.3, 7.5 |
 
 **Responsibilities & Constraints**
 - 引数: `<event> --tool <claude|codex>`（`event` は `user-prompt-submit`・`pre-tool-use`・`stop`）。
 - 設定: スクリプトの位置から求めた根の `.cc-sdd-bootstrap.json` を読み、`workflow.*` を取り出す。読めない・不正なら通す（出力なし）。項目が欠けていれば既定値（有効・一覧は `main,master,develop`）。
-- 現在のブランチ: 入力の `cwd` で `git branch --show-current`（timeout 3 秒）。git の失敗は null。origin の既定ブランチは `git symbolic-ref --short refs/remotes/origin/HEAD` の `origin/` を除いた名前。無ければ null。
-- PR の有無: `gh pr list --head=<ブランチ> --state all --json number --limit 1`（timeout 8 秒、`cwd` は入力の `cwd`）。標準出力が `[]` なら偽、要素があれば真、失敗・timeout・未導入・JSON 不正は null。
-- 状態: `<os.tmpdir()>/cc-sdd-bootstrap-work-branch/<sha256(根 + "\0" + session_id)>.json`（モード 0600、一時ファイルを書いて rename）。中身は `{ turn: Turn | null, validated: Validated | null }`。
+- 現在のブランチ（3.13）: 作業場所を、操作の入力から求めた場所（`workDirOf`）→ 状態の `location` → 入力の `cwd`（無ければプロセスの作業場所）の順に選び、そこで `git branch --show-current`（timeout 3 秒）を実行する。求めた場所が存在しない・git の外のときは次の候補へ進む。git の失敗は null。origin の既定ブランチは `git symbolic-ref --short refs/remotes/origin/HEAD` の `origin/` を除いた名前。無ければ null。
+- PR の有無: `gh pr list --head=<ブランチ> --state all --json number --limit 1`（timeout 8 秒、実行する場所は 3.13 で選んだ作業場所）。標準出力が `[]` なら偽、要素があれば真、失敗・timeout・未導入・JSON 不正は null。
+- 状態: `<os.tmpdir()>/cc-sdd-bootstrap-work-branch/<sha256(根 + "\0" + session_id)>.json`（モード 0600、一時ファイルを書いて rename）。中身は `{ turn: Turn | null, validated: Validated | null, location: string | null }`（`location` は直近に求めた作業場所の絶対パス）。
 - 出力の形（Claude Code・Codex 共通）: 追加の文脈は `{"hookSpecificOutput":{"hookEventName":"UserPromptSubmit","additionalContext":…}}`、拒否は `{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":…}}`、停止は `{"decision":"block","reason":…}`。入力は止めない。
 - すべての失敗は標準エラーに日本語で 1 行を書き、終了コード 0 で終える（通す）。
 
@@ -276,8 +282,8 @@ function messageStop(branch: string): string;
 **Contracts**: Event [x] / State [x]
 
 ##### Event Contract
-- UserPromptSubmit: 対象の入力なら `turn` を作り（既存を上書き）、設定が有効で現在のブランチが基底なら `messageGuidance` を追加の文脈として出す。`kiro-validate-impl` の入力なら、設定が有効なら現在のブランチによらず `validated` を作り `messagePrContext` を出す（4.1・4.4。案内の文章が「基底ブランチの上なら PR を求めない」と条件を示す）。対象でも `kiro-validate-impl` でもない別の kiro コマンドの入力は `turn` を消す。コマンドを含まない通常の入力（`classifyPrompt` が null）は `turn` を残し、`resetDenials` で `denials` だけ 0 に戻し、設定が有効で `turn` があり現在のブランチが基底で切り替え未試行なら `messageGuidance` を改めて出す（`validated` は残す）。
-- PreToolUse: `turn` があるときだけ判断し、拒否なら理由を出力し `turn` を保存する。
+- UserPromptSubmit: 対象の入力なら `turn` を作り（既存を上書き）、設定が有効で現在のブランチ（3.13。操作の入力が無いので `location` → `cwd`）が基底なら `messageGuidance` を追加の文脈として出す（対象の入力ごとに 1 回。3.12）。`kiro-validate-impl` の入力なら、設定が有効なら現在のブランチによらず `validated` を作り `messagePrContext` を出す（4.1・4.4。案内の文章が「基底ブランチの上なら PR を求めない」と条件を示す）。対象でも `kiro-validate-impl` でもない別の kiro コマンドの入力は `turn` を消す。コマンドを含まない通常の入力（`classifyPrompt` が null）は `turn` を残し、`resetDenials` で `denials` だけ 0 に戻す（案内は出さない。`validated` は残す）。
+- PreToolUse: 操作の入力から作業場所を求め（`workDirOf`）、求められたら `location` に記録する（`turn` が無くても記録する。Stop が使うため）。`turn` があるときだけ判断し、拒否なら理由を出力し `turn` を保存する。
 - Stop: `validated` があるときだけ判断し、止めたら `validated.stopped` を真にして保存する。
 
 ##### State Management
@@ -289,6 +295,8 @@ function messageStop(branch: string): string;
 - Integration: `kiro-gate.mjs` と同じ時点で動く。拒否は並んで出うるが、理由は 1 つしか届かない（上の「拒否の理由の届き方」）。
 - Validation: 入力の JSON が不正、`session_id` が無い、`stop_hook_active` が真偽値でない（Stop）は、通す側で失敗とする。
 - Risks:
+  - 作業場所の記録（3.13）は、パスを持つ操作（Write・Edit・Read・apply_patch など）で更新される。パスの無い操作（`cd x && npm test` だけなど）が続くと、記録が古いまま使われる。直前の作業場所のブランチを使うだけで、誤判定の影響は 5.1 の停止の有無に限られる。
+  - 別の仕組みのブランチ作成のコマンドを最初に実行すると、`classifyToolCall` が「作業」と分類するため、最大 2 回拒否される（`git switch` などを先に試みていない場合）。3 回目で通る。特定の仕組みの許可リストは持たない（その名前を知らない前提のため）。
   - 作業の判定が `turn` の保持に依存するため、基底ブランチのまま別の作業を頼むと、入力ごとに最大 2 回拒否される（ブランチを作ると止まる）。
   - PR の流れは、フックが見るブランチが基底（`brw create` と同じセッションで worktree へ移った場合など）だと、Stop が判定できず通す。案内（4.1）だけに頼る。作業ブランチの上で始めたセッション（`brw resume` など）では Stop の停止が効く。
   - Claude Code の `cwd` は Bash の `cd` に追随しない。brw の worktree で作業中でも、本体が基底のままなら誤って拒否される場合がある（再試行で収まる）。
@@ -324,6 +332,7 @@ function messageStop(branch: string): string;
 ## Testing Strategy
 
 ### Unit Tests（`test/work-branch-gate-rules.test.mjs`）
+- `workDirOf`: `Write` の絶対パス、`Bash` の `cd /x && …`、`apply_patch` の `*** Add File: a/b`（`cwd` からの相対）、パスの無い操作・相対の `cd` は null（3.13）。
 - `classifyPrompt`: `/kiro-discovery`・`$kiro-spec-init`・`/kiro-impl foo`・`/kiro-validate-impl`（2.1）、`kiro-spec-requirements` は `other-kiro`・通常の文章は null（2.4・2.6）、直後が空白でない・先頭以外の言及（2.2・2.3）。
 - `isBaseBranch`・`parseBaseBranches`: 既定の一覧・設定の一覧・origin の既定・ブランチなし（1.3・3.2・3.10）。
 - `classifyToolCall`: `Read`・`cat x`・`git status` は `read`、`git switch -c a` は `branch`、`Write`・`touch a`・`echo a > b`・`git switch -c a && echo` は `work`（3.6）。
@@ -335,6 +344,7 @@ function messageStop(branch: string): string;
 ### Integration Tests（`test/work-branch-gate.test.mjs`、一時の git リポジトリ）
 - 基底ブランチで対象の入力 → 追加の文脈（3.12）→ `Write` を拒否 → `git switch -c` を許可 → 以後の `Write` を許可（3.1・3.5・3.7）。
 - 対話を挟む場面: 対象の入力 → 通常の入力 → `Write` を拒否（2.4）。入力ごとに拒否の回数が 0 に戻る（3.5）。別の kiro コマンドで解除される（2.4）。
+- 作業場所: 本体の checkout が基底、worktree が作業ブランチの構成で、worktree の絶対パスへの `Write` を許可し、その後の Stop で作業ブランチと判定して PR 無しなら 1 回止める（3.13・5.1）。パスの無い操作が続いても直近の場所を使う。
 - 作業ブランチでは入力・操作ともに何も出さない（3.10）。設定を無効にすると何も出さない（1.4・1.5）。設定ファイルが壊れていると通す（1.6）。
 - `kiro-validate-impl` の入力 → 基底ブランチでも PR の案内が出る（4.1・4.4）→ Stop で（偽の `gh` を PATH に置いて）PR 無しなら 1 回止まり、2 回目は通る（4.1・5.1・5.2）。`gh` が無い・失敗は通る（5.3）。
 - 状態ファイルが os.tmpdir の下にだけ作られ、リポジトリの中に何も作られない（3.11・5.6）。
