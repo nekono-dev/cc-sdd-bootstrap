@@ -4,6 +4,7 @@
 //   B: 試作の関門（基底ブランチの間、編集ツールを拒否）で、拒否→ブランチ作成→編集の流れが両ツールで成立するか
 //   C: B に branch-release-workflow（brw）のフックを重ねたとき、拒否が衝突せず brw の手順へ移るか（Claude Code）
 //   D: gh が無い・未認証のときの PR の有無の判定が、止めずに通せるか
+//   F: 配置した入口（cc-sdd-bootstrap init で入れた work-branch-gate）で、基底ブランチ上の対象の入力 → 案内 → 拒否 → 切り替え → 作業が両ツールで成立するか
 // 使い方: node poc/work-branch-flow/run.mjs [A] [B] [C] [D]   認証済みの claude・codex、git、Node.js 22 が要る。
 import fs from 'node:fs';
 import path from 'node:path';
@@ -162,6 +163,46 @@ if (enabled('E')) {
     check(`${c.id} ${c.tool}: 基底ブランチの外（作業ブランチ）でファイルが作られた`, Boolean(where) && branchOf !== 'develop' && branchOf !== '', `branch=${branchOf}`);
     check(`${c.id} ${c.tool}: 関門が拒否した`, list.some((r) => r.output));
     observe(`${c.id} ${c.tool}: 最終の答え`, finalAnswer(c.tool, result).slice(0, 160).replace(/\n/g, ' '));
+  }
+}
+
+// ---- F: 配置した入口（work-branch-flow タスク 1.3） ----
+if (enabled('F')) {
+  console.log('\n## F: 配置した work-branch-gate（init で導入）で、拒否→案内→切り替え→作業');
+  const repoRoot = path.resolve(import.meta.dirname, '../..');
+  const skill = (name) => `---\nname: ${name}\ndescription: 確認用の手順書（${name}）\n---\n\n# ${name}\n\n手順: \`.kiro/specs/demo/brief.md\` というファイルを作り、内容を \`# Brief: demo\` の 1 行にして、「完了」と答える。\n`;
+  for (const tool of tools) {
+    const dir = makeRepo(`f-${tool}`);
+    const init = run(process.execPath, [path.join(repoRoot, 'bin/cc-sdd-bootstrap.mjs'), 'init'], { cwd: dir });
+    observe(`F ${tool}: init`, `status=${init.status} ${String(init.stderr ?? '').trim().split('\n')[0]}`);
+    check(`F ${tool}: init が成功し、配置物と登録が入った`, init.status === 0 && fs.existsSync(path.join(dir, '.agent-hooks/cc-sdd-bootstrap/work-branch-gate.mjs')));
+    const registered = [path.join(dir, '.claude/settings.json'), path.join(dir, '.codex/hooks.json')].map((f) => (fs.existsSync(f) ? fs.readFileSync(f, 'utf8').includes('work-branch-gate.mjs') : false));
+    check(`F ${tool}: 両ツールの登録に work-branch-gate がある`, registered.every(Boolean), registered.join(','));
+    // 手順書: 本物は導入に通信が要るので、確認用の同名の手順書を置く（kiro-gate が先読みを求めるので、併存の確認も兼ねる）
+    for (const base of ['.claude/skills', '.agents/skills']) {
+      fs.mkdirSync(path.join(dir, base, 'kiro-discovery'), { recursive: true });
+      fs.writeFileSync(path.join(dir, base, 'kiro-discovery/SKILL.md'), skill('kiro-discovery'));
+    }
+    const hint = ' 作業用ブランチは dev/demo を使ってよい。';
+    const prompt = tool === 'claude' ? `/kiro-discovery demo${hint}` : `$kiro-discovery demo${hint}`;
+    const result = invoke(tool, dir, prompt, { tools: 'Bash,Read,Write,Edit,Agent,Skill' });
+    check(`F ${tool}: 実行が成功した`, succeeded(result));
+    const text = `${result.stdout}\n${result.stderr}`;
+    const branch = git(dir, 'branch --show-current'.split(' ')[0], ...'branch --show-current'.split(' ').slice(1)).stdout.trim();
+    const wts = git(dir, 'worktree', 'list', '--porcelain').stdout.split('\n').filter((l) => l.startsWith('worktree ')).map((l) => l.slice(9));
+    const brief = path.join('.kiro/specs/demo/brief.md');
+    const where = [dir, ...wts].find((d) => fs.existsSync(path.join(d, brief)));
+    observe(`F ${tool}: 現在のブランチ`, branch);
+    observe(`F ${tool}: brief.md の場所`, where ?? '作られなかった');
+    observe(`F ${tool}: 拒否の理由が会話に現れた`, String(/作業用ブランチ/.test(text)));
+    const switched = Boolean(where) && git(where, 'branch', '--show-current').stdout.trim() !== 'develop' && git(where, 'branch', '--show-current').stdout.trim() !== '';
+    // Codex の workspace-write では .git が読み取り専用でブランチを作れない。その場合は作れない理由を伝えて止まる（要件 3.8）ことを期待する
+    const answer = finalAnswer(tool, result);
+    const stopped = tool === 'codex' && !where && /読み取り専用|作成できません|作れません|作成できず/.test(answer);
+    check(`F ${tool}: 作業ブランチへ切り替えてから brief.md が作られた${tool === 'codex' ? '（または .git が書けず、理由を伝えて止まった）' : ''}`, switched || stopped, stopped ? '作れない理由を伝えて止まった' : '');
+    check(`F ${tool}: develop には brief.md が入っていない`, !git(dir, 'ls-tree', '-r', '--name-only', 'develop').stdout.includes('brief.md'));
+    observe(`F ${tool}: 最終の答え`, finalAnswer(tool, result).slice(0, 200).replace(/\n/g, ' '));
+    fs.writeFileSync(path.join(scratch, `f-${tool}.out.txt`), text);
   }
 }
 

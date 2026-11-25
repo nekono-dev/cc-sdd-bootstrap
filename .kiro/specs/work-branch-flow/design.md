@@ -253,6 +253,7 @@ function messageStop(branch: string): string;
 
 **Implementation Notes**
 - `classifyToolCall` は粗い分類: 読み取り専用の道具名（`Read`・`Glob`・`Grep`・`LS`・`ToolSearch`・`WebFetch`・`WebSearch`・`TodoWrite` など）は `read`。シェル（`Bash`）は、リダイレクト・連結・サブシェルを含まない単純なコマンドで、先頭の語が `git switch|checkout|branch|worktree` なら `branch`、`ls`・`cat`・`head`・`tail`・`nl`・`pwd`・`grep`・`rg`・`find`・`git status|log|diff|show|fetch|rev-parse|remote|ls-remote` なら `read`。それ以外はすべて `work`。誤って `work` と分類しても、最大 2 回の拒否で済む。
+  - 実機（`poc/work-branch-flow/result.md` の場面 F）で、モデルが切り替えを `&&`・`||`・`( )` でつないだ複合コマンドで実行し、連結をすべて「作業」とする分類では切り替えが 2 回拒否されて諦めることが分かった。Bash は引用符の外の区切り（`&&`・`||`・`;`・`|`・改行・`( )`）で部分に分け、各部分を分類して合わせる（どれかが作業・分類できない構造〔リダイレクト・コマンド置換・単独の `&`・空の部分など〕なら作業、作業が無く切り替えがあれば切り替え、全部読み取りなら読み取り）。引用符は外した値で判定し、行継続は取り除いてから判定する。
 - `messageDeny`・`messageGuidance` は、現在のブランチ名、作業用ブランチへ切り替えてから続けること、既存の作業用ブランチがあればそこへ・無ければ新規作成、どれか分からなければ利用者に尋ねること、作れないときは理由を利用者に伝えて止まること、を含める。`kiro-impl` では「その spec を格納した作業用ブランチがリモートにある場合はそこへ切り替える。ローカルに spec が無い可能性がある」を足す。
 - `messagePrContext` は、`kiro-validate-impl` が GO で、エージェントが基底ブランチの上にいなければ（基底の上なら PR を求めない）、作業ブランチの push と PR の作成を通常の操作で試みること（設定の既定の運用であり利用者の事前の指示として扱うこと）、NO-GO なら PR を作らず報告すること、別の仕組みが拒否して別の手順を案内したら従うこと、タイトル・本文は作業の内容から作ることを含める。
 

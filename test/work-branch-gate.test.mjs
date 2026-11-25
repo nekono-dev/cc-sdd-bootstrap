@@ -125,6 +125,15 @@ test("workflow がオブジェクトでなければ（文字列・null・配列�
   }
 });
 
+test("つないだ複合コマンドの切り替えは試行として通り、読み取りだけの複合コマンドは拒否の回数を使わない", (t) => {
+  const f = fixture(t);
+  prompt(f, "/kiro-impl foo");
+  assert.equal(pre(f, "Bash", { command: "git branch --list 'dev/demo' && git status --short && git rev-parse --abbrev-ref HEAD" }).stdout, "");
+  assert.equal(denial(pre(f, "Write", { file_path: path.join(f.root, "a.md") })).permissionDecision, "deny");
+  assert.equal(pre(f, "Bash", { command: "(git show-ref --verify --quiet refs/heads/dev/demo && git switch dev/demo || git switch -c dev/demo) && git rev-parse --abbrev-ref HEAD" }).stdout, "");
+  assert.equal(pre(f, "Write", { file_path: path.join(f.root, "a.md") }).stdout, "");
+});
+
 test("作業ブランチでは対象の入力でも作業でも何も出さない", (t) => {
   const f = fixture(t);
   git(f.root, ["switch", "-q", "-c", "feature/x"]);

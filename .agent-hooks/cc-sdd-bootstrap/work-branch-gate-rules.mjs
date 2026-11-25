@@ -65,23 +65,293 @@ function shellCommandOf(toolInput) {
 
 /**
  * 単純なシェルのコマンドを「読み取り」「ブランチの作成・切り替え」「作業」に分類する。
- * リダイレクト・連結・サブシェル・コマンド置換を含むものは作業とする（判定の誤りは拒否の上限で止まる）。
+ * 区切りで分けた各部分を分類し、1 つでも作業があれば作業、無くて切り替えがあれば branch、全部読み取りなら read。
+ * 分類できない構造（引用符の外の単独の &・リダイレクト・コマンド置換・${ の展開・閉じていない引用符・
+ * 区切りの前後が空・`()`）は作業に倒す。
  * @param {string} command
  * @returns {"read" | "branch" | "work"}
  */
 function classifyShell(command) {
-  if (/[<>|;&`()\n\r]|\$[({]/.test(command)) return "work";
-  const words = command.trim().split(/\s+/).filter((word) => word !== "");
+  const tokens = tokenize(joinLineContinuations(command));
+  if (tokens === null) return "work";
+  const sequence = normalizeNewlines(tokens);
+  if (!isValidSequence(sequence)) return "work";
+  const kinds = sequence.filter((token) => token.seg !== undefined).map((token) => classifyPart(token.seg));
+  if (kinds.includes("work")) return "work";
+  return kinds.includes("branch") ? "branch" : "read";
+}
+
+/**
+ * 行継続（引用符の外、または二重引用符の中の「バックスラッシュ＋改行」）を取り除く。
+ * 単一引用符の中は取り除かない。取り除いた後の文字列で分類し直すため、先に行う。
+ * @param {string} command
+ * @returns {string}
+ */
+function joinLineContinuations(command) {
+  let result = "";
+  let quote = null;
+  for (let index = 0; index < command.length; index += 1) {
+    const ch = command[index];
+    const next = command[index + 1];
+    if (quote === "'") {
+      if (ch === "'") quote = null;
+      result += ch;
+      continue;
+    }
+    if (ch === "\\" && next === "\n") {
+      index += 1;
+      continue;
+    }
+    if (ch === "\\" && next !== undefined) {
+      result += ch + next;
+      index += 1;
+      continue;
+    }
+    if (quote === '"') {
+      if (ch === '"') quote = null;
+      result += ch;
+      continue;
+    }
+    if (ch === "'" || ch === '"') quote = ch;
+    result += ch;
+  }
+  return result;
+}
+
+/**
+ * コマンドを、引用符の外の区切り（&&・||・;・|・改行・( )）と部分（seg）の列にする。
+ * 引用符（' と "）の中の記号では区切らない。分類できない構造（引用符の外の単独の &・リダイレクト・
+ * コマンド置換・${ の展開、閉じていない引用符）を見つけたら null を返す。
+ * @param {string} command
+ * @returns {Array<{ seg: string } | { op: string }> | null}
+ */
+function tokenize(command) {
+  const tokens = [];
+  let current = "";
+  let quote = null;
+  const flush = () => {
+    const text = current.trim();
+    if (text !== "") tokens.push({ seg: text });
+    current = "";
+  };
+  const operator = (name) => {
+    flush();
+    tokens.push({ op: name });
+  };
+  for (let index = 0; index < command.length; index += 1) {
+    const ch = command[index];
+    const next = command[index + 1];
+    // 単一引用符の中は、バックスラッシュも記号も文字として扱う
+    if (quote === "'") {
+      if (ch === "'") quote = null;
+      current += ch;
+      continue;
+    }
+    // バックスラッシュは次の 1 文字を文字として扱う
+    if (ch === "\\" && next !== undefined) {
+      current += ch + next;
+      index += 1;
+      continue;
+    }
+    // コマンド置換と ${ の展開は、引用符の中でも分類できない構造として扱う
+    if (ch === "$" && (next === "(" || next === "{")) return null;
+    if (ch === "`") return null;
+    if (quote === '"') {
+      if (ch === '"') quote = null;
+      current += ch;
+      continue;
+    }
+    if (ch === "'" || ch === '"') {
+      quote = ch;
+      current += ch;
+      continue;
+    }
+    if (ch === "<" || ch === ">") return null;
+    // 単独の & は背景実行なので分類しない
+    if (ch === "&") {
+      if (next !== "&") return null;
+      operator("&&");
+      index += 1;
+      continue;
+    }
+    if (ch === "|") {
+      if (next === "|") {
+        operator("||");
+        index += 1;
+      } else {
+        operator("|");
+      }
+      continue;
+    }
+    if (ch === ";") {
+      operator(";");
+      continue;
+    }
+    if (ch === "(" || ch === ")") {
+      operator(ch);
+      continue;
+    }
+    if (ch === "\n" || ch === "\r") {
+      operator("\n");
+      continue;
+    }
+    current += ch;
+  }
+  // 閉じていない引用符は分類しない
+  if (quote !== null) return null;
+  flush();
+  return tokens;
+}
+
+/** 改行の扱い: 連続する改行は 1 つにまとめる。前が部分か `)`、後ろがあるときだけ区切りとして残し、それ以外（先頭・末尾・操作の後など）は捨てる */
+function normalizeNewlines(tokens) {
+  const merged = [];
+  for (const token of tokens) {
+    if (token.op === "\n" && merged.at(-1)?.op === "\n") continue;
+    merged.push(token);
+  }
+  return merged.filter((token, index) => {
+    if (token.op !== "\n") return true;
+    const previous = merged[index - 1];
+    const following = merged[index + 1];
+    return previous !== undefined && following !== undefined && isOperandEnd(previous);
+  });
+}
+
+/** 部分の末尾になれるか（部分、または `)`） */
+function isOperandEnd(token) {
+  return token.seg !== undefined || token.op === ")";
+}
+
+/**
+ * 部分と区切りの並びが正しいか。区切りの前後が空（先頭・末尾・連続・`()`）なら誤りとする。
+ * 空の部分の代わりに使える形は、部分・`(`・`)` の組み合わせだけ。
+ * @param {Array<{ seg: string } | { op: string }>} sequence
+ */
+function isValidSequence(sequence) {
+  if (sequence.length === 0) return false;
+  let expectOperand = true;
+  for (const token of sequence) {
+    if (token.seg !== undefined) {
+      if (!expectOperand) return false;
+      expectOperand = false;
+    } else if (token.op === "(") {
+      if (!expectOperand) return false;
+    } else if (token.op === ")") {
+      if (expectOperand) return false;
+      expectOperand = false;
+    } else {
+      // && || | ; 改行
+      if (expectOperand) return false;
+      expectOperand = true;
+    }
+  }
+  return !expectOperand;
+}
+
+/**
+ * 部分（区切りで分けた 1 つ分のコマンド）を分類する。語は引用符を外した値で規則に照らす。
+ * 引用符を外せない形（閉じていない・変数の展開を含む）は作業にする。
+ */
+function classifyPart(part) {
+  const raw = splitWords(part);
+  if (raw === null) return "work";
+  const words = raw.map(unquoteWord);
+  if (words.includes(null)) return "work";
   const [executable] = words;
   if (!executable) return "work";
+  // 変数の代入つきの実行は分類しない
+  if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(executable)) return "work";
   if (executable === "git") return classifyGit(words.slice(1));
   if (executable === "find") return words.some((word) => FIND_WRITE_ARGS.has(word)) ? "work" : "read";
   if (READ_EXECUTABLES.has(executable)) return hasRiskyOption(executable, words.slice(1)) ? "work" : "read";
   return "work";
 }
 
-/** 読み取りとして扱う実行ファイル（オプションによって作業に変わるものは RISKY_OPTIONS で見る） */
-const READ_EXECUTABLES = new Set(["ls", "cat", "head", "tail", "nl", "pwd", "grep", "rg", "sort"]);
+/**
+ * 部分を、引用符の外の空白で語に分ける（語は引用符を残したまま）。閉じていない引用符は null。
+ * @returns {string[] | null}
+ */
+function splitWords(text) {
+  const words = [];
+  let current = "";
+  let quote = null;
+  for (let index = 0; index < text.length; index += 1) {
+    const ch = text[index];
+    const next = text[index + 1];
+    if (quote === "'") {
+      if (ch === "'") quote = null;
+      current += ch;
+      continue;
+    }
+    if (ch === "\\" && next !== undefined) {
+      current += ch + next;
+      index += 1;
+      continue;
+    }
+    if (quote === '"') {
+      if (ch === '"') quote = null;
+      current += ch;
+      continue;
+    }
+    if (ch === "'" || ch === '"') {
+      quote = ch;
+      current += ch;
+      continue;
+    }
+    if (/\s/.test(ch)) {
+      if (current !== "") words.push(current);
+      current = "";
+      continue;
+    }
+    current += ch;
+  }
+  if (quote !== null) return null;
+  if (current !== "") words.push(current);
+  return words;
+}
+
+/**
+ * 語から引用符を外した値を返す（シェルと同じ規則の範囲）。
+ * 閉じていない引用符、末尾のバックスラッシュ、変数の展開（$・`）を含む形は null（分類しない）。
+ */
+function unquoteWord(raw) {
+  let value = "";
+  let quote = null;
+  for (let index = 0; index < raw.length; index += 1) {
+    const ch = raw[index];
+    const next = raw[index + 1];
+    if (quote === "'") {
+      if (ch === "'") quote = null;
+      else value += ch;
+      continue;
+    }
+    if (ch === "\\") {
+      if (next === undefined) return null;
+      // 二重引用符の中では、特別な文字の前だけバックスラッシュが消える
+      if (quote === '"' && !["$", "`", '"', "\\"].includes(next)) value += ch;
+      value += next;
+      index += 1;
+      continue;
+    }
+    if (quote === '"') {
+      if (ch === '"') quote = null;
+      else value += ch;
+      continue;
+    }
+    if (ch === "'" || ch === '"') {
+      quote = ch;
+      continue;
+    }
+    value += ch;
+  }
+  if (quote !== null) return null;
+  if (value.includes("$") || value.includes("`")) return null;
+  return value;
+}
+
+/** 読み取りとして扱う実行ファイル（オプションによって作業に変わるものは RISKY_OPTIONS で見る）。cd・true・false・test・[ は状態を変えない */
+const READ_EXECUTABLES = new Set(["ls", "cat", "head", "tail", "nl", "pwd", "grep", "rg", "sort", "cd", "true", "false", "test", "["]);
 
 /**
  * 読み取りに見えても、外部の実行やファイルへの書き込みを伴うオプションの形。
@@ -105,7 +375,7 @@ function hasRiskyOption(key, args) {
 function classifyGit(args) {
   const [subcommand, ...rest] = args;
   if (["log", "diff", "show"].includes(subcommand)) return hasRiskyOption(`git:${subcommand}`, rest) ? "work" : "read";
-  if (["status", "fetch", "rev-parse", "ls-remote"].includes(subcommand)) return "read";
+  if (["status", "fetch", "rev-parse", "ls-remote", "show-ref"].includes(subcommand)) return "read";
   if (subcommand === "remote") return rest.length === 0 || ["-v", "show", "get-url"].includes(rest[0]) ? "read" : "work";
   if (subcommand === "switch") return "branch";
   if (subcommand === "checkout") return classifyCheckout(rest);
@@ -214,6 +484,7 @@ function body(skill, branch) {
     `現在のブランチ ${branchLabel(branch)} は基底ブランチです。cc-sdd の作業（${skill}）を始める前に、作業用ブランチへ切り替えてから続けてください。`,
     "- 既存の作業用ブランチがあれば、そのブランチへ切り替えてください。",
     "- 無ければ、新しく作業用ブランチを作成し、そこへ切り替えてください（例: git switch -c <ブランチ名>）。",
+    "- ブランチの作成・切り替えは、他のコマンドとつながず単独のコマンド（例: `git switch -c <名前>`）で実行してください。",
     "- どのブランチを使えばよいか分からなければ、利用者に尋ねてください。",
     "- ブランチを作れない場合（実行環境の制約など）は、作れない理由を利用者に伝えて作業を止めてください。",
   ];

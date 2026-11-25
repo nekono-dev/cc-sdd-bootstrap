@@ -196,6 +196,92 @@ test("git checkout は -- を含む形やファイル指定をファイルの書
   }
 });
 
+test("つないだ複合コマンドは、部分ごとの分類を合わせて判定する（実機で見つかった形）", () => {
+  for (const command of [
+    "git branch --list 'dev/demo' && git status --short && git rev-parse --abbrev-ref HEAD",
+    "git status && git branch --list && pwd",
+    "git status | cat",
+    "git status || true",
+    "git branch --list 'a&&b'",
+    "cd /x && git status",
+  ]) {
+    assert.equal(classifyToolCall("Bash", { command }), "read", command);
+  }
+  for (const command of [
+    "(git show-ref --verify --quiet refs/heads/dev/demo && git switch dev/demo || git switch -c dev/demo) && git rev-parse --abbrev-ref HEAD",
+    "cd /x && git switch -c a",
+    "(git switch -c a)",
+    "git status && git switch -c a",
+  ]) {
+    assert.equal(classifyToolCall("Bash", { command }), "branch", command);
+  }
+});
+
+test("つないだ複合コマンドでも、作業を含む部分や分類できない構造が 1 つでもあれば作業", () => {
+  for (const command of [
+    "git switch -c a && echo hi",
+    "git switch -c a; rm -rf x",
+    "git switch -c a > /tmp/o",
+    "git switch -c a >> /tmp/o",
+    "git switch -c a < /tmp/i",
+    "git switch -c a $(echo b)",
+    "git switch -c a `echo b`",
+    "git status | sh",
+    "git switch -c a & ",
+    "git switch -c a\nrm x",
+    "X=1 git status",
+    "eval git status",
+    "git status && git commit -m x",
+    "git branch --list 'abc",
+    "git status && echo \"$(whoami)\"",
+    "echo ${HOME}",
+  ]) {
+    assert.equal(classifyToolCall("Bash", { command }), "work", JSON.stringify(command));
+  }
+});
+
+test("作業ブランチの案内・拒否の理由に、ブランチ操作は単独のコマンドで実行することを 1 文含む", () => {
+  for (const text of [messageGuidance("kiro-impl", "main"), messageDeny("kiro-impl", "main")]) {
+    assert.match(text, /他のコマンドとつながず/);
+    assert.match(text, /単独のコマンド/);
+    assert.match(text, /git switch -c/);
+  }
+});
+
+test("引用符で囲んだ引数は、引用符を外した値で規則に照らす", () => {
+  for (const command of [
+    "git status && git checkout '--' file",
+    "git checkout \"--\" file",
+    "git status && find . \"-delete\"",
+    "git status && sort '-o' f",
+    "git status && sort -\"o\" f",
+  ]) {
+    assert.equal(classifyToolCall("Bash", { command }), "work", command);
+  }
+  for (const command of ["git branch --list 'a&&b'", "git branch --list \"feat\"", "git 'status'"]) {
+    assert.equal(classifyToolCall("Bash", { command }), "read", command);
+  }
+  assert.equal(classifyToolCall("Bash", { command: "git switch -c a" }), "branch");
+});
+
+test("区切りの前後が空の不正な構文は作業に分類し、改行や前後の空白による空の部分は許す", () => {
+  for (const command of [
+    "git status;;", "&& git status", "git status &&", "| git status", "git status |", "git status ||",
+    "()", "git status ( )",
+  ]) {
+    assert.equal(classifyToolCall("Bash", { command }), "work", JSON.stringify(command));
+  }
+  for (const command of ["git status\n", "\ngit status\n", "git status &&\n git status", "git status\n\ngit status", "git status; git status", "(git status)"]) {
+    assert.equal(classifyToolCall("Bash", { command }), "read", JSON.stringify(command));
+  }
+});
+
+test("二重引用符の中で、バックスラッシュと改行の行継続を除いてからコマンド置換を判定する", () => {
+  assert.equal(classifyToolCall("Bash", { command: "git branch --list \"$\\\n(touch f)\"" }), "work");
+  assert.equal(classifyToolCall("Bash", { command: "git branch --list \"$\\\n{HOME}\"" }), "work");
+  assert.equal(classifyToolCall("Bash", { command: "git branch --list \"feat\"\\\n" }), "read");
+});
+
 test("ブランチなしの案内は空の名前を見せず、特定の別の仕組みの名前を含まない", () => {
   const text = messageGuidance("kiro-spec-init", "");
   assert.match(text, /（ブランチなし）/);

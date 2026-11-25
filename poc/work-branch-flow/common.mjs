@@ -112,5 +112,5 @@ export function finalAnswer(tool, result) {
 }
 export function succeeded(result) {
   const text = `${result.stdout ?? ''}\n${result.stderr ?? ''}`;
-  return !result.error && result.status === 0 && !/API Error|rate limit|connection error|ECONN|overloaded/i.test(text);
+  return !result.error && result.status === 0 && !/API Error|rate limit|connection error|ECONN(REFUSED|RESET)|overloaded_error/.test(text);
 }
