@@ -78,7 +78,7 @@
   - _Boundary: install-cc-sdd_
   - _Depends: 3.2_
   - _Requirements: 3.1, 3.3, 4.3, 4.4_
-- [ ] 4.4 導入コマンドの `init`・`update`・`uninstall` に承認の段階を組み込む
+- [x] 4.4 導入コマンドの `init`・`update`・`uninstall` に承認の段階を組み込む
   - `init`・`update` は適用の成功後（計画の変更が 0 件でも）、`uninstall` は適用の前に、承認の段階を呼ぶ。結果は成功の表示へ足し、承認の段階の失敗は終了コードを変えない
   - 結果が書いた・変更なしのときは既存の「Codex のフックは信頼の承認が必要です」の案内を出さず、それ以外では理由と手での承認の案内を出す。worktree の案内は残す
   - 試験で、各操作の順序、計画が 0 件でも呼ばれること、設定が false・失敗・worktree での表示と終了コード、案内の表示条件の変更が確かめられる
@@ -126,3 +126,4 @@
 - 3.2: `applyCodexTrust` / `resolveHooksTarget` は、呼び出し側が git の最上位（`repoRoot`）を渡す前提。サブディレクトリを渡すと worktree 扱いになりうる（導入コマンドは最上位を要求し、準備スクリプトは自分の位置から最上位を求めるので、実際には起きない）。git が 2.31 より古いと本体を特定できず、実体の道筋で動く（エラーにしない）。
 - 4.2: `delegate.mjs` は `codex-trust.mjs`（と、それが読む `codex-trust-rules.mjs`）を import する。これらの配置物を `lib/catalog.mjs` の配置一覧と `package.json` の `files` に登録するまで（4.5）、導入先では `delegate.mjs` が動かない。5.1 の自己適用の前に必ず 4.5 を済ませる。
 - 4.3: `test/helpers/entry-harness.mjs` の `isolatedEnv(repo, extra)` は `CODEX_HOME`・`HOME` を必ず一時ディレクトリにする。`install-cc-sdd.mjs` を起動する試験は必ずこれを通す（通さないと、導入後の承認の記録の書き込みが利用者の実際の `~/.codex` に及びうる）。ほかの試験（`cli`・`cli.e2e` など、4.4 以降で導入コマンドから承認の段階を呼ぶもの）も同じ分離を使うこと。
+- 4.4: `lib/cli.mjs` が配置物（`codex-trust.mjs`・`codex-trust-rules.mjs`）を静的に import するため、配布の登録（`lib/catalog.mjs` の `files`・`package.json` の `files`・それを確かめる試験）は 4.5 から 4.4 に前倒しした（タスク計画の抜け。登録が無いと、展開した配布物から導入コマンドが起動できない）。4.5 に残るのは運用の区画の文章の更新だけ。導入コマンドを実行する試験は、`CODEX_HOME`・`HOME` を一時ディレクトリにする分離を必ず使う（`io.env`・`io.home` で差し込む）。

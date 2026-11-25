@@ -105,6 +105,7 @@ test('展開した配布物から導入コマンドを起動できる（help が
 
   const root = path.join(unpackDir, 'package');
   assert.ok(existsSync(path.join(root, '.agent-hooks/cc-sdd-bootstrap/subagent-roles.mjs')), 'subagent-roles.mjs が展開物にありません');
+  for (const name of ['codex-trust.mjs', 'codex-trust-rules.mjs']) assert.ok(existsSync(path.join(root, '.agent-hooks/cc-sdd-bootstrap', name)), `${name} が展開物にありません`);
   const help = spawnSync(process.execPath, [path.join(root, 'bin/cc-sdd-bootstrap.mjs'), 'help'], { cwd: unpackDir, encoding: 'utf8' });
   assert.equal(help.status, 0, `help が失敗しました: ${help.stderr}`);
   assert.match(help.stdout, /init/);

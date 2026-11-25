@@ -175,6 +175,14 @@ test("subagent-delegation のスクリプト・フック・生成物が登録さ
   assert.deepEqual(rendered.files.filter((file) => file.path.startsWith(".codex/agents/")).map((file) => file.path), [".codex/agents/cc_sdd_implement.toml"]);
 });
 
+test("承認の記録の 2 ファイルが配置一覧と配る範囲に登録される", () => {
+  for (const name of ["codex-trust.mjs", "codex-trust-rules.mjs"]) {
+    const file = `${DEPLOY_DIR}/${name}`;
+    assert.ok(catalog.files.some((item) => item.path === file), file);
+    assert.ok(pkg.files.includes(file), file);
+  }
+});
+
 test("subagent-delegation の区画に分担・目安・流れ・読み替え・拒否時の扱いが入り、ツールごとの文章が他方に入らない", () => {
   const section = catalog.agentSections.find((item) => item.id === "subagent-delegation");
   assert.ok(section);
