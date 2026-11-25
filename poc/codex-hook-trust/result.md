@@ -107,3 +107,18 @@
 | probe D2: 未知の指定 | 終了コード 2、`error: unexpected argument … found`（前回と同じ） |
 
 結論: 承認の記録の計算式・導入・取り除き・承認を省く指定が、Codex CLI 0.172.0 の実機で想定どおりに動くことを確かめた。承認を省く指定は設定に保存されず、記録が合わない場合はその回の起動だけフックが動く。
+
+## 取り込み後の確認（タスク 5.3、2026-11-25、Codex CLI 0.172.0、develop `54cf489`）
+
+手順: `node poc/codex-hook-trust/post-merge-check.mjs`（取り込み済みの `develop` を新しく clone した普通の checkout と、そこから作った worktree。一時の `CODEX_HOME`・`HOME`）。結果は `PASS 6 / 6`。
+
+| 確認 | 結果 | 根拠 |
+|---|---|---|
+| 普通の checkout で `update`: 記録が書かれる | PASS | 「追加 8・更新 0・変更なし 0」、表 8 件 |
+| 普通の checkout で `codex` を起動: 確認画面なしでフックが動く | PASS | `hook: SessionStart Completed`・`UserPromptSubmit Completed`・`Stop Completed`（終了コード 0） |
+| worktree で `update`: 本体の checkout の記録が最新のまま | PASS | 「最新です（変更なし 8）」、worktree の道筋の記録は作られない |
+| worktree で `codex` を起動: 確認画面なしでフックが動く | PASS | 同上の `hook: … Completed`（本体の checkout の記録が worktree で効く） |
+| worktree から `uninstall`: 記録が残る | PASS | 「worktree の中では承認の記録を取り除きません…」、表 8 件のまま |
+| 普通の checkout から `uninstall`: 記録が取り除かれる | PASS | 表 0 件 |
+
+利用者の実際の `~/.codex/config.toml` の更新時刻は、実行の前後で変わらなかった。
