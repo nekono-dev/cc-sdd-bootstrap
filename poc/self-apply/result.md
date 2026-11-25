@@ -77,3 +77,16 @@
   - 既知の限界（レビューの指摘。節 p・f と同じ作りで、この確認の範囲外）: 共通の作業場所 `~/.cache/cc-sdd-bootstrap-scratch/subagent-defs/` は、節の実行の開始時に消される。`POC_KEEP=1` で残した記録や、同じ場所を使う並行実行のデータは、次の実行で消える（並行して実行しない）。
   - Claude Code の子の記録は `~/.claude/projects/<この worktree の slug>/` に残る（この worktree のセッションと同じ場所のため消していない）。
   - 4.6 と 4.7 の結果が揃った。取り込みの前の確認は、4.7 までを対象にした `/kiro-validate-impl` の結果を添えて、利用者に develop への取り込みの承認を求める（4.8 は取り込みの後）。
+
+## 4.8 develop への取り込みの後に、worktree の Codex で確かめる（`node poc/subagent-defs/run.mjs w`）
+
+結果: OK 8 件、NG 0 件（2026-11-25。Codex CLI 0.167.0。生ログ `~/.cache/cc-sdd-bootstrap-logs/w-1.log`）
+
+- 前提（満たした）: PR #4 が develop に取り込まれ（`a0e641f`）、本体の checkout が最新で `update` が「変更はありません」。利用者が本体の checkout で `codex` を対話で起動し、更新されたフックの信頼を承認した（`~/.codex/config.toml` に、本体の checkout の `.codex/hooks.json` の 8 件のフック（SessionStart 2・UserPromptSubmit 2・PreToolUse 2・PostToolUse 1・Stop 1）の信頼の記録がある）。
+- 実行: 本体の checkout から `brw create self-apply-48` で作った worktree（`dev/self-apply-48`）で、起動の前に `node .agent-hooks/cc-sdd-bootstrap/install-cc-sdd.mjs` を実行して cc-sdd と AGENTS.md を入れ、`codex -a never exec --model gpt-6.1-terra -c model_reasoning_effort="high" -s workspace-write` を起動した。`--orchestrator-model` にも `gpt-6.1-terra` を渡した。**検証専用の信頼承認の省略（`--dangerously-bypass-hook-trust`）は使っていない**。一時の `CODEX_HOME` には、認証の写し（実行後に消す）と、本体の checkout のフックの信頼の記録だけを利用者の設定から写した。
+- 確かめた項目（すべて OK）:
+  - 前提: worktree が本体の checkout と別の場所で、cc-sdd と AGENTS.md の区画が入っている。本体の checkout の `.codex/hooks.json` に subagent-check（codex）の PreToolUse がある。利用者の設定に 8 件のフックの信頼の記録がある。
+  - モデルを明示しない子の起動（`agent_type: cc_sdd_implement`・`fork_turns: none`）が、フックの理由「子のモデルが指定されていません。」で拒否された。承認の省略なしで拒否されたので、worktree でも本体の checkout の登録（信頼済み）が効いている。
+  - `--resolve-model --from codex --role implement --orchestrator-model gpt-6.1-terra` が worktree の `workspace-write` の中で終了 0 で `gpt-6-luna high` を返した。
+  - その出力を `model`・`reasoning_effort` に渡し、`agent_type` に実装の定義、`fork_turns` に `none` を付けた起動が通り、子の記録（`turn_context`）が `gpt-6-luna/high` で、明示した組と一致した。子の応答（合言葉）が、その起動の子から `wait` の後に親へ届いた。
+- 備考: 節 `w` は、節 q の Codex の確認を、worktree（`repoRoot`）・信頼の記録の写し・承認の省略なしに替えたもの。全体の既定の実行（引数なし）には含めない（本体の checkout の信頼の承認が前提のため）。
