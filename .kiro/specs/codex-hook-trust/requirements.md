@@ -10,8 +10,8 @@ Codex は、フック（決まった時点で処理を呼ぶ仕組み）の信�
 ## Boundary Context
 
 - **In scope**: Codex のフックの承認の記録の書き込み・更新・取り除き、書き込みを止める設定、書き込んだ内容の表示、Claude から起動する Codex の子での承認の確認の省略、Codex の版が変わって記録が効かなくなったときの扱い。
-- **Out of scope**: フックの登録そのもの（installer-core）、役割表・子のモデルの決まり・委任の手順（subagent-delegation）、Claude Code 側の許可の設定、承認以外の Codex の設定の変更、Codex の承認の確認画面そのものの変更。
-- **Adjacent expectations**: 導入コマンドの `init`・`update`・`uninstall` の操作（installer-core）と、起動前の導入（session-install）を、書き込みの契機として使う。フックは承認が済むまで動けないので、フックの中からは書かない。Codex は worktree の中でも、本体の checkout の `.codex/hooks.json` を読んで承認を照合する（`poc/codex-worktree-hooks`）。承認の記録のハッシュの計算方法は Codex の内部実装に依存する（`poc/codex-hook-trust`）。
+- **Out of scope**: Codex の「プロジェクトの信頼」（`[projects."<道筋>"] trust_level`）の付与、フックの登録そのもの（installer-core）、役割表・子のモデルの決まり・委任の手順（subagent-delegation）、Claude Code 側の許可の設定、承認以外の Codex の設定の変更、Codex の承認の確認画面そのものの変更。
+- **Adjacent expectations**: Codex は、プロジェクトを信頼していないと `.codex/hooks.json` そのものを読まない（承認を省く指定を付けても読まれない）。プロジェクトの信頼は利用者が最初の確認画面または `codex exec --trust` で与える前提とし、本機能は与えない（`poc/codex-hook-trust/probe.mjs`）。導入コマンドの `init`・`update`・`uninstall` の操作（installer-core）と、起動前の導入（session-install）を、書き込みの契機として使う。フックは承認が済むまで動けないので、フックの中からは書かない。Codex は worktree の中でも、本体の checkout の `.codex/hooks.json` を読んで承認を照合する（`poc/codex-worktree-hooks`）。承認の記録のハッシュの計算方法は Codex の内部実装に依存する（`poc/codex-hook-trust`）。
 
 ## Requirements
 

@@ -34,6 +34,7 @@
 - 導入の計画（`lib/plan.mjs`）。承認の記録は計画の対象にしない。
 - 利用者自身のフックの承認の記録。`enabled` など承認以外の項目。
 - Codex 本体の承認の確認画面と照合の仕様。
+- Codex の「プロジェクトの信頼」（`[projects."<道筋>"] trust_level`）の付与。利用者が最初の確認画面または `codex exec --trust` で与える前提とする（利用者の決定、2026-11-25）。
 
 ### Allowed Dependencies
 - `.codex/hooks.json`（読み取りのみ）、`.cc-sdd-bootstrap.json`（読み取りのみ）、`git`（本体の checkout の特定）。
@@ -145,7 +146,7 @@ sequenceDiagram
 | 3.3 | フックの中から書かない | `install-cc-sdd.mjs` | `session-start`・`user-prompt-submit` の経路は呼ばない |
 | 4.1 | 設定で切り替え、既定は書く | `config-schema.mjs`、`readTrustSetting` | `codex.trustHooks`（既定 true） |
 | 4.2 | 止めたら変更せず、子の省略もしない | `codex-trust.mjs`、`delegate.mjs` | 設定が false なら `write`・`remove` とも `disabled`、指定も付けない |
-| 4.3 | 書いた場所と件数を表示 | `codex-trust-rules.mjs` | `messageTrust`（追加・更新・変更なしの件数と設定ファイルの道筋） |
+| 4.3 | 書いた場所と件数を表示 | `codex-trust-rules.mjs` | `messageTrust`（追加・更新・変更なしの件数と設定ファイルの道筋。末尾にプロジェクトの信頼が前提である旨） |
 | 4.4 | 書かなかった理由を表示 | `codex-trust-rules.mjs`、`install-cc-sdd.mjs` | `messageTrust`（無効・失敗・未導入の理由。準備スクリプトでも表示） |
 | 5.1 | 子の起動に省く指定を付ける | `subagent-roles.mjs`、`delegate.mjs` | `buildCliCommand` の `bypassHookTrust` |
 | 5.2 | 付けたことを表示 | `delegate.mjs` | 標準エラー出力へ 1 行 |
@@ -277,6 +278,7 @@ Codex を起動する前に、`readTrustSetting(root)` が true なら `bypassFl
 | 記録が効かない（Codex の版の変更） | Codex は未承認として扱う。文章の補いに戻る | 6.3、6.4 |
 
 ## 既知の制約
+- **プロジェクトの信頼が前提**: Codex は、信頼していないプロジェクトでは `.codex/hooks.json` を読まない（承認を省く指定を付けても読まれない。`probe.mjs` の確認、信頼済みなら子のフックは約 4.5 秒で完了）。本機能はプロジェクトの信頼を与えず、検出もしない。結果の表示の末尾と運用の区画の文章で「プロジェクトが未信頼だとフックは読まれない。最初の確認画面か `codex exec --trust` で信頼する」と案内する。
 - **シンボリックリンク経由で開いたリポジトリ**: Codex は起動した道筋でキーを照合する（`poc/codex-hook-trust/probe.mjs` の A1・A2）。導入側は実体の道筋（`git` が返すもの）で書くので、リンク経由で開くと効かず、未承認として扱われる。手での承認か、実体の道筋で起動することで対処する。運用の区画の文章に 1 文で書く。
 - **古い番号の記録**: 利用者がフックを足して番号がずれると、旧番号の記録が残る。無害だが溜まる。本機能は消さない（他の記録を変更しない、1.4）。
 - **`uninstall` で番号が詰まる**: 自分のフックを外すと、後ろにある利用者のフックの番号が変わり、その記録が効かなくなる場合がある。外す前の番号で、ハッシュが一致する自分の記録だけを外し、利用者のフックの記録には触れない。必要なら利用者が手で再承認する。
