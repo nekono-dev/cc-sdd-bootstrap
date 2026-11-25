@@ -119,7 +119,7 @@
   - 両ツールのフックの登録と系統ごとの役割定義の生成、旧項目を外した後も `update` が通ることを確かめ、結果をコミットする
   - _Depends: 3.5, 4.3, 4.4_
   - _Requirements: 2.1, 3.1_
-- [ ] 4.6 古い配置物からの区画の書き直しを確かめる
+- [x] 4.6 古い配置物からの区画の書き直しを確かめる
   - `~/.cache/cc-sdd-bootstrap-scratch/` の下に、この spec の前の配置物（develop の時点）で一時の checkout を作り、cc-sdd を導入して古い区画と有効な導入の状態を用意してから、4.5 のコミットの配置物に更新する
   - `npx` の呼び出しを直接記録できるよう、検証用に `PATH` の先頭へ呼び出しを記録する `npx` を置く。後の入力で CLAUDE.md・AGENTS.md の両方の区画だけが新しい文章に書き直され、区画の外が変わらず、`npx` が呼ばれなかったことを確かめる
   - 結果を `poc/self-apply/result.md` に追記し、確かめた項目がすべて OK になる
@@ -157,3 +157,4 @@
 - 4.2: 区画の文章は `lib/catalog.mjs` の `delegationSection(tool)` で組み立てる（役割の案内 `ROLE_GUIDE`、同じ提供元に候補が無い場合 `NO_CANDIDATE`）。案内の正しさは入口（delegate.mjs）とフック（subagent-check.mjs）の実際の振る舞いに合わせて確かめる（役割ごとの `--role`、`--resolve-model` の出力は `<名前> <推論量>`、未指定の拒否は起動の引数と定義のどちらにもモデルが無い場合）。
 - 4.4: 実機の通しは `node poc/subagent-defs/run.mjs f`（`POC_CASES=f3,f4` で場合を選べ、`POC_DEBUG=1` で詳細、`POC_KEEP=1` で作業場所を残す）。この版の Codex は指揮役の実行を `command_execution` で出さないので、指揮役の記録（CODEX_HOME のセッション）の `function_call`・`custom_tool_call` から呼び出しと出力を取る。Codex の子の `npm test` の出力は JSON が入れ子で引用符・改行が逃がされるため、逃がしを外してから判定する。Codex の指揮役のサンドボックスは、書き込み先に `~/.claude` と作業場所を足し、通信を許可する。判定の既知の限界は `result.md` の末尾に記載。
 - 4.5: 自己適用で `.claude/agents/`（役割 × 系統の 12 件）と `.codex/agents/cc_sdd_implement.toml` が生成され、コミットされる。`cc-sdd-investigate-opus.md` の説明文に「に 指揮役が使う」という不自然な言い回しがある（生成する側の文言。動作には影響しない。後で見直す）。この自己適用で、この worktree の Claude Code には subagent-check のフックが効くようになる。
+- 4.6: 確認は `node poc/self-apply/rewrite.mjs`（本物の `npx` の通信が要る）。更新先は 4.5 のコミット `d71527a` に固定し、`REWRITE_TARGET_REV` で明示したときだけ変えられる。CLI の `update` は配置物の区画ファイルだけを書き、CLAUDE.md・AGENTS.md の区画の書き直しは入力のフックだけが行う。
