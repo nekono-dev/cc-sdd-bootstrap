@@ -10,6 +10,11 @@ const payloadFiles = [
   'install-rules.mjs',
   'config-schema.mjs',
 ];
+/** 承認の記録の配置物。trust: false の導入先では配らない（動的 import が失敗する古い導入先の再現） */
+const trustPayloadFiles = [
+  'codex-trust.mjs',
+  'codex-trust-rules.mjs',
+];
 const fakeNpxSource = `#!/usr/bin/env node
 import fs from 'node:fs';
 import path from 'node:path';
@@ -50,12 +55,24 @@ if (mode === 'lock') {
 }
 `;
 
-export function makeRepo({ config = { format: 1, ccSdd: { version: '3.1.0', lang: 'ja' } }, sections = true } = {}) {
+/**
+ * install-cc-sdd.mjs を起動する子プロセスの環境。利用者の ~/.codex を読み書きしないよう、
+ * CODEX_HOME と HOME は必ず試験用の一時ディレクトリにする（extra で上書きさせない）。
+ */
+export function isolatedEnv(repo, extra = {}) {
+  return { ...process.env, ...extra, CODEX_HOME: repo.codexHome, HOME: repo.home };
+}
+
+export function makeRepo({ config = { format: 1, ccSdd: { version: '3.1.0', lang: 'ja' } }, sections = true, trust = true } = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cc-sdd-entry-repo-'));
   const fakeBin = fs.mkdtempSync(path.join(os.tmpdir(), 'cc-sdd-entry-bin-'));
+  // 利用者の実際の ~/.codex に触れないよう、試験ごとに別の CODEX_HOME と HOME を使う
+  const codexHome = fs.mkdtempSync(path.join(os.tmpdir(), 'cc-sdd-entry-codex-'));
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'cc-sdd-entry-home-'));
   const payloadRoot = path.join(root, '.agent-hooks/cc-sdd-bootstrap');
   fs.mkdirSync(payloadRoot, { recursive: true });
-  for (const name of payloadFiles) {
+  const copied = trust ? [...payloadFiles, ...trustPayloadFiles] : payloadFiles;
+  for (const name of copied) {
     const source = path.join(projectRoot, '.agent-hooks/cc-sdd-bootstrap', name);
     if (fs.existsSync(source)) fs.copyFileSync(source, path.join(payloadRoot, name));
   }
@@ -74,6 +91,8 @@ export function makeRepo({ config = { format: 1, ccSdd: { version: '3.1.0', lang
   return {
     root,
     fakeBin,
+    codexHome,
+    home,
     entry: path.join(root, '.agent-hooks/cc-sdd-bootstrap/install-cc-sdd.mjs'),
     read(rel) {
       try { return fs.readFileSync(resolve(rel), 'utf8'); } catch (error) {
@@ -99,6 +118,8 @@ export function makeRepo({ config = { format: 1, ccSdd: { version: '3.1.0', lang
     cleanup() {
       fs.rmSync(root, { recursive: true, force: true });
       fs.rmSync(fakeBin, { recursive: true, force: true });
+      fs.rmSync(codexHome, { recursive: true, force: true });
+      fs.rmSync(home, { recursive: true, force: true });
     },
   };
 }
@@ -110,8 +131,7 @@ export function runEntry(repo, args = [], { mode = 'ok', env = {}, timeoutMs = 3
     encoding: 'utf8',
     timeout: timeoutMs,
     env: {
-      ...process.env,
-      ...env,
+      ...isolatedEnv(repo, env),
       PATH: `${repo.fakeBin}${path.delimiter}${env.PATH ?? process.env.PATH ?? ''}`,
       FAKE_NPX_MODE: mode,
       FAKE_NPX_LOG: logPath,

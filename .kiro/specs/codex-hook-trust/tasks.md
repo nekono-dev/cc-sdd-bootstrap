@@ -71,7 +71,7 @@
   - _Boundary: delegate_
   - _Depends: 3.1, 3.3, 4.1_
   - _Requirements: 4.2, 5.1, 5.2, 5.4_
-- [ ] 4.3 準備スクリプトで、導入の成功後に承認の記録を書く
+- [x] 4.3 準備スクリプトで、導入の成功後に承認の記録を書く
   - 引数なしの導入の経路で、導入・導入済みの省略・区画の書き直しのいずれかが成功した後に、3.1・3.2 の処理を書き込みで呼び、結果の表示文を出力する。設定が false のときも理由を出す。書き込みの失敗は導入の結果を変えない
   - セッション開始・最初の入力のフックの経路では呼ばない
   - 試験で、引数なしの経路で呼ばれ結果が出ること、導入が失敗して止まる経路では呼ばれないこと、フックの経路では呼ばれないことが確かめられる
@@ -125,3 +125,4 @@
 - 3.1: `codex-trust.mjs` の `resolveHooksTarget(repoRoot)` は 3.2 で本体の checkout の特定に差し替える入口（今は `repoRoot` 直下の `.codex/hooks.json` と空の notes）。`hooks.json` が無い・自分のフックが無いときは `skipped`（設計の Error Handling の表をこれに合わせた）。`applyCodexTrust` の `beforeCommit` は試験用の差し込み口で、呼び出し側（導入コマンド・準備スクリプト）は使わない。
 - 3.2: `applyCodexTrust` / `resolveHooksTarget` は、呼び出し側が git の最上位（`repoRoot`）を渡す前提。サブディレクトリを渡すと worktree 扱いになりうる（導入コマンドは最上位を要求し、準備スクリプトは自分の位置から最上位を求めるので、実際には起きない）。git が 2.31 より古いと本体を特定できず、実体の道筋で動く（エラーにしない）。
 - 4.2: `delegate.mjs` は `codex-trust.mjs`（と、それが読む `codex-trust-rules.mjs`）を import する。これらの配置物を `lib/catalog.mjs` の配置一覧と `package.json` の `files` に登録するまで（4.5）、導入先では `delegate.mjs` が動かない。5.1 の自己適用の前に必ず 4.5 を済ませる。
+- 4.3: `test/helpers/entry-harness.mjs` の `isolatedEnv(repo, extra)` は `CODEX_HOME`・`HOME` を必ず一時ディレクトリにする。`install-cc-sdd.mjs` を起動する試験は必ずこれを通す（通さないと、導入後の承認の記録の書き込みが利用者の実際の `~/.codex` に及びうる）。ほかの試験（`cli`・`cli.e2e` など、4.4 以降で導入コマンドから承認の段階を呼ぶもの）も同じ分離を使うこと。
