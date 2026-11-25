@@ -113,7 +113,7 @@
   - 結果を `poc/subagent-defs/result.md` に記録し、確かめた項目がすべて OK になる
   - _Depends: 4.1, 4.3_
   - _Requirements: 4.1, 4.4, 4.5, 4.6, 5.11_
-- [ ] 4.5 取り込みの前に、このリポジトリへ自己適用する
+- [x] 4.5 取り込みの前に、このリポジトリへ自己適用する
   - 前提: 3.5・4.1〜4.4 の変更がコミットされていること
   - この作業ブランチの worktree で、このリポジトリの `.cc-sdd-bootstrap.json` から旧項目（`models`・`codex`）を手で外し、`node bin/cc-sdd-bootstrap.mjs update` を実行して自己適用する
   - 両ツールのフックの登録と系統ごとの役割定義の生成、旧項目を外した後も `update` が通ることを確かめ、結果をコミットする
@@ -156,3 +156,4 @@
 - 4.1: カタログに generated を足したので、計画の試験の snapshot には生成済みの役割定義（generatedFiles）を含める。既定の設定でも Codex の読み取り専用の役割の知らせが update のたびに出る。差分が無くても知らせは「変更はありません。」の後に表示される。別の提供元（Codex）が利用上限で一時的に使えなくなることがある（2026-11-24 16:15 UTC まで）。
 - 4.2: 区画の文章は `lib/catalog.mjs` の `delegationSection(tool)` で組み立てる（役割の案内 `ROLE_GUIDE`、同じ提供元に候補が無い場合 `NO_CANDIDATE`）。案内の正しさは入口（delegate.mjs）とフック（subagent-check.mjs）の実際の振る舞いに合わせて確かめる（役割ごとの `--role`、`--resolve-model` の出力は `<名前> <推論量>`、未指定の拒否は起動の引数と定義のどちらにもモデルが無い場合）。
 - 4.4: 実機の通しは `node poc/subagent-defs/run.mjs f`（`POC_CASES=f3,f4` で場合を選べ、`POC_DEBUG=1` で詳細、`POC_KEEP=1` で作業場所を残す）。この版の Codex は指揮役の実行を `command_execution` で出さないので、指揮役の記録（CODEX_HOME のセッション）の `function_call`・`custom_tool_call` から呼び出しと出力を取る。Codex の子の `npm test` の出力は JSON が入れ子で引用符・改行が逃がされるため、逃がしを外してから判定する。Codex の指揮役のサンドボックスは、書き込み先に `~/.claude` と作業場所を足し、通信を許可する。判定の既知の限界は `result.md` の末尾に記載。
+- 4.5: 自己適用で `.claude/agents/`（役割 × 系統の 12 件）と `.codex/agents/cc_sdd_implement.toml` が生成され、コミットされる。`cc-sdd-investigate-opus.md` の説明文に「に 指揮役が使う」という不自然な言い回しがある（生成する側の文言。動作には影響しない。後で見直す）。この自己適用で、この worktree の Claude Code には subagent-check のフックが効くようになる。
