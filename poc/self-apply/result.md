@@ -70,11 +70,10 @@
   - Codex: 実装の定義（`cc_sdd_implement`）＋モデル省略の起動が、フックの理由（子のモデル未指定・`--resolve-model` の案内）で拒否される。
   - Codex: `--resolve-model` が終了 0 で「モデル 推論量」の 1 行を返す。
   - Codex: その出力のモデル・推論量を明示し `fork_turns` を `none` にした起動が通り、子の名前が返る。その子の記録が親子の対応で特定でき、turn_context のモデル・推論量が明示した組と一致する。子の応答（合言葉）が `wait_agent` の後に親へ届く。
-- 結果: OK 13 件、NG 0 件（2026-11-25。Claude Code 2.1.329、Codex CLI 0.167.0。生ログ `~/.cache/cc-sdd-bootstrap-logs/q-3.log`）。Claude Code は自己適用したこの worktree、Codex は 4.5 のコミット `d71527a` を `git archive` で写した普通の checkout（`install-cc-sdd.mjs` で cc-sdd と AGENTS.md を入れ、フックの信頼は検証専用の `--dangerously-bypass-hook-trust` で省略）で確かめた。
+- 結果: OK 11 件、NG 0 件（2026-11-25。Claude Code 2.1.329、Codex CLI 0.167.0。生ログ `~/.cache/cc-sdd-bootstrap-logs/q-simple2.log`（観測の行に Claude Code 側の `--resolve-model` の呼び出しと出力も出す）。自動判定を粗いものに絞った後の実行。絞る前は `q-3.log` で OK 13）。Claude Code は自己適用したこの worktree、Codex は 4.5 のコミット `d71527a` を `git archive` で写した普通の checkout（`install-cc-sdd.mjs` で cc-sdd と AGENTS.md を入れ、フックの信頼は検証専用の `--dangerously-bypass-hook-trust` で省略）で確かめた。
 - 備考:
   - 最初の実行（`q-1.log`）は、Codex の確認の準備で `git archive` の出力が `spawnSync` の既定の上限（1MB）を超えて失敗した（Claude Code 側は OK 5）。上限を広げて再実行し、すべて OK になった。確認の道具側の直しで、製品側の不具合ではない。
-  - レビューの指摘で、解決コマンドの引数の判定を足した（`resolveArgsOk`）: Claude Code は `--from claude --role implement --orchestrator-model claude-sonnet-5-5`、Codex は `--from codex --role implement --orchestrator-model gpt-6.1-terra` の引数で、解決が成功して出力が返ったことを見る。誤った指揮役モデル・`--from`・役割・`--resolve-model` なしが NG になる自己検査を足した。固定前の通し（`q-2.log`）は OK 11・NG 0 で、この 2 項目を足して OK 13（`q-3.log`）。認証の写しは、コピーの直後から後始末（finally）に入るようにした。
-  - 既知の限界（レビューの指摘。利用者の判断で、この限界を明記して 4.7 を完了とした）: 引数を確かめる解決コマンドと、子の起動に使った解決結果は、同じコマンドに結び付けて判定していない（`judgeCl1`・`judgeCx1` は最初に適合した解決結果を起動と照合し、引数の検査は別の成功コマンドを探す）。誤った指揮役モデルで解決して子を起動した後に、正しい引数の解決だけをもう 1 回実行した場合は、両方の検査が通りうる。実機の通し（`q-3.log`）では、解決は 1 回ずつで、別々の呼び出しは起きていない。
+  - 解決コマンドの引数の判定（`resolveArgsOk`）と、解決コマンドと子の起動の結び付けの限界は、利用者の判断で判定を粗いものに絞ったとき（`poc/subagent-defs/result.md` の「判定の方針」）に判定ごと削った。自動判定に残るのは、Claude Code は解決の出力の定義の名前での起動が通り、その定義の子が実際に起動したこと（子の記録の定義名の一致）、Codex は出力のモデル・推論量を明示した起動が通り、子の記録のモデル・推論量が明示した組と一致したこと。解決コマンドの引数と出力は、観測の行（Claude Code は `--resolve-model の呼び出し`、Codex は `--resolve-model の結果`）で目視する。
   - 既知の限界（レビューの指摘。節 p・f と同じ作りで、この確認の範囲外）: 共通の作業場所 `~/.cache/cc-sdd-bootstrap-scratch/subagent-defs/` は、節の実行の開始時に消される。`POC_KEEP=1` で残した記録や、同じ場所を使う並行実行のデータは、次の実行で消える（並行して実行しない）。
   - Claude Code の子の記録は `~/.claude/projects/<この worktree の slug>/` に残る（この worktree のセッションと同じ場所のため消していない）。
   - 4.6 と 4.7 の結果が揃った。取り込みの前の確認は、4.7 までを対象にした `/kiro-validate-impl` の結果を添えて、利用者に develop への取り込みの承認を求める（4.8 は取り込みの後）。
