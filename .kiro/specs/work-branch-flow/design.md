@@ -207,8 +207,15 @@ type Turn = { skill: string; denials: number; switchTried: boolean };
 type Validated = { stopped: boolean };
 type Settings = { branchGate: boolean; prAfterValidate: boolean; baseBranches: string[] };
 
-/** 先頭の kiro コマンドを対象として分類する。対象外・コマンドなしは null。 */
-function classifyPrompt(prompt: string): { kind: "target"; skill: string } | { kind: "validate-impl" } | null;
+/** 先頭の kiro コマンドを分類する。コマンドを含まない通常の入力は null。 */
+function classifyPrompt(prompt: string):
+  | { kind: "target"; skill: string }      // 5 つの対象のコマンド（2.1）
+  | { kind: "validate-impl" }              // 検証後の PR の対象（4.1）
+  | { kind: "other-kiro" }                 // 上以外の kiro コマンド。作業前のブランチ確保の対象を解除する（2.4）
+  | null;
+
+/** 通常の入力を受けたときに拒否の回数だけ 0 に戻す（切り替えを試みたかは保つ。3.5）。 */
+function resetDenials(turn: Turn): Turn;
 
 /** ブランチ名（空はブランチなし）が基底か。originDefault は無ければ null。 */
 function isBaseBranch(branch: string, bases: string[], originDefault: string | null): boolean;
@@ -220,7 +227,7 @@ function parseBaseBranches(value: string): string[];
 function classifyToolCall(toolName: string, toolInput: unknown): "read" | "branch" | "work";
 
 type PreDecision =
-  | { allow: true; turn: Turn }
+  | { allow: true; turn: Turn | null }   // null は基底でないと判定できて解除したとき
   | { allow: false; reason: string; turn: Turn };
 function decidePreToolUse(turn: Turn | null, call: { toolName: string; toolInput: unknown },
   facts: { branch: string | null; bases: string[]; originDefault: string | null }): PreDecision;
@@ -235,7 +242,7 @@ function messagePrContext(): string;
 function messageStop(branch: string): string;
 ```
 - Preconditions: `turn` は null か上の形。`facts.branch` が null のときは git で判定できなかったことを表す。
-- Postconditions: `decidePreToolUse` は、`classifyToolCall` が `branch` のとき `switchTried` を真にして許可する。`work` かつ基底かつ `denials < 2` かつ `switchTried` が偽のときだけ拒否し、`denials` を 1 増やす。それ以外は許可。`decideStop` は `validated` が無い・`stopped` が真・`stopHookActive` が真・`branch` が null か基底・`prExists` が真か null のいずれかなら通し、`prExists` が偽のときだけ止める。
+- Postconditions: `decidePreToolUse` は、`facts.branch` が判定できて基底でないとき `turn` を消して許可する（2.4 の「基底でなくなるまで」）。それ以外では、`classifyToolCall` が `branch` のとき `switchTried` を真にして許可する。`work` かつ基底かつ `denials < 2` かつ `switchTried` が偽のときだけ拒否し、`denials` を 1 増やす。それ以外は許可。`decideStop` は `validated` が無い・`stopped` が真・`stopHookActive` が真・`branch` が null か基底・`prExists` が真か null のいずれかなら通し、`prExists` が偽のときだけ止める。
 - Invariants: 乱数・時刻・外部の状態に依存しない。
 
 **Implementation Notes**
@@ -269,7 +276,7 @@ function messageStop(branch: string): string;
 **Contracts**: Event [x] / State [x]
 
 ##### Event Contract
-- UserPromptSubmit: 対象の入力なら `turn` を作り（既存を上書き）、設定が有効で現在のブランチが基底なら `messageGuidance` を追加の文脈として出す。`kiro-validate-impl` の入力なら、設定が有効なら現在のブランチによらず `validated` を作り `messagePrContext` を出す（4.1・4.4。案内の文章が「基底ブランチの上なら PR を求めない」と条件を示す）。対象でも `kiro-validate-impl` でもない別の kiro コマンドの入力は `turn` を消す。コマンドを含まない通常の入力は `turn` を残し、`denials` だけ 0 に戻し、設定が有効で `turn` があり現在のブランチが基底で切り替え未試行なら `messageGuidance` を改めて出す（`validated` は残す）。
+- UserPromptSubmit: 対象の入力なら `turn` を作り（既存を上書き）、設定が有効で現在のブランチが基底なら `messageGuidance` を追加の文脈として出す。`kiro-validate-impl` の入力なら、設定が有効なら現在のブランチによらず `validated` を作り `messagePrContext` を出す（4.1・4.4。案内の文章が「基底ブランチの上なら PR を求めない」と条件を示す）。対象でも `kiro-validate-impl` でもない別の kiro コマンドの入力は `turn` を消す。コマンドを含まない通常の入力（`classifyPrompt` が null）は `turn` を残し、`resetDenials` で `denials` だけ 0 に戻し、設定が有効で `turn` があり現在のブランチが基底で切り替え未試行なら `messageGuidance` を改めて出す（`validated` は残す）。
 - PreToolUse: `turn` があるときだけ判断し、拒否なら理由を出力し `turn` を保存する。
 - Stop: `validated` があるときだけ判断し、止めたら `validated.stopped` を真にして保存する。
 
@@ -317,10 +324,11 @@ function messageStop(branch: string): string;
 ## Testing Strategy
 
 ### Unit Tests（`test/work-branch-gate-rules.test.mjs`）
-- `classifyPrompt`: `/kiro-discovery`・`$kiro-spec-init`・`/kiro-impl foo`・`/kiro-validate-impl`（2.1）、`kiro-spec-requirements` など対象外（2.6）、直後が空白でない・先頭以外の言及（2.2・2.3）。
+- `classifyPrompt`: `/kiro-discovery`・`$kiro-spec-init`・`/kiro-impl foo`・`/kiro-validate-impl`（2.1）、`kiro-spec-requirements` は `other-kiro`・通常の文章は null（2.4・2.6）、直後が空白でない・先頭以外の言及（2.2・2.3）。
 - `isBaseBranch`・`parseBaseBranches`: 既定の一覧・設定の一覧・origin の既定・ブランチなし（1.3・3.2・3.10）。
 - `classifyToolCall`: `Read`・`cat x`・`git status` は `read`、`git switch -c a` は `branch`、`Write`・`touch a`・`echo a > b`・`git switch -c a && echo` は `work`（3.6）。
-- `decidePreToolUse`: 基底で `work` を拒否し回数が増える（3.1）、3 回目は通す（3.5）、`branch` の後は通す（3.7）、`read` は通す、`branch` が null は通す（3.9）、基底以外は通す（3.10）。
+- `resetDenials`: 回数だけ 0 に戻り `switchTried` は保たれる（3.5）。
+- `decidePreToolUse`: 基底で `work` を拒否し回数が増える（3.1）、3 回目は通す（3.5）、基底でないと判定できたら通して `turn` を消す（2.4・3.10）、`branch` の後は通す（3.7）、`read` は通す、`branch` が null は通す（3.9）、基底以外は通す（3.10）。
 - `decideStop`: PR が無いときだけ止める（5.1）、`stop_hook_active`・停止済み・`validated` なし・PR あり・判定不能は通す（5.2〜5.5）。
 - 文言: 特定の仕組みの名前を含まない（6.5）、`kiro-impl` の追加の案内（3.4）、既定の運用であることの明記（4.2）。
 
