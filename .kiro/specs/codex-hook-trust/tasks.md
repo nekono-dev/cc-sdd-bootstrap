@@ -37,7 +37,7 @@
   - _Requirements: 1.6, 2.3, 4.3, 4.4_
 
 - [ ] 3. 承認の記録の書き込み（入出力）
-- [ ] 3.1 設定の確認と、設定ファイルへの書き込み・取り除きを作る
+- [x] 3.1 設定の確認と、設定ファイルへの書き込み・取り除きを作る
   - 設定ファイルから `codex.trustHooks` を読み（読めない・項目が無いときは true）、false なら書き込み・取り除きのどちらも何も変更せず「設定で止めている」を返す。例外は投げず、失敗は理由つきの結果で返す
   - 設定の置き場所を `CODEX_HOME`、無ければ `<home>/.codex` として決め、ディレクトリが無ければ作らず「未導入または一度も起動されていない」を返す。ファイルが無いときは空の本文として新しく作る。実体がシンボリックリンクなら実体へ書く
   - 同じディレクトリの一時ファイル経由で置き換え、元の権限を保つ。書く直前に本文を読み直し、変わっていれば 1 回だけ計算し直し、それでも変われば失敗を返す
@@ -122,3 +122,4 @@
 - レビューの依頼には、環境の制約の注意に加えて『重大度の高い不正な出力の生成が新しく見つかった場合だけ拒否、好みや範囲外は FYI』を明記すると、拒否の繰り返しを減らせる（2.2 の 5 回目の依頼で有効だった）。
 - 2.3: 取り除きは、表の本体が `trusted_hash` の行と空行だけのときに限り表ごと外す（コメントや他の記録の行があれば表を残して `trusted_hash` の行だけ外す。利用者のコメントを失わないため）。ハッシュが一致しない記録は残す。write と同じ安全の検査（`prepareEdit`）を共用する。
 - 2.4: 結果の形（TrustResult）は `{ status, configPath, counts, reason, notes }`、`status` は written・unchanged・removed・skipped・failed・disabled。`messageTrust(result)` は行の配列、`trustIsEffective(result)` は written・unchanged のとき true（導入コマンドが『信頼の承認が必要です』の案内を出すかの判定に使う）。3.1 以降の `codex-trust.mjs` はこの形で結果を返す。
+- 3.1: `codex-trust.mjs` の `resolveHooksTarget(repoRoot)` は 3.2 で本体の checkout の特定に差し替える入口（今は `repoRoot` 直下の `.codex/hooks.json` と空の notes）。`hooks.json` が無い・自分のフックが無いときは `skipped`（設計の Error Handling の表をこれに合わせた）。`applyCodexTrust` の `beforeCommit` は試験用の差し込み口で、呼び出し側（導入コマンド・準備スクリプト）は使わない。
