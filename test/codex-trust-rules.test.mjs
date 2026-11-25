@@ -168,9 +168,9 @@ const HEAD2 = `[hooks.state."${KEY2}"]`;
 const entry = (key, hash) => ({ key, hash });
 const ZERO = { added: 0, updated: 0, unchanged: 0, removed: 0 };
 
-test("未対応の mode は TypeError になる（remove は 2.3 で足す）", () => {
-  assert.throws(() => planTrustEdit("", [], "remove"), (e) => e instanceof TypeError && e.message.includes("未対応の mode です"));
-  assert.throws(() => planTrustEdit("", [], "delete"), TypeError);
+test("write と remove 以外の mode は TypeError になる", () => {
+  assert.throws(() => planTrustEdit("", [], "delete"), (e) => e instanceof TypeError && e.message.includes("未対応の mode です"));
+  assert.throws(() => planTrustEdit("", [], undefined), TypeError);
 });
 
 test("空の本文に追加すると、見出しと trusted_hash の行だけになる", () => {
@@ -654,6 +654,215 @@ test("値の中のタブは許す（TOML の基本文字列で許されるため
   assert.equal(result.counts.added, 1);
 });
 
+// ---- タスク 2.3: 承認の記録の取り除き（mode "remove"） ----
+
+const REMOVE_NOTHING = { ...ZERO };
+
+test("一致する記録だけを持つ表は、表ごと外れて removed に数える（前の空行も 1 つ外す）", () => {
+  const text = `model = "x"\n\n${HEAD}\ntrusted_hash = "${HASH_A}"\n`;
+  const result = planTrustEdit(text, [entry(KEY, HASH_A)], "remove");
+  assert.deepEqual(result, { ok: true, text: `model = "x"\n`, counts: { ...ZERO, removed: 1 } });
+});
+
+test("enabled を持つ表は表が残り、一致する trusted_hash の行だけが外れる", () => {
+  const text = `${HEAD}\ntrusted_hash = "${HASH_A}"\nenabled = true\n`;
+  const result = planTrustEdit(text, [entry(KEY, HASH_A)], "remove");
+  assert.equal(result.ok, true);
+  assert.equal(result.text, `${HEAD}\nenabled = true\n`);
+  assert.deepEqual(result.counts, { ...ZERO, removed: 1 });
+});
+
+test("trusted_content_hash を持つ表も、trusted_hash の行だけが外れる", () => {
+  const text = `${HEAD}\ntrusted_content_hash = "${HASH_C}"\ntrusted_hash = "${HASH_A}"\n`;
+  const result = planTrustEdit(text, [entry(KEY, HASH_A)], "remove");
+  assert.equal(result.ok, true);
+  assert.equal(result.text, `${HEAD}\ntrusted_content_hash = "${HASH_C}"\n`);
+  assert.deepEqual(result.counts, { ...ZERO, removed: 1 });
+});
+
+test("一致しない記録（別のハッシュ）は残り、unchanged に数える", () => {
+  const text = `${HEAD}\ntrusted_hash = "${HASH_A}"\n`;
+  const result = planTrustEdit(text, [entry(KEY, HASH_B)], "remove");
+  assert.deepEqual(result, { ok: true, text, counts: { ...ZERO, unchanged: 1 } });
+});
+
+test("trusted_hash の行が無い表は残り、unchanged に数える", () => {
+  const text = `${HEAD}\nenabled = true\n`;
+  const result = planTrustEdit(text, [entry(KEY, HASH_A)], "remove");
+  assert.deepEqual(result, { ok: true, text, counts: { ...ZERO, unchanged: 1 } });
+});
+
+test("表が無ければ何も起きず、どの件数にも数えない（入力と同じ文字列）", () => {
+  const text = `model = "x"\n`;
+  const result = planTrustEdit(text, [entry(KEY, HASH_A)], "remove");
+  assert.deepEqual(result, { ok: true, text, counts: REMOVE_NOTHING });
+});
+
+test("他の表・コメント・他の記録は変わらず、対象の記録だけが外れる", () => {
+  const lines = [
+    "# 利用者の設定",
+    'model = "x"  # 注釈',
+    "",
+    '[projects."/a"]',
+    "trust_level = 'trusted'",
+    "",
+    HEAD2,
+    `trusted_hash = "${HASH_C}"`,
+    "enabled = true",
+    "",
+    HEAD,
+    `trusted_hash = "${HASH_A}"`,
+  ];
+  const result = planTrustEdit(lines.join("\n") + "\n", [entry(KEY, HASH_A)], "remove");
+  assert.equal(result.ok, true);
+  // 対象の表とその前の空行だけが消え、残りは元の行のまま
+  assert.equal(result.text, lines.slice(0, 9).join("\n") + "\n");
+  assert.deepEqual(result.counts, { ...ZERO, removed: 1 });
+});
+
+test("複数件の混在（一致・不一致・表が無い）で、件数と本文が正しい", () => {
+  const text = `${HEAD2}\ntrusted_hash = "${HASH_C}"\nenabled = true\n\n${HEAD}\ntrusted_hash = "${HASH_A}"\n`;
+  const absent = "/p/.codex/hooks.json:pre_tool_use:0:0";
+  const result = planTrustEdit(
+    text,
+    [entry(KEY, HASH_A), entry(KEY2, HASH_A), entry(absent, HASH_A)],
+    "remove",
+  );
+  assert.equal(result.ok, true);
+  assert.equal(result.text, `${HEAD2}\ntrusted_hash = "${HASH_C}"\nenabled = true\n`);
+  assert.deepEqual(result.counts, { added: 0, updated: 0, unchanged: 1, removed: 1 });
+});
+
+test("先頭の表を外すとき、後ろの表が空行の重なりなしで残る", () => {
+  const text = `${HEAD}\ntrusted_hash = "${HASH_A}"\n\n[projects."/a"]\nx = 1\n`;
+  const result = planTrustEdit(text, [entry(KEY, HASH_A)], "remove");
+  assert.equal(result.text, `[projects."/a"]\nx = 1\n`);
+});
+
+test("途中の表を外すとき、前後の空行が 1 つだけ残る", () => {
+  const text = `model = "x"\n\n${HEAD}\ntrusted_hash = "${HASH_A}"\n\n[projects."/a"]\nx = 1\n`;
+  const result = planTrustEdit(text, [entry(KEY, HASH_A)], "remove");
+  assert.equal(result.text, `model = "x"\n\n[projects."/a"]\nx = 1\n`);
+});
+
+test("空行の無い途中の表を外しても、前後の行をつなげて残す", () => {
+  const text = `a = 1\n${HEAD}\ntrusted_hash = "${HASH_A}"\n[projects."/a"]\nx = 1\n`;
+  const result = planTrustEdit(text, [entry(KEY, HASH_A)], "remove");
+  assert.equal(result.text, `a = 1\n[projects."/a"]\nx = 1\n`);
+});
+
+test("末尾の表を外すとき、直前の空行も外して末尾に空行を残さない", () => {
+  const text = `model = "x"\n\n${HEAD}\ntrusted_hash = "${HASH_A}"\n`;
+  assert.equal(planTrustEdit(text, [entry(KEY, HASH_A)], "remove").text, `model = "x"\n`);
+  const noBlank = `model = "x"\n${HEAD}\ntrusted_hash = "${HASH_A}"\n`;
+  assert.equal(planTrustEdit(noBlank, [entry(KEY, HASH_A)], "remove").text, `model = "x"\n`);
+});
+
+test("本文の先頭の空行の後ろの表を外すと、空の本文になる", () => {
+  const text = `\n${HEAD}\ntrusted_hash = "${HASH_A}"\n`;
+  assert.equal(planTrustEdit(text, [entry(KEY, HASH_A)], "remove").text, "");
+});
+
+test("(1) 本体にコメントのある表は表を残し、trusted_hash の行だけを外す（見出しとコメントが残る）", () => {
+  const text = `model = "x"\n\n${HEAD}\n# 注釈\ntrusted_hash = "${HASH_A}"\n`;
+  const result = planTrustEdit(text, [entry(KEY, HASH_A)], "remove");
+  assert.deepEqual(result, { ok: true, text: `model = "x"\n\n${HEAD}\n# 注釈\n`, counts: { ...ZERO, removed: 1 } });
+});
+
+test("(2) 次の表の直前の説明コメント（空行をはさんで見出しの直前）は消えない", () => {
+  const text = `${HEAD}\ntrusted_hash = "${HASH_A}"\n\n# 次の表の説明\n[projects."/a"]\nx = 1\n`;
+  const result = planTrustEdit(text, [entry(KEY, HASH_A)], "remove");
+  assert.equal(result.ok, true);
+  assert.equal(result.text, `${HEAD}\n\n# 次の表の説明\n[projects."/a"]\nx = 1\n`);
+  assert.deepEqual(result.counts, { ...ZERO, removed: 1 });
+});
+
+test("(3) 本体が trusted_hash の行と空行だけなら、空行を含めて表ごと外れる", () => {
+  const text = `model = "x"\n\n${HEAD}\ntrusted_hash = "${HASH_A}"\n\n\n[projects."/a"]\nx = 1\n`;
+  const result = planTrustEdit(text, [entry(KEY, HASH_A)], "remove");
+  // 表の前の空行は残り、表の後ろの空行（表の本体）は外れる。直後が次の見出しなので空行は重ならない
+  assert.equal(result.text, `model = "x"\n\n[projects."/a"]\nx = 1\n`);
+  assert.deepEqual(result.counts, { ...ZERO, removed: 1 });
+});
+
+test("外した結果が空になるとき、末尾の改行の有無によらず空文字列になる", () => {
+  assert.equal(planTrustEdit(`${HEAD}\ntrusted_hash = "${HASH_A}"\n`, [entry(KEY, HASH_A)], "remove").text, "");
+  assert.equal(planTrustEdit(`${HEAD}\ntrusted_hash = "${HASH_A}"`, [entry(KEY, HASH_A)], "remove").text, "");
+});
+
+test("末尾が改行で終わらない本文で末尾の行を外すと、残る行も改行で終わらない", () => {
+  const text = `${HEAD}\nenabled = true\ntrusted_hash = "${HASH_A}"`;
+  const result = planTrustEdit(text, [entry(KEY, HASH_A)], "remove");
+  assert.equal(result.text, `${HEAD}\nenabled = true`);
+  assert.deepEqual(result.counts, { ...ZERO, removed: 1 });
+});
+
+test("末尾が改行で終わらない本文で表ごと外すと、直前の空行を外し、改行で終わらせない", () => {
+  const text = `model = "x"\n\n${HEAD}\ntrusted_hash = "${HASH_A}"`;
+  assert.equal(planTrustEdit(text, [entry(KEY, HASH_A)], "remove").text, `model = "x"`);
+});
+
+test("CRLF の本文では、外した後も LF だけの行が混ざらない", () => {
+  const text = `model = "x"\r\n\r\n${HEAD}\r\ntrusted_hash = "${HASH_A}"\r\n${HEAD2}\r\ntrusted_hash = "${HASH_B}"\r\nenabled = true\r\n`;
+  const result = planTrustEdit(text, [entry(KEY, HASH_A), entry(KEY2, HASH_B)], "remove");
+  assert.equal(result.ok, true);
+  // 直後が次の見出し（空行ではない）なので、直前の空行は残る（空行が重ならない）
+  assert.equal(result.text, `model = "x"\r\n\r\n${HEAD2}\r\nenabled = true\r\n`);
+  assert.doesNotMatch(result.text, /(^|[^\r])\n/);
+  assert.deepEqual(result.counts, { ...ZERO, removed: 2 });
+});
+
+test("CRLF の本文で表が残るとき、残る行は元の改行コードのまま", () => {
+  const text = `${HEAD}\r\ntrusted_hash = "${HASH_A}"\r\nenabled = true\r\n`;
+  assert.equal(planTrustEdit(text, [entry(KEY, HASH_A)], "remove").text, `${HEAD}\r\nenabled = true\r\n`);
+});
+
+test("不安全な本文は ok: false になり、text を返さない（write と同じ検査）", () => {
+  const cases = [
+    ['x = """', "abc", '"""', `${HEAD}\ntrusted_hash = "${HASH_A}"\n`].join("\n") + "\n",
+    `model = "x\u0001"\n${HEAD}\ntrusted_hash = "${HASH_A}"\n`,
+    `${HEAD}\ntrusted_hash = "${HASH_A}"\nfoo = 1garbage\n`,
+    `${HEAD}\ntrusted_hash = 1garbage\n`,
+    `[hooks]\nstate = 1\n${HEAD}\ntrusted_hash = "${HASH_A}"\n`,
+    `[[hooks]]\n${HEAD}\ntrusted_hash = "${HASH_A}"\n`,
+    `model = [\n${HEAD}\ntrusted_hash = "${HASH_A}"\n`,
+  ];
+  for (const text of cases) {
+    const before = text;
+    const result = planTrustEdit(text, [entry(KEY, HASH_A)], "remove");
+    assert.ok(isRefusal(result), `拒否されなかった: ${JSON.stringify(text)}`);
+    assert.equal(text, before);
+  }
+});
+
+test("entries のハッシュが不正なら ok: false になる", () => {
+  const text = `${HEAD}\ntrusted_hash = "${HASH_A}"\n`;
+  for (const hash of ["sha256:XYZ", "sha256:" + "A".repeat(64), undefined]) {
+    assert.ok(isRefusal(planTrustEdit(text, [entry(KEY, hash)], "remove")));
+  }
+});
+
+test("write の後に remove をすると元の本文に戻る（表が最初から無い本文）", () => {
+  const bases = [
+    "",
+    `model = "x"\n`,
+    `model = "x"`,
+    `model = "x"\r\n`,
+    `# 注釈\n\n[projects."/a"]\ntrust_level = 'trusted'\n`,
+    `[projects."/a"]\r\ntrust_level = 'trusted'\r\n`,
+    `[projects."/a"]\ntrust_level = "x"`,
+  ];
+  const entries = [entry(KEY, HASH_A), entry(KEY2, HASH_B)];
+  for (const base of bases) {
+    const written = planTrustEdit(base, entries, "write");
+    assert.equal(written.ok, true, `write が拒否された: ${JSON.stringify(base)}`);
+    const removed = planTrustEdit(written.text, entries, "remove");
+    assert.equal(removed.ok, true, `remove が拒否された: ${JSON.stringify(base)}`);
+    assert.equal(removed.text, base, `往復で戻らない: ${JSON.stringify(base)}`);
+    assert.deepEqual(removed.counts, { ...ZERO, removed: 2 });
+  }
+});
+
 // ---- 検証用: 返された本文を Python の tomllib で解析する（Python 3.11 以上が無ければ省く。実行時の依存にはしない） ----
 
 const PY_CHECK = spawnSync("python3", ["-I", "-c", "import tomllib"], { encoding: "utf8" });
@@ -716,6 +925,60 @@ test("ok:true の本文は tomllib で解析でき、承認の記録と他の設
       assert.deepEqual(after.hooks.state[k], v, `対象でない記録が変わった: ${k}`);
     }
     // hooks.state 以外の設定は変わらない
+    const strip = (d) => {
+      const copy = { ...d };
+      delete copy.hooks;
+      return copy;
+    };
+    assert.deepEqual(strip(after), strip(before), "hooks 以外の設定が変わった");
+  }
+});
+
+test("remove の出力も tomllib で解析でき、対象の記録だけが外れ、他の設定が保たれる", { skip: PY_SKIP }, () => {
+  const cases = [
+    {
+      text: [
+        "# 利用者の設定",
+        'model = "x"  # 注釈',
+        "",
+        '[projects."/a"]',
+        "trust_level = 'trusted'",
+        "",
+        HEAD,
+        `trusted_hash = "${HASH_A}"`,
+        "enabled = true",
+        "",
+        HEAD2,
+        `trusted_hash = "${HASH_C}"`,
+        "",
+      ].join("\n"),
+      entries: [entry(KEY, HASH_A), entry(KEY2, HASH_A)],
+      // KEY は enabled を持つので表は残り、trusted_hash だけが外れる。KEY2 は一致しないので残る
+      expectedState: { [KEY]: { enabled: true }, [KEY2]: { trusted_hash: HASH_C } },
+    },
+    {
+      text: `model = "x"\n\n${HEAD}\ntrusted_hash = "${HASH_A}"\n\n[projects."/a"]\nx = 1\n`,
+      entries: [entry(KEY, HASH_A)],
+      expectedState: {},
+    },
+    {
+      text: `model = "x"\r\n\r\n${HEAD}\r\ntrusted_hash = "${HASH_A}"\r\n${HEAD2}\r\ntrusted_hash = "${HASH_C}"\r\nenabled = false\r\n`,
+      entries: [entry(KEY, HASH_A), entry(KEY2, HASH_C)],
+      expectedState: { [KEY2]: { enabled: false } },
+    },
+    {
+      text: `${MULTILINE_OTHER_TABLE}\n${HEAD}\ntrusted_hash = "${HASH_A}"\n`,
+      entries: [entry(KEY, HASH_A)],
+      expectedState: {},
+    },
+  ];
+  const stateOf = (d) => d.hooks?.state ?? {};
+  for (const { text, entries, expectedState } of cases) {
+    const result = planTrustEdit(text, entries, "remove");
+    assert.equal(result.ok, true, `拒否された: ${JSON.stringify(text)}`);
+    const before = parseWithTomllib(text);
+    const after = parseWithTomllib(result.text);
+    assert.deepEqual(stateOf(after), expectedState, `記録の結果が想定と違う: ${JSON.stringify(text)}`);
     const strip = (d) => {
       const copy = { ...d };
       delete copy.hooks;

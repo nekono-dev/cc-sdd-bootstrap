@@ -136,6 +136,14 @@ export function computeTrustEntries(hooksJsonText, hooksJsonPath) {
 // - 最上位の hooks のキー、hooks.state に関わるキー（`[hooks]` や `[hooks.state]` の本体の state・state.x など）
 // - 対象の表の本体で、上の 3 つ以外のキー・値、ドット付き・引用符付きのキー、同じキーの重複、複数行の値
 // 他の表（projects など）の本体は、見出しと hooks に関わるキーだけを確かめ、値の中身は検証しない。
+//
+// 取り除き（mode "remove"）も、書き込みと同じ安全の検査を先に通す（通らなければ本文を変えない）。
+// - 対象の表が無い記録は何もせず、件数にも数えない
+// - trusted_hash が記録のハッシュと一致すれば、その行だけを外して removed に数える。
+//   本体に trusted_hash の行と空行だけがある表は表ごと外す。コメントや他の記録（enabled・trusted_content_hash など）が 1 つでもあれば、表は残して行だけを外す
+// - trusted_hash が一致しない・行が無い表は残し、unchanged に数える
+// - 表ごと外すとき、直前の空行は、直後が空行か本文の終わりのときだけ 1 つ外す（空行を重ねない・増やさない）
+// - 改行コードと末尾の改行の有無は、書き込みと同じ規則で保つ。外した結果が空なら空文字列を返す
 
 /** 記録のハッシュの形（sha256 の 16 進小文字 64 桁） */
 const HASH_PATTERN = /^sha256:[0-9a-f]{64}$/;
@@ -488,19 +496,13 @@ function findEntryProblem(entries) {
 }
 
 /**
- * config.toml の本文に、承認の記録（`[hooks.state."<キー>"]` の表の trusted_hash）の差分を計算する。
- * mode は "write" だけを扱う（"remove" は 2.3 で足す）。
- * 表が無ければ末尾に追加し、trusted_hash が無ければ見出しの直後に足し、違う値なら値だけを置き換える。
- * コメント・他の表は変えない。改行コードは本文の最初の改行に統一し、末尾の改行の有無は入力と一致させる
- * （入力が空文字列のときだけ、追加した表が改行で終わる）。変更が無いときは入力と同じ文字列を返す。
- * 想定外の書式は本文を変えず ok: false を返す。
+ * 書き込み・取り除きで共用する安全の検査。記録の一覧の形・制御文字・字句解析・許可リストの書式を順に確かめる。
+ * 問題があれば理由を返す（本文は変えない）。問題が無ければ、行の並び（recs・中身の contents）と字句解析の結果（lex）を返す。
  * @param {string} configText
  * @param {TrustEntry[]} entries
- * @param {"write"} mode
- * @returns {{ ok: true, text: string, counts: TrustCounts } | { ok: false, reason: string }}
+ * @returns {{ ok: true, recs: { content: string, term: string }[], contents: string[], lex: object } | { ok: false, reason: string }}
  */
-export function planTrustEdit(configText, entries, mode) {
-  if (mode !== "write") throw new TypeError(`未対応の mode です: ${String(mode)}`);
+function prepareEdit(configText, entries) {
   const entryProblem = findEntryProblem(entries);
   if (entryProblem !== null) return { ok: false, reason: entryProblem };
 
@@ -513,7 +515,31 @@ export function planTrustEdit(configText, entries, mode) {
   if (lex.error !== undefined) return { ok: false, reason: lex.error };
   const unsafe = findUnsafeForm(configText, contents, lex);
   if (unsafe !== null) return { ok: false, reason: unsafe };
+  return { ok: true, recs, contents, lex };
+}
 
+/**
+ * config.toml の本文に、承認の記録（`[hooks.state."<キー>"]` の表の trusted_hash）の差分を計算する。
+ * mode "write": 表が無ければ末尾に追加し、trusted_hash が無ければ見出しの直後に足し、違う値なら値だけを置き換える。
+ * mode "remove": 現在のハッシュと一致する trusted_hash の行だけを外し、他に項目が無くなった表は表ごと外す
+ * （一致しない記録は残して counts.unchanged に数える。表が無い記録は数えない）。
+ * コメント・他の表は変えない。改行コードは本文の最初の改行に統一し、末尾の改行の有無は入力と一致させる
+ * （入力が空文字列のときだけ、追加した表が改行で終わる）。変更が無いときは入力と同じ文字列を返す。
+ * 想定外の書式は本文を変えず ok: false を返す。
+ * @param {string} configText
+ * @param {TrustEntry[]} entries
+ * @param {"write" | "remove"} mode
+ * @returns {{ ok: true, text: string, counts: TrustCounts } | { ok: false, reason: string }}
+ */
+export function planTrustEdit(configText, entries, mode) {
+  if (mode !== "write" && mode !== "remove") throw new TypeError(`未対応の mode です: ${String(mode)}`);
+  const prepared = prepareEdit(configText, entries);
+  if (!prepared.ok) return prepared;
+  return mode === "write" ? planWrite(configText, entries, prepared) : planRemove(configText, entries, prepared);
+}
+
+/** 書き込みの差分（mode "write"）。安全の検査は prepareEdit で通してから呼ぶ */
+function planWrite(configText, entries, { recs, contents, lex }) {
   const eol = detectEol(configText);
   const hasTrailingNewline = configText === "" || configText.endsWith("\n");
   const counts = { added: 0, updated: 0, unchanged: 0, removed: 0 };
@@ -587,5 +613,82 @@ export function planTrustEdit(configText, entries, mode) {
   // 末尾の改行の有無は入力と一致させる（変更が無いときも、入力と同じ末尾になる）
   if (!hasTrailingNewline && rebuilt.length > 0) rebuilt[rebuilt.length - 1].term = "";
   const text = rebuilt.map((rec) => rec.content + rec.term).join("");
+  return { ok: true, text, counts };
+}
+
+/**
+ * 承認の記録の取り除きの差分（mode "remove"）。安全の検査は prepareEdit で通してから呼ぶ。
+ * 表が無い記録は何もせず数えない。trusted_hash が一致すれば、その行を外す。
+ * 本体が trusted_hash の行と空行だけなら表ごと（見出しから次の見出しの手前まで）外す。コメントや他の記録があれば表は残し、行だけを外す。
+ * 一致しない・trusted_hash の行が無い表は残し、unchanged に数える。
+ */
+function planRemove(configText, entries, { recs, contents, lex }) {
+  const counts = { added: 0, updated: 0, unchanged: 0, removed: 0 };
+  // 残す・外すの判定: 外す行の番号（trusted_hash の行だけを外す）と、表ごと外す範囲
+  const removed = new Array(recs.length).fill(false);
+  const tables = [];
+
+  for (const { key, hash } of entries) {
+    const head = `[hooks.state.${JSON.stringify(key)}]`;
+    const headers = findKeyHeaders(contents, lex, head);
+    if (headers.length > 1) return { ok: false, reason: `同じキーの見出しが複数ある: ${key}` };
+    // 表が無い記録は、何もせず件数にも数えない
+    if (headers.length === 0) continue;
+
+    const headerIndex = headers[0];
+    const rows = findTrustedRows(contents, lex, headerIndex);
+    if (rows.length > 1) return { ok: false, reason: `trusted_hash の行が複数ある: ${key}` };
+    // trusted_hash の行が無い表は残す（一致しない記録と同じ扱い）
+    if (rows.length === 0) {
+      counts.unchanged += 1;
+      continue;
+    }
+
+    const row = rows[0];
+    const match = TRUSTED_LINE_PATTERN.exec(contents[row]);
+    if (match === null) {
+      return { ok: false, reason: `trusted_hash の書式が想定外（二重引用符の文字列ではない）: ${key}` };
+    }
+    if (match[2] !== hash) {
+      counts.unchanged += 1;
+      continue;
+    }
+
+    counts.removed += 1;
+    const end = nextHeaderIndex(lex.isHeader, headerIndex);
+    // 表の本体に、この行以外に空行でない行（コメント・enabled・trusted_content_hash など）が 1 つでもあれば、
+    // 表は残して trusted_hash の行だけを外す（利用者のコメントを失わないため、空行の整理もしない）
+    let hasOtherContent = false;
+    for (let i = headerIndex + 1; i < end; i++) {
+      if (i !== row && !isBlankLine(contents[i])) hasOtherContent = true;
+    }
+    if (hasOtherContent) {
+      removed[row] = true;
+    } else {
+      tables.push({ start: headerIndex, end });
+    }
+  }
+
+  // 表ごと外す範囲を外す（範囲の中のすべての行）
+  for (const { start, end } of tables) {
+    for (let i = start; i < end; i++) removed[i] = true;
+  }
+
+  // 表ごと外したあとの空行の整理: 直前の残る行が空行で、直後の残る行が空行か本文の終わりなら、その空行を 1 つ外す
+  for (const { start } of tables) {
+    let prev = start - 1;
+    while (prev >= 0 && removed[prev]) prev -= 1;
+    let next = start;
+    while (next < recs.length && removed[next]) next += 1;
+    if (prev >= 0 && isBlankLine(contents[prev]) && (next >= recs.length || isBlankLine(contents[next]))) {
+      removed[prev] = true;
+    }
+  }
+
+  // 残す行をそのまま並べる（各行が持つ改行は保つ）。末尾の改行の有無は入力と一致させる
+  const out = recs.filter((_, i) => !removed[i]).map((rec) => ({ content: rec.content, term: rec.term }));
+  const hasTrailingNewline = configText === "" || configText.endsWith("\n");
+  if (!hasTrailingNewline && out.length > 0) out[out.length - 1].term = "";
+  const text = out.map((rec) => rec.content + rec.term).join("");
   return { ok: true, text, counts };
 }
