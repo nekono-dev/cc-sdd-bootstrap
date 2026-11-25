@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, readFileSync, readdirSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
@@ -73,4 +73,40 @@ test('配布物は入口・本体・カタログの配置物に限られる', (t
   assert.equal(manifest.bin?.['cc-sdd-bootstrap'], 'bin/cc-sdd-bootstrap.mjs');
   assert.ok(readFileSync(path.join(packageRoot, 'bin/cc-sdd-bootstrap.mjs'), 'utf8')
     .startsWith('#!/usr/bin/env node\n'), '入口に Node.js の shebang がありません');
+});
+
+test('展開した配布物から導入コマンドを起動できる（help が成功する）', (t) => {
+  const work = mkdtempSync(path.join(os.tmpdir(), 'cc-sdd-bootstrap-pack-'));
+  t.after(() => rmSync(work, { recursive: true, force: true }));
+  const cacheDir = path.join(work, 'cache');
+  const outDir = path.join(work, 'out');
+  const unpackDir = path.join(work, 'unpacked');
+  for (const dir of [outDir, unpackDir]) mkdirSync(dir);
+
+  const packed = spawnSync('npm', ['pack', '--json', '--pack-destination', outDir], {
+    cwd: packageRoot,
+    encoding: 'utf8',
+    env: { ...process.env, npm_config_cache: cacheDir },
+    timeout: 120_000,
+  });
+  if (['ENOENT', 'EACCES', 'EPERM'].includes(packed.error?.code)) {
+    t.skip(`npm を起動できませんでした (${packed.error.code})`);
+    return;
+  }
+  assert.equal(packed.status, 0, `npm pack が失敗しました: ${packed.stderr}`);
+  const tarball = path.join(outDir, JSON.parse(packed.stdout)[0].filename);
+
+  const extracted = spawnSync('tar', ['-xzf', tarball, '-C', unpackDir], { encoding: 'utf8' });
+  if (extracted.error) {
+    t.skip(`tar を起動できませんでした (${extracted.error.code})`);
+    return;
+  }
+  assert.equal(extracted.status, 0, extracted.stderr);
+
+  const root = path.join(unpackDir, 'package');
+  assert.ok(existsSync(path.join(root, '.agent-hooks/cc-sdd-bootstrap/subagent-roles.mjs')), 'subagent-roles.mjs が展開物にありません');
+  const help = spawnSync(process.execPath, [path.join(root, 'bin/cc-sdd-bootstrap.mjs'), 'help'], { cwd: unpackDir, encoding: 'utf8' });
+  assert.equal(help.status, 0, `help が失敗しました: ${help.stderr}`);
+  assert.match(help.stdout, /init/);
+  assert.match(help.stdout, /update/);
 });

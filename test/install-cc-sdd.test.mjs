@@ -52,6 +52,11 @@ test('既存の失敗記録は内容を読み、記録だけを理由に入れ�
   assert.equal(repo.read(FAILURE_RECORD), null);
 });
 
+/** 配置物の区画の文章（ドキュメント名で指定） */
+function sectionText(repo, doc) {
+  return repo.read(`.agent-hooks/cc-sdd-bootstrap/agent-section-${doc === 'CLAUDE.md' ? 'claude' : 'codex'}.md`);
+}
+
 function awaitDecision(facts) {
   // 判断関数は純粋な規則として既存モジュールから読む。
   return decideInstall(facts);
@@ -176,7 +181,7 @@ test('ほぼ同時の入力では一つだけ導入し、もう一方を止め�
 test('SessionStart は両ツールで状態を知らせ、導入を始めない', (t) => {
   for (const tool of ['claude', 'codex']) {
     for (const scenario of [
-      { name: '揃っている', setup(repo) { prepareComplete(repo); repo.write('CLAUDE.md', SECTION_BEGIN_MARKER); repo.write('AGENTS.md', SECTION_BEGIN_MARKER); }, expected: [/揃っている/, /3\.1\.0/, /ja/] },
+      { name: '揃っている', setup(repo) { prepareComplete(repo); repo.putSections(); repo.write('CLAUDE.md', sectionText(repo, 'CLAUDE.md')); repo.write('AGENTS.md', sectionText(repo, 'AGENTS.md')); }, expected: [/揃っている/, /3\.1\.0/, /ja/] },
       { name: '未導入', setup() {}, expected: /最初の入力.*導入/ },
       { name: '導入中', setup(repo) { repo.write(LOCK_PATH, '導入中'); }, expected: /導入中|未完了/ },
       { name: '失敗の記録', setup(repo) { repo.write(FAILURE_RECORD, '前回失敗'); }, expected: /未完了|入力.*止|最初の入力.*導入/ },
@@ -256,7 +261,7 @@ test('両文書の区画の有無を読み取り、片方でも無ければ入�
     const repo = makeRepo(); t.after(repo.cleanup);
     prepareComplete(repo);
     for (const doc of ['CLAUDE.md', 'AGENTS.md']) {
-      repo.write(doc, doc === absent ? '標準文書のみ' : `先頭\n${SECTION_BEGIN_MARKER}\n本文`);
+      repo.write(doc, doc === absent ? '標準文書のみ' : `先頭\n${sectionText(repo, doc)}`);
     }
     const facts = readInstallFacts(repo.root);
     assert.deepEqual(facts.sectionPresent, {
@@ -472,4 +477,255 @@ test('両ツールの偽 npx 出力先と標準文書の区画なしを試験土
   repo.putSections();
   assert.ok(fs.existsSync(path.join(repo.root, '.agent-hooks/cc-sdd-bootstrap/agent-section-claude.md')));
   assert.ok(fs.existsSync(path.join(repo.root, '.agent-hooks/cc-sdd-bootstrap/agent-section-codex.md')));
+});
+
+// 区画だけの書き直し（subagent-delegation 5.15）
+const OLD_SECTION = `${SECTION_BEGIN_MARKER}\n\n古い文章\n\n${AGENT_SECTION_MARKERS.end}\n`;
+const isRoot = typeof process.getuid === 'function' && process.getuid() === 0;
+
+/** 導入済みで、両文書の区画だけが古い作業場所を作る。区画の外に利用者の文章を置く */
+function prepareStale(repo) {
+  prepareComplete(repo);
+  repo.putSections();
+  for (const doc of ['CLAUDE.md', 'AGENTS.md']) repo.write(doc, `前置き ${doc}\n${OLD_SECTION}後書き ${doc}\n`);
+}
+
+function expectRewritten(repo) {
+  for (const doc of ['CLAUDE.md', 'AGENTS.md']) {
+    assert.equal(repo.read(doc), `前置き ${doc}\n${sectionText(repo, doc).trimEnd()}\n後書き ${doc}\n`, doc);
+  }
+}
+
+function noTempFiles(repo) {
+  assert.deepEqual(fs.readdirSync(repo.root).filter((name) => name.endsWith('.tmp')), []);
+}
+
+test('区画の書き直し: SessionStart は予定だけを知らせ、文書にも npx にも触れない', (t) => {
+  for (const tool of ['claude', 'codex']) {
+    const repo = makeRepo(); t.after(repo.cleanup);
+    prepareStale(repo);
+    const before = { c: repo.read('CLAUDE.md'), a: repo.read('AGENTS.md') };
+    const result = runSessionStart(repo, tool);
+    assert.equal(result.status, 0, result.stderr);
+    const context = JSON.parse(result.stdout).hookSpecificOutput.additionalContext;
+    assert.match(context, /区画/);
+    assert.doesNotMatch(context, /最初の入力で導入します/);
+    assert.equal(result.npxLog, '');
+    assert.equal(repo.read('CLAUDE.md'), before.c);
+    assert.equal(repo.read('AGENTS.md'), before.a);
+    assert.equal(repo.read(LOCK_PATH), null);
+  }
+});
+
+test('区画の書き直し: 中身が同じなら省き、違えば入力のフックが区画だけを置き換える', (t) => {
+  const same = makeRepo(); t.after(same.cleanup);
+  prepareComplete(same); same.putSections();
+  for (const doc of ['CLAUDE.md', 'AGENTS.md']) same.write(doc, `前置き\n${sectionText(same, doc)}後書き\n`);
+  const skipped = runPromptHook(same, 'claude');
+  assert.equal(skipped.stdout, '');
+  assert.equal(same.read('CLAUDE.md'), `前置き\n${sectionText(same, 'CLAUDE.md')}後書き\n`);
+
+  const repo = makeRepo(); t.after(repo.cleanup);
+  prepareStale(repo);
+  const stateBefore = repo.read(STATE_PATH);
+  const result = runPromptHook(repo, 'claude', '/kiro-x 続き');
+  assert.equal(result.status, 0, result.stderr);
+  const output = JSON.parse(result.stdout);
+  assert.equal(output.hookSpecificOutput.hookEventName, 'UserPromptSubmit');
+  assert.match(output.hookSpecificOutput.additionalContext, /区画/);
+  assert.match(output.hookSpecificOutput.additionalContext, /\.claude\/skills\/kiro-x\/SKILL\.md/);
+  assert.deepEqual(result.npxCalls, []);
+  expectRewritten(repo);
+  assert.equal(repo.read(STATE_PATH), stateBefore);
+  assert.equal(repo.read(FAILURE_RECORD), null);
+  assert.equal(repo.read(LOCK_PATH), null);
+  noTempFiles(repo);
+  assert.equal(runPromptHook(repo, 'claude').stdout, '');
+});
+
+test('区画の書き直し: 手動のコマンドも区画だけを置き換え、npx を呼ばない', (t) => {
+  const repo = makeRepo(); t.after(repo.cleanup);
+  prepareStale(repo);
+  const result = runEntry(repo);
+  assert.equal(result.status, 0, result.stderr);
+  assert.deepEqual(result.npxCalls, []);
+  assert.match(result.stdout, /区画/);
+  expectRewritten(repo);
+  assert.equal(repo.read(FAILURE_RECORD), null);
+  assert.equal(runEntry(repo).npxCalls.length, 0);
+});
+
+test('区画の書き直し: 終わりの目印が無ければ末尾まで置き換える', (t) => {
+  const repo = makeRepo(); t.after(repo.cleanup);
+  prepareStale(repo);
+  repo.write('CLAUDE.md', `前置き\n${SECTION_BEGIN_MARKER}\n古い`);
+  assert.equal(runEntry(repo).status, 0);
+  assert.equal(repo.read('CLAUDE.md'), `前置き\n${sectionText(repo, 'CLAUDE.md')}`);
+});
+
+test('区画の書き直し: cc-sdd の導入が要る場合は導入を優先する', (t) => {
+  const repo = makeRepo(); t.after(repo.cleanup);
+  prepareStale(repo);
+  repo.write(FAILURE_RECORD, '前回失敗');
+  const result = runEntry(repo);
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.npxCalls.length, 2);
+});
+
+test('区画の書き直しの失敗: 入力を止め、元の文書と失敗の記録なしを保ち、直せば入れ直さず直る', { skip: isRoot }, (t) => {
+  for (const via of ['hook', 'cli']) {
+    const repo = makeRepo(); t.after(() => { fs.chmodSync(repo.root, 0o755); repo.cleanup(); });
+    prepareStale(repo);
+    const before = { c: repo.read('CLAUDE.md'), a: repo.read('AGENTS.md') };
+    fs.chmodSync(repo.root, 0o555);
+    const failed = via === 'hook' ? runPromptHook(repo, 'claude') : runEntry(repo);
+    if (via === 'hook') {
+      assert.equal(failed.status, 0, failed.stderr);
+      const blocked = JSON.parse(failed.stdout);
+      assert.equal(blocked.decision, 'block');
+      assert.match(blocked.reason, /区画/);
+      assert.ok(blocked.reason.includes(RETRY_COMMAND));
+    } else {
+      assert.equal(failed.status, 1);
+      assert.match(failed.stdout, /区画/);
+    }
+    assert.deepEqual(failed.npxCalls, []);
+    assert.equal(repo.read('CLAUDE.md'), before.c);
+    assert.equal(repo.read('AGENTS.md'), before.a);
+    assert.ok(repo.read('CLAUDE.md').includes(SECTION_BEGIN_MARKER));
+    assert.equal(repo.read(FAILURE_RECORD), null);
+    assert.equal(repo.read(LOCK_PATH), null);
+    fs.chmodSync(repo.root, 0o755);
+    noTempFiles(repo);
+    const fixed = via === 'hook' ? runPromptHook(repo, 'claude') : runEntry(repo);
+    assert.equal(fixed.status, 0, fixed.stderr);
+    assert.deepEqual(fixed.npxCalls, []);
+    expectRewritten(repo);
+    assert.equal(repo.read(FAILURE_RECORD), null);
+  }
+});
+
+test('区画の書き直し: 片方の文書だけ書き直された状態からも、次の実行で残りが直る', (t) => {
+  const repo = makeRepo(); t.after(repo.cleanup);
+  prepareStale(repo);
+  repo.write('CLAUDE.md', `前置き CLAUDE.md\n${sectionText(repo, 'CLAUDE.md').trimEnd()}\n後書き CLAUDE.md\n`);
+  const facts = readInstallFacts(repo.root);
+  assert.deepEqual(awaitDecision(facts), { action: 'rewrite-section', tools: ['codex'] });
+  const result = runPromptHook(repo, 'codex');
+  assert.equal(result.status, 0, result.stderr);
+  assert.deepEqual(result.npxCalls, []);
+  expectRewritten(repo);
+  assert.equal(repo.read(FAILURE_RECORD), null);
+});
+
+test('区画の書き直し: 両方の入口を同時に動かしても片方だけが書き直し、入れ直しも失敗の記録もない', async (t) => {
+  const repo = makeRepo(); t.after(repo.cleanup);
+  prepareStale(repo);
+  const logPath = path.join(repo.fakeBin, `npx-calls-rewrite-race-${process.pid}-${Date.now()}.jsonl`);
+  const run = (args) => new Promise((resolve, reject) => {
+    const child = spawn(process.execPath, [repo.entry, ...args], {
+      cwd: repo.root, env: { ...process.env, PATH: `${repo.fakeBin}${path.delimiter}${process.env.PATH ?? ''}`, FAKE_NPX_LOG: logPath },
+      stdio: ['pipe', 'pipe', 'pipe'],
+    });
+    let stdout = '';
+    child.stdout.setEncoding('utf8').on('data', (chunk) => stdout += chunk);
+    child.on('error', reject);
+    child.on('close', (status) => resolve({ status, stdout }));
+    child.stdin.end(JSON.stringify({ prompt: '並行' }));
+  });
+  const results = await Promise.all([run(['user-prompt-submit', '--tool', 'claude']), run([])]);
+  expectRewritten(repo);
+  assert.equal(results.filter(({ stdout }) => /書き直/.test(stdout)).length, 1);
+  assert.equal(fs.existsSync(logPath), false);
+  assert.equal(repo.read(FAILURE_RECORD), null);
+  assert.equal(repo.read(LOCK_PATH), null);
+  noTempFiles(repo);
+});
+
+/** 試験用の先読みモジュール: 一時ファイルの書き込み・後片付けの失敗、導入中の印を取った直後の状態変更を作る */
+function writePreload(repo) {
+  const file = path.join(repo.fakeBin, 'preload.mjs');
+  fs.writeFileSync(file, `
+import fs from 'node:fs';
+const realWrite = fs.writeFileSync, realRm = fs.rmSync, realOpen = fs.openSync;
+const isTmp = (p) => typeof p === 'string' && p.endsWith('.tmp');
+if (process.env.PRELOAD_TMP_FAIL === '1') {
+  fs.writeFileSync = (p, ...rest) => { if (isTmp(p)) throw Object.assign(new Error('EIO: 試験の書き込み失敗'), { code: 'EIO' }); return realWrite(p, ...rest); };
+  fs.rmSync = (p, ...rest) => { if (isTmp(p)) throw Object.assign(new Error('EIO: 試験の後片付け失敗'), { code: 'EIO' }); return realRm(p, ...rest); };
+}
+if (process.env.PRELOAD_AFTER_LOCK) {
+  fs.openSync = (p, flags, ...rest) => {
+    const fd = realOpen(p, flags, ...rest);
+    if (typeof p === 'string' && p.endsWith('cc-sdd-install.lock') && flags === 'wx') {
+      if (process.env.PRELOAD_AFTER_LOCK === 'install') realWrite(p.replace(/cc-sdd-install\\.lock$/, 'cc-sdd-install.failed'), '印の取得後に失敗の記録');
+      if (process.env.PRELOAD_AFTER_LOCK === 'fail') realWrite(p.replace(/\\.cache\\/cc-sdd-install\\.lock$/, '.cc-sdd-bootstrap.json'), '{broken');
+    }
+    return fd;
+  };
+}
+`);
+  return `--import=${file}`;
+}
+
+test('区画の書き直しの失敗: 一時ファイルの後片付けも失敗しても導入の失敗の記録を作らない', (t) => {
+  for (const via of ['hook', 'cli']) {
+    const repo = makeRepo(); t.after(repo.cleanup);
+    prepareStale(repo);
+    const before = repo.read('CLAUDE.md');
+    const env = { NODE_OPTIONS: writePreload(repo), PRELOAD_TMP_FAIL: '1' };
+    const failed = via === 'hook' ? runPromptHook(repo, 'claude', '依頼', { env }) : runEntry(repo, [], { env });
+    if (via === 'hook') assert.equal(JSON.parse(failed.stdout).decision, 'block');
+    else assert.equal(failed.status, 1);
+    assert.deepEqual(failed.npxCalls, []);
+    assert.equal(repo.read('CLAUDE.md'), before);
+    assert.equal(repo.read(FAILURE_RECORD), null);
+    assert.equal(repo.read(LOCK_PATH), null);
+  }
+});
+
+test('区画の書き直し: 印を取った後の再判定が導入・失敗なら、成功扱いにせず各入口の扱いに回す', (t) => {
+  // install: 導入に回る
+  for (const via of ['hook', 'cli']) {
+    const repo = makeRepo(); t.after(repo.cleanup);
+    prepareStale(repo);
+    const env = { NODE_OPTIONS: writePreload(repo), PRELOAD_AFTER_LOCK: 'install' };
+    const result = via === 'hook' ? runPromptHook(repo, 'claude', '依頼', { env }) : runEntry(repo, [], { env });
+    assert.equal(result.status, 0, `${via} ${result.stderr} ${result.stdout}`);
+    assert.equal(result.npxCalls.length, 2, `${via}: 導入が走る`);
+    assert.equal(repo.read(FAILURE_RECORD), null);
+  }
+  // fail: 止めて理由を示す
+  for (const via of ['hook', 'cli']) {
+    const repo = makeRepo(); t.after(repo.cleanup);
+    prepareStale(repo);
+    const env = { NODE_OPTIONS: writePreload(repo), PRELOAD_AFTER_LOCK: 'fail' };
+    const result = via === 'hook' ? runPromptHook(repo, 'claude', '依頼', { env }) : runEntry(repo, [], { env });
+    if (via === 'hook') {
+      const out = JSON.parse(result.stdout);
+      assert.equal(out.decision, 'block');
+      assert.match(out.reason, /JSON/);
+    } else {
+      assert.equal(result.status, 1);
+      assert.match(result.stdout, /JSON/);
+      assert.doesNotMatch(result.stdout, /揃っている/);
+    }
+    assert.deepEqual(result.npxCalls, []);
+  }
+});
+
+test('区画の書き直し: 終わりの目印の無い配置物の文章では書き直さず、原文を保って止める', (t) => {
+  for (const via of ['hook', 'cli']) {
+    const repo = makeRepo(); t.after(repo.cleanup);
+    prepareStale(repo);
+    repo.write('.agent-hooks/cc-sdd-bootstrap/agent-section-claude.md', `${SECTION_BEGIN_MARKER}\n\n終わりの目印なし\n`);
+    const before = { c: repo.read('CLAUDE.md'), a: repo.read('AGENTS.md') };
+    const result = via === 'hook' ? runPromptHook(repo, 'claude') : runEntry(repo);
+    if (via === 'hook') assert.equal(JSON.parse(result.stdout).decision, 'block');
+    else assert.equal(result.status, 1);
+    assert.deepEqual(result.npxCalls, []);
+    assert.equal(repo.read('CLAUDE.md'), before.c);
+    assert.equal(repo.read('AGENTS.md'), before.a);
+    assert.equal(repo.read(FAILURE_RECORD), null);
+    assert.equal(repo.read(LOCK_PATH), null);
+  }
 });

@@ -49,6 +49,15 @@
             "timeout": 10
           }
         ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"$(git rev-parse --show-toplevel)/.agent-hooks/cc-sdd-bootstrap/subagent-check.mjs\" pre-tool-use --tool codex",
+            "timeout": 10
+          }
+        ]
       }
     ],
     "PostToolUse": [

@@ -47,7 +47,7 @@ test("一時の git リポジトリで init・利用者設定を保つ update・
   const deploy = path.join(root, ".agent-hooks/cc-sdd-bootstrap");
   for (const file of [config, claudeSettings, codexHooks, ignore,
     path.join(deploy, "install-cc-sdd.mjs"), path.join(deploy, "install-rules.mjs"),
-    path.join(deploy, "config-schema.mjs"),
+    path.join(deploy, "config-schema.mjs"), path.join(deploy, "subagent-roles.mjs"),
     path.join(deploy, "agent-section-claude.md"), path.join(deploy, "agent-section-codex.md")]) {
     assert.ok(fs.existsSync(file), `${path.relative(root, file)} がありません`);
   }
@@ -83,6 +83,15 @@ test("一時の git リポジトリで init・利用者設定を保つ update・
   if (!repeated) return;
   assert.equal(repeated.status, 0, repeated.stderr);
   assert.match(repeated.stdout, /変更はありません/);
+
+  const configText = fs.readFileSync(config, "utf8");
+  const broken = { ...readJson(config), subagents: { maxModel: { claude: "fable" } } };
+  fs.writeFileSync(config, `${JSON.stringify(broken, null, 2)}\n`);
+  const failed = runOrSkip(t, root, ["update"]);
+  if (!failed) return;
+  assert.notEqual(failed.status, 0);
+  assert.match(`${failed.stdout}${failed.stderr}`, /subagents\.maxModel\.claude/);
+  fs.writeFileSync(config, configText);
 
   const claudeDoc = "# 標準の Claude 文書\n\n標準部分を残す。\n";
   const agentsDoc = "# 標準の Codex 文書\n\n標準部分を残す。\n";
@@ -151,4 +160,62 @@ test("未対応の指定は変更せず、問題と使い方を表示して失�
   assert.match(result.stderr, /--force/);
   assert.match(result.stderr, /使い方/);
   assert.deepEqual(fs.readdirSync(root), [".git"]);
+});
+
+test("init の後の update で役割定義が系統ごとに作られ、上限を下げると上の系統が消え、知らせは差分が無くても表示される", (t) => {
+  const root = temporary(t);
+  const initialized = runOrSkip(t, root, ["init"]);
+  if (!initialized) return;
+  assert.equal(initialized.status, 0, initialized.stderr);
+
+  const claudeHooks = JSON.stringify(readJson(path.join(root, ".claude/settings.json")));
+  const codexHooks = JSON.stringify(readJson(path.join(root, ".codex/hooks.json")));
+  assert.match(claudeHooks, /subagent-check\.mjs/);
+  assert.match(codexHooks, /subagent-check\.mjs/);
+  const agents = (dir, pattern) => fs.existsSync(path.join(root, dir)) ? fs.readdirSync(path.join(root, dir)).filter((name) => pattern.test(name)).sort() : [];
+  assert.equal(agents(".claude/agents", /^cc-sdd-.*\.md$/).length, 12);
+  assert.deepEqual(agents(".codex/agents", /^cc_sdd_.*\.toml$/), ["cc_sdd_implement.toml"]);
+  assert.ok(fs.existsSync(path.join(root, ".agent-hooks/cc-sdd-bootstrap/subagent-check.mjs")));
+  assert.ok(fs.existsSync(path.join(root, ".agent-hooks/cc-sdd-bootstrap/delegate.mjs")));
+
+  // 差分が無い 2 回目でも、設定から作るファイルの知らせを落とさない
+  const repeated = runOrSkip(t, root, ["update"]);
+  if (!repeated) return;
+  assert.equal(repeated.status, 0, repeated.stderr);
+  assert.match(repeated.stdout, /変更はありません/);
+  assert.match(repeated.stdout, /読み取り専用を適用できない/);
+
+  // 子の上限を下げると上の系統の定義が消える
+  const config = path.join(root, ".cc-sdd-bootstrap.json");
+  fs.writeFileSync(config, `${JSON.stringify({ ...readJson(config), subagents: { maxModel: { claude: "sonnet" } } }, null, 2)}\n`);
+  const lowered = runOrSkip(t, root, ["update"]);
+  if (!lowered) return;
+  assert.equal(lowered.status, 0, lowered.stderr);
+  const after = agents(".claude/agents", /^cc-sdd-.*\.md$/);
+  assert.ok(after.length > 0 && after.length < 12);
+  assert.ok(!after.some((name) => /-opus\.md$/.test(name)), after.join(","));
+  assert.match(lowered.stdout, /削除: .*cc-sdd-.*-opus\.md/);
+  assert.match(lowered.stdout, /読み取り専用を適用できない/);
+});
+
+test("定義のファイルに差分が無く設定の変更で新しい知らせだけが生じる update でも、知らせを表示する", (t) => {
+  const root = temporary(t);
+  const initialized = runOrSkip(t, root, ["init"]);
+  if (!initialized) return;
+  assert.equal(initialized.status, 0, initialized.stderr);
+  const settled = runOrSkip(t, root, ["update"]);
+  if (!settled) return;
+  assert.equal(settled.status, 0, settled.stderr);
+  const novel = /役割 review のモデル terra は Claude Code の定義には使わず/;
+  assert.doesNotMatch(settled.stdout, novel);
+
+  const config = path.join(root, ".cc-sdd-bootstrap.json");
+  const current = readJson(config);
+  current.subagents = { roles: { claude: { review: { model: "terra" } } } };
+  fs.writeFileSync(config, `${JSON.stringify(current, null, 2)}\n`);
+  const changed = runOrSkip(t, root, ["update"]);
+  if (!changed) return;
+  assert.equal(changed.status, 0, changed.stderr);
+  assert.match(changed.stdout, /変更はありません。/);
+  assert.match(changed.stdout, novel);
 });

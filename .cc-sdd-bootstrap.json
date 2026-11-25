@@ -2,11 +2,7 @@
   "format": 1,
   "ccSdd": {
     "version": "3.1.0",
-    "lang": "ja",
-    "keepTemplates": false
+    "lang": "ja"
   },
-  "codex": {
-    "enabled": false
-  },
-  "models": {}
+  "subagents": {}
 }

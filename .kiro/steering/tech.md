@@ -40,18 +40,21 @@ node bin/cc-sdd-bootstrap.mjs uninstall       # 適用内容の取り除き
 poc/<名前>/run.sh                            # 個別の前提確認
 ```
 
-設定ファイルに保存した cc-sdd の版と言語で、セッション開始時に導入物を揃える。導入物が揃っていれば入れ直しを省く。Codex の利用設定と役割ごとのモデルは今は保存だけで、後続の仕様（subagent-delegation）で役割表に置き換える。
+設定ファイルに保存した cc-sdd の版と言語で、起動前（環境の準備スクリプトから `node .agent-hooks/cc-sdd-bootstrap/install-cc-sdd.mjs`）か、セッション開始・最初の入力のフックで導入物を揃える。導入物が揃っていれば入れ直しを省く。Codex の利用設定（`codex.enabled`）と役割ごとのモデル（`models`）は今は保存だけで、後続の仕様（subagent-delegation）で役割表に置き換える。`ccSdd.keepTemplates` は単純化で廃止し、残っていても読まない（このリポジトリの設定からも外した）。
 
-2026-11-22 の単純化の discovery で、installer-core・session-install・kiro-gate を要件に戻した（`.kiro/steering/roadmap.md`）。この文書の「主要な技術判断」は、各 spec の改訂が承認されたら合わせて直す。
+2026-11-22 の単純化の discovery で要件に戻した installer-core・session-install・kiro-gate は、改訂後の実装を develop に取り込んだ（2026-11-24、#3）。
 
 ## 主要な技術判断
 
 - **配布は `npx github:nekono-dev/cc-sdd-bootstrap`**: 公開リポジトリなので認証が要らない。GitHub Packages（認証が要る）は使わない。
 - **cc-sdd の導入物はリポジトリに含めない**: 利用先でも `.gitignore` の対象にする。セッション開始時に設定ファイルの版と言語で導入物を揃え、揃っていれば入れ直しを省く。
 - **CLAUDE.md・AGENTS.md は cc-sdd の標準の文書＋運用の区画として作り直す**（2026-11-23、利用者の指示。2026-11-18 の「管理区画だけを書き換え、標準の文書は `.kiro/settings/cc-sdd-guide.md` へ出して `@` で取り込む」判断を置き換える）: cc-sdd の導入で CLAUDE.md（Claude Code 向け）・AGENTS.md（Codex 向け）を標準の文書として書き出し、その後に cc-sdd-bootstrap の運用の区画（目印の行で囲んだ案内）を末尾へ書き足す。導入物なのでコミットしない。プロジェクト独自の決まりは `.kiro/steering/` に置く（`poc/req-feasibility/doc-append.sh` で確認）。
+- **フックは Claude Code と Codex の両方へ同じスクリプトを登録する**（2026-11-24）: 同じ配置物を `--tool claude|codex` の引数で呼び分ける。登録先は `.claude/settings.json`（`$CLAUDE_PROJECT_DIR` で道筋を作る）と `.codex/hooks.json`（`git rev-parse --show-toplevel` で道筋を作る。worktree の中でもその worktree の配置物が動く）。導入コマンドは印（`/.agent-hooks/cc-sdd-bootstrap/` を含むコマンド）のある項目だけを書き換え、利用者の他のフックは保つ。
+- **フックの止め方の向き**: 導入の失敗・未完了は次の入力を止める（session-install）。手順書の先読みの強制は、判定できない入力・状態の読み書きの失敗・手順書が無いときは通す（kiro-gate）。未読のままの終了は 1 回だけ止める。
+- **uninstall はフックの登録と運用の区画だけを外す**: 配置物や設定ファイルは消さない（利用者が git で確かめて消す）。
 - **このリポジトリ自身にも適用する**: 導入コマンドができたら、このリポジトリにも同じ方法で導入し、作るものを自分で使って確かめる。
 
 ---
 _依存の一覧ではなく、決まりと判断を書く_
 
-_updated_at: 2026-11-19（session-install を反映）_
+_updated_at: 2026-11-24（単純化した 3 つの spec の取り込みと Codex への登録を反映）_

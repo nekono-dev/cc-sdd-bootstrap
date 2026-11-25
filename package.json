@@ -15,8 +15,11 @@
     ".agent-hooks/cc-sdd-bootstrap/install-cc-sdd.mjs",
     ".agent-hooks/cc-sdd-bootstrap/install-rules.mjs",
     ".agent-hooks/cc-sdd-bootstrap/config-schema.mjs",
+    ".agent-hooks/cc-sdd-bootstrap/subagent-roles.mjs",
     ".agent-hooks/cc-sdd-bootstrap/kiro-gate.mjs",
-    ".agent-hooks/cc-sdd-bootstrap/kiro-gate-rules.mjs"
+    ".agent-hooks/cc-sdd-bootstrap/kiro-gate-rules.mjs",
+    ".agent-hooks/cc-sdd-bootstrap/subagent-check.mjs",
+    ".agent-hooks/cc-sdd-bootstrap/delegate.mjs"
   ],
   "scripts": {
     "test": "node --test \"test/**/*.test.mjs\""

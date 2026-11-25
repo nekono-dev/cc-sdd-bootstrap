@@ -1,6 +1,9 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { CONFIG_FORMAT, formatProblem } from "../.agent-hooks/cc-sdd-bootstrap/config-schema.mjs";
+import { readFileSync } from "node:fs";
+import { subagentsField } from "../.agent-hooks/cc-sdd-bootstrap/subagent-roles.mjs";
+import { configFields as baseFields } from "../.agent-hooks/cc-sdd-bootstrap/config-schema.mjs";
 import * as viaLib from "../lib/config-schema.mjs";
 
 test("format が undefined の場合、適切なエラーメッセージを返す", () => {
@@ -32,4 +35,16 @@ test("format が CONFIG_FORMAT + 1 の場合、新しい形式のエラーメッ
 test("lib/config-schema.mjs 経由でも formatProblem が同一関数であること、および configFields の存在を確認", () => {
   assert.strictEqual(viaLib.formatProblem, formatProblem);
   assert.ok("configFields" in viaLib);
+});
+
+test("配置物の項目定義は導入に使う項目だけを持ち、何も読み込まない", () => {
+  assert.deepEqual(baseFields.map((f) => f.path), ["ccSdd.version", "ccSdd.lang"]);
+  const text = readFileSync(new URL("../.agent-hooks/cc-sdd-bootstrap/config-schema.mjs", import.meta.url), "utf8");
+  assert.doesNotMatch(text, /^\s*import\s/m);
+  assert.doesNotMatch(text, /\bimport\s*\(/);
+});
+
+test("lib の configFields は基本の項目に役割表の項目をつなぐ", () => {
+  assert.deepEqual(viaLib.configFields.map((f) => f.path), ["ccSdd.version", "ccSdd.lang", "subagents"]);
+  assert.strictEqual(viaLib.configFields.at(-1), subagentsField);
 });

@@ -7,6 +7,8 @@ export const FAILURE_RECORD = ".cache/cc-sdd-install.failed";
 export const STATE_PATH = ".cache/cc-sdd-install.state.json";
 /** 標準文書に書き足した運用の区画の開始目印（installer-core の値と合わせる） */
 export const SECTION_BEGIN_MARKER = "<!-- cc-sdd-bootstrap:begin（この区画は cc-sdd の導入のたびに書き足される。編集しない） -->";
+/** 運用の区画の終わりの目印（installer-core の AGENT_SECTION_MARKERS.end と同じ値。配置物は lib を読めないので同じ値を持つ） */
+export const SECTION_END_MARKER = "<!-- cc-sdd-bootstrap:end -->";
 /** 導入中の印（同時の実行を防ぐ）。作成時に排他的に作り、導入の終わりに消す */
 export const LOCK_PATH = ".cache/cc-sdd-install.lock";
 export const RETRY_COMMAND = "node .agent-hooks/cc-sdd-bootstrap/install-cc-sdd.mjs";
@@ -126,16 +128,68 @@ function isRelativePath(p) {
   return !p.split("/").some((seg) => seg === "" || seg === "." || seg === "..");
 }
 
+/** 文書の中の区画の範囲（開始の目印の行の頭から、終わりの目印の行の末尾まで。終わりが無ければ末尾まで）。区画が無ければ null */
+function findSectionRange(text) {
+  let offset = 0;
+  let start = -1;
+  for (const line of text.split("\n")) {
+    const bare = line.endsWith("\r") ? line.slice(0, -1) : line;
+    if (start < 0 && bare === SECTION_BEGIN_MARKER) start = offset;
+    else if (start >= 0 && bare === SECTION_END_MARKER) return { start, end: offset + bare.length };
+    offset += line.length + 1;
+  }
+  return start < 0 ? null : { start, end: text.length };
+}
+
+const normalizeNewlines = (text) => text.replace(/\r\n/g, "\n");
+
+/**
+ * 文書の区画の状態を返す。stale は、区画があり中身が配置物の区画の文章と違うこと。
+ * 配置物の文章に開始の目印が無いときは比べられないので stale にしない。
+ * @param {string} docText
+ * @param {string} sectionText 配置物の区画の文章
+ */
+export function inspectSection(docText, sectionText) {
+  const range = findSectionRange(docText);
+  if (range === null) return { present: false, stale: false };
+  if (!sectionText.split(/\r?\n/).includes(SECTION_BEGIN_MARKER)) return { present: true, stale: false };
+  const current = normalizeNewlines(docText.slice(range.start, range.end)).trimEnd();
+  return { present: true, stale: current !== normalizeNewlines(sectionText).trimEnd() };
+}
+
+/**
+ * 置換に使う配置物の文章の検証。開始と終わりの目印の行がそれぞれ 1 つで、開始が先であること。
+ * 問題があれば理由の文字列、無ければ null。
+ */
+export function validateSectionText(sectionText) {
+  const lines = normalizeNewlines(sectionText).split("\n");
+  const begins = lines.flatMap((line, i) => (line === SECTION_BEGIN_MARKER ? [i] : []));
+  const ends = lines.flatMap((line, i) => (line === SECTION_END_MARKER ? [i] : []));
+  if (begins.length !== 1 || ends.length !== 1) return "区画の文章の開始・終わりの目印がそれぞれ 1 つではありません。";
+  if (begins[0] > ends[0]) return "区画の文章の終わりの目印が開始の目印より前にあります。";
+  return null;
+}
+
+/** 区画だけを配置物の文章で置き換えた文書を返す。区画の外は保つ。区画が無ければ null */
+export function replaceSection(docText, sectionText) {
+  const range = findSectionRange(docText);
+  if (range === null) return null;
+  const rest = docText.slice(range.end);
+  const section = rest === "" && range.end === docText.length ? sectionText : sectionText.trimEnd();
+  return `${docText.slice(0, range.start)}${section}${rest}`;
+}
+
 /**
  * 判断: 材料（InstallFacts）から、導入するか・省くか・止めるかを返す（内容は比べない。4.4）。
- * 順序: 設定の誤り → 導入中の印 → 失敗の記録 → 状態の欠け → 版・言語 → 記録した道筋の欠け → 運用の区画の欠け → 省く。
+ * 順序: 設定の誤り → 導入中の印 → 失敗の記録 → 状態の欠け → 版・言語 → 記録した道筋の欠け → 運用の区画の欠け → 区画の中身の違い（区画だけ書き直す。subagent-delegation 5.15）→ 省く。
  * @param {{
  *   config: { ok: true, config: { version: string, lang: string } } | { ok: false, reason: string },
  *   state: { version: string, lang: string, files: string[] } | null,
  *   lock: { present: false } | { present: true, ageMs: number },
  *   failure: { present: false } | { present: true, text: string | null },
  *   missingFiles: string[],
- *   sectionPresent: { claude: boolean, codex: boolean }
+ *   sectionPresent: { claude: boolean, codex: boolean },
+ *   sectionStale?: { claude: boolean, codex: boolean }
  * }} facts
  */
 export function decideInstall(facts) {
@@ -151,6 +205,8 @@ export function decideInstall(facts) {
   if (!facts.sectionPresent.claude || !facts.sectionPresent.codex) {
     return { action: "install", reason: "section-missing" };
   }
+  const stale = ["claude", "codex"].filter((tool) => facts.sectionStale?.[tool] === true);
+  if (stale.length > 0) return { action: "rewrite-section", tools: stale };
   return { action: "skip" };
 }
 
@@ -210,6 +266,14 @@ export function messageInstalled(config) {
   return `cc-sdd ${config.version}（言語: ${config.lang}）を導入しました。Claude Code・Codex の両方について、スキル（.claude/skills/kiro-*・.agents/skills/kiro-*）、.kiro/settings/、CLAUDE.md・AGENTS.md を書き換え、運用の区画を末尾へ書き足しました。`;
 }
 
+const SECTION_DOCS = { claude: "CLAUDE.md", codex: "AGENTS.md" };
+
+/** 区画だけを書き直したことを利用者へ知らせる */
+export function messageSectionRewritten(tools) {
+  const docs = tools.map((tool) => SECTION_DOCS[tool]).join("・");
+  return `運用の区画が配置物と違っていたため、${docs} の区画だけを書き直しました（cc-sdd 本体は入れ直していません）。`;
+}
+
 /** 入れ直しを省いたことを利用者へ知らせる */
 export function messageSkipped(config) {
   return `cc-sdd ${config.version}（言語: ${config.lang}）は揃っているため、入れ直しを省きました。`;
@@ -236,9 +300,13 @@ export function messageReadSkillDirectly(tool, prompt) {
 /**
  * 導入が止まった理由と復旧の方法を示す。
  * 失敗は詳細（無ければ完了を確認できない旨）と再試行のコマンド。導入中は別のセッション、古い印は中断の可能性と、印を消して再試行する 1 行。
- * @param {{ kind: "failed", detail: string | null } | { kind: "busy", stale: boolean }} input
+ * 区画の書き直しの失敗（section）は導入の失敗ではなく、原因を直せば区画だけがやり直される。
+ * @param {{ kind: "failed", detail: string | null } | { kind: "busy", stale: boolean } | { kind: "section", detail: string }} input
  */
 export function messageBlocked(input) {
+  if (input.kind === "section") {
+    return `運用の区画の書き直しに失敗したため、入力を止めています。理由: ${input.detail}\n原因を直したうえで、通常の端末で次を実行して再試行してください（cc-sdd 本体は入れ直されず、区画だけがやり直される。Claude の外で実行する）: ${RETRY_COMMAND}`;
+  }
   if (input.kind === "failed") {
     const why = input.detail === null
       ? "理由の詳細は取得できず、導入の完了を確認できない。"
