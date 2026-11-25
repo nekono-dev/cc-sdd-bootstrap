@@ -123,8 +123,8 @@ sequenceDiagram
 
 判断:
 - `init`・`update` は、計画の変更が 0 件でも承認の段階を呼ぶ（記録が無いだけの場合を直すため）。
-- `uninstall` は、フックの登録を外す前に `hooks.json` を読んでキーを求め、記録を取り除く。
-- 設定が false のときは、`init`・`update` では何も書かず理由を表示する。`uninstall` では取り除きを行う（過去に書いた記録を残さないため）。
+- `uninstall` は、フックの登録を外す前に `hooks.json` を読んでキーを求め、現在のハッシュと一致する記録だけを取り除く（利用者が別の定義で承認した記録・手で変えた記録は残す）。
+- 設定が false のときは、`init`・`update`・`uninstall` のいずれでも Codex の設定を変更せず、理由（設定で止めている）を表示する（4.2・4.4）。過去に書いた記録を外したい場合は、設定を true に戻して `uninstall` を実行するか、手で消す。
 - 準備スクリプトは、導入の成否に関わらず（導入に失敗して停止する経路を除く）、成功した経路の最後に呼ぶ。失敗しても導入の結果を変えない。
 
 ## Requirements Traceability
@@ -144,14 +144,14 @@ sequenceDiagram
 | 3.2 | Codex が未導入でも失敗にしない | `codex-trust.mjs` | 設定の置き場所が無ければ `status: "skipped"` と理由 |
 | 3.3 | フックの中から書かない | `install-cc-sdd.mjs` | `session-start`・`user-prompt-submit` の経路は呼ばない |
 | 4.1 | 設定で切り替え、既定は書く | `config-schema.mjs`、`readTrustSetting` | `codex.trustHooks`（既定 true） |
-| 4.2 | 止めたら書かず、子の省略もしない | `lib/cli.mjs`、`delegate.mjs` | 設定が false なら書き込み・指定とも行わない |
+| 4.2 | 止めたら変更せず、子の省略もしない | `codex-trust.mjs`、`delegate.mjs` | 設定が false なら `write`・`remove` とも `disabled`、指定も付けない |
 | 4.3 | 書いた場所と件数を表示 | `codex-trust-rules.mjs` | `messageTrust`（追加・更新・変更なしの件数と設定ファイルの道筋） |
-| 4.4 | 書かなかった理由を表示 | `codex-trust-rules.mjs` | `messageTrust`（無効・失敗・未導入の理由） |
+| 4.4 | 書かなかった理由を表示 | `codex-trust-rules.mjs`、`install-cc-sdd.mjs` | `messageTrust`（無効・失敗・未導入の理由。準備スクリプトでも表示） |
 | 5.1 | 子の起動に省く指定を付ける | `subagent-roles.mjs`、`delegate.mjs` | `buildCliCommand` の `bypassHookTrust` |
 | 5.2 | 付けたことを表示 | `delegate.mjs` | 標準エラー出力へ 1 行 |
 | 5.3 | 設定に保存しない | `subagent-roles.mjs` | 引数だけ（`--config` は使わない） |
 | 5.4 | 使えない指定は起動せず案内 | `codex-trust.mjs`、`delegate.mjs` | `codex exec --help` に指定が無ければ `Stop` |
-| 6.1 | uninstall で自分の記録だけ外す | `lib/cli.mjs`、`codex-trust.mjs` | `applyCodexTrust(remove)`（外す前の `hooks.json` から求める） |
+| 6.1 | uninstall で自分の記録だけ外す | `lib/cli.mjs`、`codex-trust.mjs`、`codex-trust-rules.mjs` | `applyCodexTrust(remove)`（外す前の `hooks.json` から求め、現在のハッシュと一致する記録だけを外す。worktree からは外さない） |
 | 6.2 | 合わなくなっても壊れない | Codex の挙動 | 未承認になるだけ。設計での対応は不要 |
 | 6.3 | 手での承認の方法を文章で案内 | `lib/catalog.mjs` | Codex 向けの運用の区画の文章 |
 | 6.4 | 再実行できる確認手順 | `poc/codex-hook-trust/` | `run.mjs`・`probe.mjs`・`result.md` |
@@ -187,7 +187,7 @@ export function computeTrustEntries(hooksJsonText, hooksJsonPath) {}
 
 /**
  * config.toml の新しい本文を計算する。mode "write": 表を追加・trusted_hash を更新。
- * mode "remove": trusted_hash の行を外し、他に項目が無くなった表は表ごと外す。
+ * mode "remove": 現在のハッシュと一致する trusted_hash の行だけを外し、他に項目が無くなった表は表ごと外す（一致しない記録は残して counts.unchanged に数える）。
  * 想定外の書き方（hooks.state の別の書式、同じキーの表の重複、見出しの崩れ）では ok: false。
  * @param {string} configText
  * @param {TrustEntry[]} entries
@@ -204,7 +204,8 @@ export function messageTrust(result) {}
 - イベント名は `SessionStart`→`session_start`、`UserPromptSubmit`→`user_prompt_submit`、`PreToolUse`→`pre_tool_use`、`PostToolUse`→`post_tool_use`、`Stop`→`stop`。表にないイベントは skipped。
 - 行単位の編集の規則: 見出し `[hooks.state."<キー>"]` を完全一致で探す。表の本体は次の見出しの前まで。`trusted_hash = "…"` の行だけを置き換える。無ければ見出しの直後へ足す。新しい表は本文の末尾に空行を挟んで足す。改行コード（LF・CRLF）と末尾の改行の有無を保つ。
 - 表に `enabled` など他の項目があるとき、`remove` は `trusted_hash` の行だけ外し表は残す。
-- 想定外の書き方の判定（`ok: false`）: 見出し以外の行で `hooks` から始まるキー（`hooks = {…}`・`hooks.state.…`）、`[hooks]` の表の中の `state`、同じキーの表の重複、`[` で始まるが閉じていない行。
+- 扱える構文の限定: 本文に複数行の文字列（`"""` または `'''`）が 1 つでもあれば、見出しや `trusted_hash` の行を安全に識別できないので `ok: false`（変更しない）。行の先頭が `[` の見出しは、閉じた `]` で終わる行だけを見出しとみなす。
+- 想定外の書き方の判定（`ok: false`）: 見出し以外の行で `hooks` から始まるキー（`hooks = {…}`・`hooks.state.…`）、`[hooks]` の表の中の `state`、同じキーの表の重複、閉じていない見出し、複数行の文字列。
 
 ### codex-trust.mjs
 
@@ -226,25 +227,25 @@ export function applyCodexTrust(options) {}
 export function bypassFlagSupported() {}
 ```
 
-- 設定の場所: `CODEX_HOME` があれば `$CODEX_HOME/config.toml`、無ければ `<home>/.codex/config.toml`。置き場所の**ディレクトリが無ければ** `skipped`（Codex が未導入・未起動。ディレクトリは作らない）。ファイルだけ無いときは空の本文として新しく作る。
+- 設定の場所: `CODEX_HOME` があれば `$CODEX_HOME/config.toml`、無ければ `<home>/.codex/config.toml`。置き場所の**ディレクトリが無ければ** `skipped`（理由は「Codex が未導入、または一度も起動されていない」。`codex` の実行ファイルの有無とは分けて判定しない。初回の起動が作るディレクトリを導入側が先に作って、初回の動作を変えないため、ディレクトリは作らない）。ファイルだけ無いときは空の本文として新しく作る。
 - 設定ファイルがシンボリックリンクなら、リンク先の実体へ書く（リンクを置き換えない）。
 - 本体の checkout: `git rev-parse --path-format=absolute --git-common-dir` の末尾が `.git` ならその親。取れない・ベアなら `repoRoot` の実体の道筋。キーの `hooks.json` の道筋は本体の checkout のもの（Codex が読む側）。`repoRoot` が worktree で、本体の `.codex/hooks.json` が無い、または自分のフックの一覧が worktree と違うときは `notes` へ 2.3 の案内を足す。
-- 書き込み: 同じディレクトリへ一時ファイルを書き（元の権限を保つ）、直前に元の本文を読み直して変わっていなければ置き換える。変わっていたら 1 回だけ計算し直し、それでも変わっていたら `failed`。
-- 設定が false のとき、`write` は `disabled` を返し何も書かない。`remove` は設定に関わらず実行する。
+- 書き込み: 同じディレクトリへ一時ファイルを書き（元の権限を保つ）、直前に元の本文を読み直して変わっていなければ置き換える。変わっていたら 1 回だけ計算し直し、それでも変わっていたら `failed`。保証の範囲: 読み直しと置き換えの間の極めて短い隙間での他のプロセスの更新までは防げない（ロックは Codex と共有していない）。承認の確認画面は利用者が対話で操作するので実際に重なる確率は低く、起きても次の `update` で記録が直る。シンボリックリンクは書く直前に実体を求め直し、置き換え先を 1 回の呼び出しの中で固定する。
+- 設定が false のとき、`write`・`remove` とも `disabled` を返し何も変更しない。
 - 例外（読み書きの失敗・想定外の書式・`hooks.json` の解析失敗）は `failed` に変換する。
 
 ### lib/cli.mjs 統合
 
 - `init`・`update`: `applyPlan` の成功後、`applyCodexTrust({ repoRoot: root, mode: "write" })`。計画の変更が 0 件でも呼ぶ。
-- `uninstall`: `applyPlan` の前に `applyCodexTrust({ repoRoot: root, mode: "remove" })`。結果は表示するだけで、取り外しの成否は変えない。
+- `uninstall`: `applyPlan` の前に `applyCodexTrust({ repoRoot: root, mode: "remove" })`。結果は表示するだけで、取り外しの成否は変えない。**worktree から実行したときは取り除かない**（本体の checkout の登録が残り、Codex が読む承認を消してしまうため。`skipped` と理由「本体の checkout で `uninstall` を実行したときに取り除きます」を返す）。
 - `formatSuccess(operation, plan, trust)`: `trust` の結果行を足す。`status` が `written`・`unchanged` のとき、既存の「Codex のフックは信頼の承認が必要です…」の案内を出さない。それ以外は理由と、手での承認の案内を出す。worktree の案内は残す。`computePlan` と `CODEX_TRUST` の通知は変えない（表示の条件だけ変える）。
 - 終了コード: 承認の段階の失敗は終了コードを変えない（要件 1.6）。
 
 ### install-cc-sdd.mjs 統合
-引数なしの経路で、導入・導入済みの省略・区画の書き直しのいずれかが成功した後（失敗で停止する経路の前）に、`readTrustSetting(root)` が true なら `applyCodexTrust({ repoRoot: root, mode: "write" })` を呼び、`messageTrust` の結果を標準出力へ出す。`session-start`・`user-prompt-submit` の経路には足さない（3.3）。この経路では `.cc-sdd-bootstrap.json` の `codex.trustHooks` が false のとき、何もせず理由も出さない（設定で止めている通常の状態として扱う）。
+引数なしの経路で、導入・導入済みの省略・区画の書き直しのいずれかが成功した後（失敗で停止する経路の前）に、`applyCodexTrust({ repoRoot: root, mode: "write" })`（設定の確認は関数の中で行う）を呼び、`messageTrust` の結果を標準出力へ出す。`session-start`・`user-prompt-submit` の経路には足さない（3.3）。設定が false のときも `applyCodexTrust` を呼び、`disabled` の理由（設定 `codex.trustHooks` で止めている）を表示する（4.4）。
 
 ### delegate.mjs 統合
-Codex を起動する前に、`readTrustSetting(root)` が true なら `bypassFlagSupported()` を確かめる。使えなければ `Stop`（「この Codex は承認を省く指定を受け付けません。Codex を更新するか、設定 codex.trustHooks を false にして対話の画面で手で承認してください」）。使えるなら `buildCliCommand` に `bypassHookTrust: true` を渡し、標準エラー出力へ `delegate: 承認の確認を省く指定（--dangerously-bypass-hook-trust）を付けて起動します` を出す。設定が false なら付けない（4.2）。Claude の子には関係しない。
+Codex を起動する前に、`readTrustSetting(root)` が true なら `bypassFlagSupported()` を確かめる。使えなければ `Stop`（「この Codex は承認を省く指定を受け付けません。Codex を更新するか、設定 codex.trustHooks を false にして対話の画面で手で承認してください」）。使えるなら `buildCliCommand` に `bypassHookTrust: true` を渡し、標準エラー出力へ `delegate: 承認の確認を省く指定（--dangerously-bypass-hook-trust）を付けて起動します` を出す。設定が false なら付けない（4.2）。Claude の子には関係しない。`--help` の事前確認は指定が受理される保証ではないので、指定を付けた子が終了コード 2（引数の拒否）で終わったときは、標準エラー出力へ「承認を省く指定が拒否された可能性があります。Codex を更新するか、設定 `codex.trustHooks` を false にして手で承認してください」を足す（5.4）。
 
 ### subagent-roles.mjs（buildCliCommand）
 `target === "codex"` で `setting.bypassHookTrust === true` のとき、`exec` の直後に `--dangerously-bypass-hook-trust` を足す。既存の引数の並びと、`--config` を使わないこと（設定に保存されない、5.3）を保つ。
@@ -269,7 +270,7 @@ Codex を起動する前に、`readTrustSetting(root)` が true なら `bypassFl
 | `config.toml` を読めない・書けない・書式が想定外 | 変更せず `failed` と理由、手での承認の案内。導入・更新は続ける | 1.6 |
 | `hooks.json` を読めない・自分のフックが無い | `failed` または `unchanged`（記録 0 件）と理由 | 1.6 |
 | Codex の設定ディレクトリが無い | `skipped` と理由 | 3.2 |
-| 設定が false | `disabled`（書かない）。`uninstall` は取り除く | 4.2 |
+| 設定が false | `disabled`（`write`・`remove` とも変更しない）。理由を表示 | 4.2、4.4 |
 | 書き込み中に利用者側の更新が起きた | 1 回だけやり直し、だめなら `failed` | 1.4 |
 | 承認を省く指定が使えない Codex | 子を起動せず `Stop` と案内 | 5.4 |
 | 記録が効かない（Codex の版の変更） | Codex は未承認として扱う。文章の補いに戻る | 6.2、6.3 |
@@ -277,7 +278,8 @@ Codex を起動する前に、`readTrustSetting(root)` が true なら `bypassFl
 ## 既知の制約
 - **シンボリックリンク経由で開いたリポジトリ**: Codex は起動した道筋でキーを照合する（`poc/codex-hook-trust/probe.mjs` の A1・A2）。導入側は実体の道筋（`git` が返すもの）で書くので、リンク経由で開くと効かず、未承認として扱われる。手での承認か、実体の道筋で起動することで対処する。運用の区画の文章に 1 文で書く。
 - **古い番号の記録**: 利用者がフックを足して番号がずれると、旧番号の記録が残る。無害だが溜まる。本機能は消さない（他の記録を変更しない、1.4）。
-- **`uninstall` で番号が詰まる**: 自分のフックを外すと、後ろにある利用者のフックの番号が変わり、その記録が効かなくなる場合がある。外す前の番号で自分の記録だけを外し、利用者のフックの記録には触れない。必要なら利用者が手で再承認する。
+- **`uninstall` で番号が詰まる**: 自分のフックを外すと、後ろにある利用者のフックの番号が変わり、その記録が効かなくなる場合がある。外す前の番号で、ハッシュが一致する自分の記録だけを外し、利用者のフックの記録には触れない。必要なら利用者が手で再承認する。
+- **「自分が書いた記録」の識別**: 状態ファイルを持たないので、書いたのが本機能か利用者の承認かは区別できない。`uninstall` では、外す定義と同じハッシュの記録は不要になる記録とみなして外し、一致しない記録は残す。
 - 計算式は Codex の内部実装に依存する。履歴の調査では導入以来ほぼ不変（`poc/codex-hook-trust/result.md`）。変わったら `run.mjs` が不一致を示し、案 B（子の承認の省略）が保険になる。
 
 ## Testing Strategy
@@ -285,17 +287,17 @@ Codex を起動する前に、`readTrustSetting(root)` が true なら `bypassFl
 ### 単体（純粋な部分）— `test/codex-trust-rules.test.mjs`
 - 実機で承認された記録を試験データにする: このリポジトリの Codex 用の `hooks.json`（8 件）から求めたハッシュが、Codex の確認画面で承認されて `config.toml` に残った 8 件と一致する（1.1・1.2）。代表: `session_start:0:0` → `sha256:dae1248d3bfbde04c6994e47b28a87389bf5331cb5c35efdf713634c3ad1aa0e`。
 - 利用者のフックが先にあるとき、自分のフックの番号が利用者のフックを数えた値になる。印のないフックは対象外（1.4）。
-- `planTrustEdit`: 追加・更新（古いハッシュ）・変更なし（同じ本文を返す）・コメントと他の表を保つ・CRLF と末尾の改行の有無を保つ・`enabled` を持つ表で `remove` が表を残す・想定外の書式（インラインの `hooks`・重複する表）で `ok: false`（1.2〜1.4、1.6、6.1）。
+- `planTrustEdit`: 追加・更新（古いハッシュ）・変更なし（同じ本文を返す）・コメントと他の表を保つ・CRLF と末尾の改行の有無を保つ・`enabled` を持つ表で `remove` が表を残す・`remove` はハッシュが一致しない記録を残す・想定外の書式（インラインの `hooks`・重複する表・複数行の文字列・閉じていない見出し）で `ok: false`（1.2〜1.4、1.6、6.1）。
 - `OWNED_MARKER` が `lib/catalog.mjs` の値と一致する。`messageTrust` の各 `status`（4.3・4.4）。
 
 ### 入出力 — `test/codex-trust.test.mjs`（一時ディレクトリ）
-- 書き込み・変更なし・設定ディレクトリが無いとき `skipped`・設定が false のとき `disabled`・`remove`・`CODEX_HOME` の優先・シンボリックリンクの `config.toml` で実体へ書く・読み取り専用で `failed`・worktree から実行して本体の道筋で書く・本体の `hooks.json` が違うとき `notes`（1.x、2.x、3.2、4.2、6.1）。
+- 書き込み・変更なし・設定ディレクトリが無いとき `skipped`・設定が false のとき `write`・`remove` とも `disabled`・`remove`・worktree からの `remove` は `skipped` で記録を残す・書く直前に別のプロセスが本文を変えたときのやり直しと `failed`・`CODEX_HOME` の優先・シンボリックリンクの `config.toml` で実体へ書く・読み取り専用で `failed`・worktree から実行して本体の道筋で書く・本体の `hooks.json` が違うとき `notes`（1.x、2.x、3.2、4.2、6.1）。
 - `bypassFlagSupported`: 偽の `codex` を `PATH` に置いて、指定が出る・出ない・起動できないを確かめる（5.4）。
 
 ### 統合
 - `test/cli.test.mjs`: `init`・`update` の後に結果行が出る、計画が 0 件でも呼ばれる、`uninstall` は外す前に呼ばれる、失敗しても終了コードが変わらない、設定が false のとき書かない、`written`・`unchanged` のとき「承認が必要です」の案内が出ない（1.1、1.6、4.x、6.1）。
-- `test/install-cc-sdd.test.mjs`・`test/entry-harness.test.mjs`: 引数なしの経路で呼ばれ、`session-start`・`user-prompt-submit` では呼ばれない（3.1・3.3）。
-- `test/subagent-roles.test.mjs`・`test/delegate.test.mjs`: Codex の子の引数に指定が入る・`--config` に入らない・設定が false なら入らない・使えない Codex で `Stop`（5.1〜5.4）。
+- `test/install-cc-sdd.test.mjs`・`test/entry-harness.test.mjs`: 引数なしの経路で呼ばれ、`session-start`・`user-prompt-submit` では呼ばれない・設定が false のとき理由が出る（3.1・3.3・4.4）。
+- `test/subagent-roles.test.mjs`・`test/delegate.test.mjs`: Codex の子の引数に指定が入る・`--config` に入らない・設定が false なら入らない・使えない Codex で `Stop`・指定を付けた子が終了コード 2 で終わったときの案内（5.1〜5.4）。
 - `test/config-schema.test.mjs`・`test/catalog.test.mjs`: 新しい項目と登録（4.1）、運用の区画の文章に手での承認の方法がある（6.3）。
 
 ### 実機（再実行できる確認）
