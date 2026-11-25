@@ -61,3 +61,14 @@
 | 信頼済みのプロジェクトの worktree で、承認を省く指定を付け、読み取り専用で起動 | SessionStart・UserPromptSubmit・Stop のフックが動いて完了し、子は約 4.5 秒で応答した（フックは子を止めなかった） |
 
 これまでの PoC（`run.mjs --e2e`・`probe.mjs`）の一時の設定は、すべてプロジェクトの信頼（`[projects.<道筋>] trust_level = "trusted"`）を書いてから確かめている。本機能の範囲は承認の記録だけで、プロジェクトの信頼は利用者が与える前提（利用者の決定）。
+
+## Codex クラウドでの確認（2026-11-25、`cloud-result.md`）
+
+結果は大半が未確認だった。確認できたのは次のとおり。
+
+- セッションの開始時の作業場所は `/workspace` で、Git リポジトリではなかった（対象のリポジトリは開始後に clone した）。そのため、対象のリポジトリでのセッション開始フックは観察できていない。
+- `codex-cli 0.172.0-alpha.2`。`~/.codex`（`/home/agent/.codex`）は**読み取り専用**で、`config.toml` は 0 バイト（`[projects]`・`[hooks.state]` とも記録なし）。`touch` は `Read-only file system` で失敗した。
+- セッションの中の `codex exec` は `failed to initialize in-process app-server client: Read-only file system` で初期化に失敗し、プロジェクトの信頼・フックの承認・承認を省く指定の挙動は確かめられなかった。`codex exec --help` には指定が出る。
+- 通常の実行ではネットワークに接続できず（`Failed to connect to proxy port 8080`）、ネットワークの権限を足すと GitHub の clone は成功した。
+
+設計への引き継ぎ: クラウドのセッションの中から `~/.codex/config.toml` へ書くことはできない（読み取り専用）。本機能の書き込みは、要件 1.6 と設計のとおり `failed`（設定を変えず、理由と手での承認の案内を表示し、導入・更新は続ける）になる。準備スクリプトがセッションより前に、書き込める状態で動くかは未確認。Codex のクラウドは利用者の決定（クラウドは対象外の認識）どおり、本機能の保証の範囲外として扱う。
