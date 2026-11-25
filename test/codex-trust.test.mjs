@@ -6,6 +6,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { spawnSync } from "node:child_process";
 import { readTrustSetting, applyCodexTrust, resolveHooksTarget } from "../.agent-hooks/cc-sdd-bootstrap/codex-trust.mjs";
 import { messageTrust } from "../.agent-hooks/cc-sdd-bootstrap/codex-trust-rules.mjs";
 
@@ -89,10 +90,15 @@ test("readTrustSetting: codex.trustHooks が false のときだけ false を返�
   assert.equal(readTrustSetting(repo), false);
 });
 
-test("resolveHooksTarget: リポジトリ直下の .codex/hooks.json の道筋と notes（空）を返す", () => {
+test("resolveHooksTarget: git のリポジトリではないディレクトリは実体の道筋で、notes は空・isWorktree は false", () => {
   const repo = makeRepo();
   const target = resolveHooksTarget(repo);
-  assert.deepEqual(target, { hooksJsonPath: path.join(repo, ".codex", "hooks.json"), notes: [] });
+  assert.deepEqual(target, {
+    hooksJsonPath: path.join(repo, ".codex", "hooks.json"),
+    notes: [],
+    isWorktree: false,
+    mainRoot: repo,
+  });
 });
 
 test("write: 初回は written、件数 8、設定ファイルに 8 件の記録が入る", () => {
@@ -421,4 +427,244 @@ test("書く直前にシンボリックリンクの向き先が変わったら f
   assert.deepEqual(fs.readdirSync(dirA).sort(), ["a.toml"]);
   assert.deepEqual(fs.readdirSync(dirB).sort(), ["b.toml"]);
   assert.ok(codexDir);
+});
+
+// ---- タスク 3.2: 本体の checkout の特定と worktree の扱い ----
+// 以下の試験は一時ディレクトリで実際に git init・git worktree add を使う。
+// コミットには利用者の git の設定を使わない（GIT_CONFIG_GLOBAL・GIT_CONFIG_SYSTEM を空にする）。
+
+/** 試験用の git の実行環境（利用者の git の設定に依存しない） */
+function gitEnv() {
+  const env = { ...process.env, GIT_CONFIG_GLOBAL: "", GIT_CONFIG_SYSTEM: "" };
+  delete env.GIT_DIR;
+  delete env.GIT_WORK_TREE;
+  return env;
+}
+
+/** 試験用の git を実行する。失敗したら試験を失敗させる */
+function git(cwd, args) {
+  const result = spawnSync("git", ["-c", "user.name=t", "-c", "user.email=t@example.invalid", ...args], {
+    cwd,
+    encoding: "utf8",
+    env: gitEnv(),
+  });
+  assert.equal(result.status, 0, `git ${args.join(" ")} が失敗: ${result.stderr}`);
+  return result.stdout;
+}
+
+/** 本体の checkout を一時の git リポジトリとして作り、設定と hooks.json を commit する */
+function makeGitMain() {
+  const main = tmpDir("codex-trust-main");
+  git(main, ["init", "-q"]);
+  fs.writeFileSync(path.join(main, ".cc-sdd-bootstrap.json"), JSON.stringify(DEFAULT_SETTING));
+  fs.mkdirSync(path.join(main, ".codex"));
+  fs.copyFileSync(SAMPLE_PATH, path.join(main, ".codex", "hooks.json"));
+  git(main, ["add", "-A"]);
+  git(main, ["commit", "-q", "-m", "init"]);
+  return main;
+}
+
+/** 本体から worktree（detach）を作る。作った worktree の実体の道筋を返す */
+function addWorktree(main) {
+  const wt = tmpDir("codex-trust-wt");
+  git(main, ["worktree", "add", "-q", "--detach", wt]);
+  return wt;
+}
+
+/** 本体の checkout の案内文（resolveHooksTarget の notes と同じ文） */
+const mismatchNote = (mainRoot) =>
+  `本体の checkout（${mainRoot}）の .codex/hooks.json が、この worktree のものと違う（または無い）ため、Codex が読むフックと承認の記録が合わない可能性があります。本体の checkout でも同じ導入（update）を実行してください。`;
+
+test("resolveHooksTarget: 本体の checkout は実体の道筋・isWorktree は false・notes は空", () => {
+  const main = makeGitMain();
+  assert.deepEqual(resolveHooksTarget(main), {
+    hooksJsonPath: path.join(main, ".codex", "hooks.json"),
+    notes: [],
+    isWorktree: false,
+    mainRoot: main,
+  });
+});
+
+test("resolveHooksTarget: worktree は本体の checkout を mainRoot にし、hooks.json が同じなら notes は空", () => {
+  const main = makeGitMain();
+  const wt = addWorktree(main);
+  assert.deepEqual(resolveHooksTarget(wt), {
+    hooksJsonPath: path.join(main, ".codex", "hooks.json"),
+    notes: [],
+    isWorktree: true,
+    mainRoot: main,
+  });
+});
+
+test("resolveHooksTarget: worktree 側だけ hooks.json が違うと notes に案内が出る", () => {
+  const main = makeGitMain();
+  const wt = addWorktree(main);
+  const wtHooks = path.join(wt, ".codex", "hooks.json");
+  fs.writeFileSync(wtHooks, fs.readFileSync(wtHooks, "utf8").replace('"timeout": 30', '"timeout": 31'));
+
+  const target = resolveHooksTarget(wt);
+  assert.equal(target.isWorktree, true);
+  assert.equal(target.mainRoot, main);
+  assert.deepEqual(target.notes, [mismatchNote(main)]);
+});
+
+test("resolveHooksTarget: 本体に .codex/hooks.json が無いと notes に案内が出る", () => {
+  const main = makeGitMain();
+  const wt = addWorktree(main);
+  fs.rmSync(path.join(main, ".codex", "hooks.json"));
+
+  assert.deepEqual(resolveHooksTarget(wt).notes, [mismatchNote(main)]);
+});
+
+test("resolveHooksTarget: worktree 側の自分のフックが 0 件でも「違う」とみなして notes に案内が出る", () => {
+  const main = makeGitMain();
+  const wt = addWorktree(main);
+  fs.writeFileSync(path.join(wt, ".codex", "hooks.json"), JSON.stringify({ hooks: {} }));
+
+  assert.deepEqual(resolveHooksTarget(wt).notes, [mismatchNote(main)]);
+});
+
+test("resolveHooksTarget: シンボリックリンク経由の repoRoot は実体の道筋を返す", () => {
+  const main = makeGitMain();
+  const link = path.join(tmpDir("codex-trust-link"), "repo-link");
+  fs.symlinkSync(main, link);
+
+  assert.deepEqual(resolveHooksTarget(link), {
+    hooksJsonPath: path.join(main, ".codex", "hooks.json"),
+    notes: [],
+    isWorktree: false,
+    mainRoot: main,
+  });
+});
+
+test("resolveHooksTarget: ベアのリポジトリのそばの worktree は本体を特定できず、実体の道筋で動く（isWorktree は false）", () => {
+  const source = makeGitMain();
+  const base = tmpDir("codex-trust-bare");
+  git(base, ["clone", "-q", "--bare", source, "bare.git"]);
+  const wt = tmpDir("codex-trust-bare-wt");
+  git(path.join(base, "bare.git"), ["worktree", "add", "-q", "--detach", wt]);
+
+  assert.deepEqual(resolveHooksTarget(wt), {
+    hooksJsonPath: path.join(wt, ".codex", "hooks.json"),
+    notes: [],
+    isWorktree: false,
+    mainRoot: wt,
+  });
+});
+
+test("write: 本体の checkout で書くと、キーの道筋は本体の .codex/hooks.json の実体の道筋になる", () => {
+  const main = makeGitMain();
+  const { home, configPath } = makeHome();
+  const result = applyCodexTrust({ repoRoot: main, mode: "write", env: NO_ENV, home });
+
+  assert.equal(result.status, "written");
+  assert.equal(result.counts.added, 8);
+  assert.deepEqual(result.notes, []);
+  const text = fs.readFileSync(configPath, "utf8");
+  assert.ok(text.includes(`[hooks.state."${path.join(main, ".codex", "hooks.json")}:session_start:0:0"]`));
+});
+
+test("write: worktree から書くと、本体の checkout の道筋のキーで書かれ、worktree の道筋のキーは書かれない", () => {
+  const main = makeGitMain();
+  const wt = addWorktree(main);
+  const { home, configPath } = makeHome();
+  const result = applyCodexTrust({ repoRoot: wt, mode: "write", env: NO_ENV, home });
+
+  assert.equal(result.status, "written");
+  assert.equal(result.counts.added, 8);
+  const text = fs.readFileSync(configPath, "utf8");
+  assert.ok(text.includes(`[hooks.state."${path.join(main, ".codex", "hooks.json")}:session_start:0:0"]`));
+  assert.ok(!text.includes(path.join(wt, ".codex", "hooks.json")), "worktree の道筋のキーは書かれない");
+  assert.deepEqual(result.notes, [], "本体と worktree の hooks.json が同じなら案内は出ない");
+});
+
+test("write: worktree で hooks.json が本体と違うと、結果の notes に案内が出て、本体の道筋で書かれる", () => {
+  const main = makeGitMain();
+  const wt = addWorktree(main);
+  const wtHooks = path.join(wt, ".codex", "hooks.json");
+  fs.writeFileSync(wtHooks, fs.readFileSync(wtHooks, "utf8").replace('"timeout": 30', '"timeout": 31'));
+  const { home, configPath } = makeHome();
+  const result = applyCodexTrust({ repoRoot: wt, mode: "write", env: NO_ENV, home });
+
+  assert.equal(result.status, "written");
+  assert.deepEqual(result.notes, [mismatchNote(main)]);
+  assert.equal(result.configPath, configPath);
+});
+
+test("write: 本体に hooks.json が無い worktree は skipped になり、notes に案内が入る", () => {
+  const main = makeGitMain();
+  const wt = addWorktree(main);
+  fs.rmSync(path.join(main, ".codex", "hooks.json"));
+  const { home, configPath } = makeHome();
+  const result = applyCodexTrust({ repoRoot: wt, mode: "write", env: NO_ENV, home });
+
+  assert.equal(result.status, "skipped");
+  assert.equal(result.reason, ".codex/hooks.json がありません");
+  assert.deepEqual(result.notes, [mismatchNote(main)]);
+  assert.ok(!fs.existsSync(configPath), "設定ファイルは作られない");
+});
+
+test("remove: worktree からは skipped（理由に worktree を含む）で、設定ファイルは変わらない", () => {
+  const main = makeGitMain();
+  const wt = addWorktree(main);
+  const { home, configPath } = makeHome();
+  assert.equal(applyCodexTrust({ repoRoot: main, mode: "write", env: NO_ENV, home }).status, "written");
+  const before = fs.readFileSync(configPath, "utf8");
+
+  const result = applyCodexTrust({ repoRoot: wt, mode: "remove", env: NO_ENV, home });
+  assert.equal(result.status, "skipped");
+  assert.ok(result.reason.includes("worktree"), `理由に worktree を含む: ${result.reason}`);
+  assert.equal(result.configPath, null);
+  assert.equal(result.counts, null);
+  assert.equal(fs.readFileSync(configPath, "utf8"), before, "設定ファイルの本文は変わらない");
+});
+
+test("remove: worktree からで設定ファイルが無いときは skipped のままで、ファイルを作らない", () => {
+  const main = makeGitMain();
+  const wt = addWorktree(main);
+  const { home, configPath } = makeHome();
+
+  const result = applyCodexTrust({ repoRoot: wt, mode: "remove", env: NO_ENV, home });
+  assert.equal(result.status, "skipped");
+  assert.ok(result.reason.includes("worktree"));
+  assert.ok(!fs.existsSync(configPath), "設定ファイルは作られない");
+});
+
+test("remove: 本体の checkout から取り除くと removed（8 件）になり、write → remove → write が成り立つ", () => {
+  const main = makeGitMain();
+  const { home, configPath } = makeHome();
+
+  assert.equal(applyCodexTrust({ repoRoot: main, mode: "write", env: NO_ENV, home }).status, "written");
+  const removed = applyCodexTrust({ repoRoot: main, mode: "remove", env: NO_ENV, home });
+  assert.equal(removed.status, "removed");
+  assert.equal(removed.counts.removed, 8);
+  assert.equal(countTrusted(fs.readFileSync(configPath, "utf8")), 0);
+
+  const again = applyCodexTrust({ repoRoot: main, mode: "write", env: NO_ENV, home });
+  assert.equal(again.status, "written");
+  assert.equal(again.counts.added, 8);
+  assert.equal(countTrusted(fs.readFileSync(configPath, "utf8")), 8);
+});
+
+test("git のリポジトリではないディレクトリでは実体の道筋で書き、notes は空", () => {
+  const repo = makeRepo();
+  const { home, configPath } = makeHome();
+  const result = applyCodexTrust({ repoRoot: repo, mode: "write", env: NO_ENV, home });
+
+  assert.equal(result.status, "written");
+  assert.deepEqual(result.notes, []);
+  assert.ok(fs.readFileSync(configPath, "utf8").includes(`${path.join(repo, ".codex", "hooks.json")}:session_start:0:0`));
+});
+
+test("シンボリックリンク経由の repoRoot で書くと、キーは実体の道筋で書かれる", () => {
+  const main = makeGitMain();
+  const link = path.join(tmpDir("codex-trust-link"), "repo-link");
+  fs.symlinkSync(main, link);
+  const { home, configPath } = makeHome();
+  const result = applyCodexTrust({ repoRoot: link, mode: "write", env: NO_ENV, home });
+
+  assert.equal(result.status, "written");
+  const text = fs.readFileSync(configPath, "utf8");
+  assert.ok(text.includes(`[hooks.state."${path.join(main, ".codex", "hooks.json")}:session_start:0:0"]`));
+  assert.ok(!text.includes(link), "リンク経由の道筋のキーは書かれない");
 });

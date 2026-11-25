@@ -6,6 +6,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { randomBytes } from "node:crypto";
+import { spawnSync } from "node:child_process";
 import { computeTrustEntries, planTrustEdit } from "./codex-trust-rules.mjs";
 
 /** 導入の設定ファイル（リポジトリ直下） */
@@ -44,16 +45,6 @@ export function readTrustSetting(repoRoot) {
   }
 }
 
-/**
- * 本体の hooks.json の道筋を決める。タスク 3.2 で本体の checkout の特定を足す入口。
- * 今は repoRoot の直下の .codex/hooks.json だけを返し、notes は空。
- * @param {string} repoRoot 実体の道筋
- * @returns {{ hooksJsonPath: string, notes: string[] }}
- */
-export function resolveHooksTarget(repoRoot) {
-  return { hooksJsonPath: path.join(repoRoot, ".codex", "hooks.json"), notes: [] };
-}
-
 /** 実体の道筋を求める。取れなければ与えられた道筋を絶対パスにしたものを使う */
 function realPathOr(p) {
   try {
@@ -61,6 +52,74 @@ function realPathOr(p) {
   } catch {
     return path.resolve(p);
   }
+}
+
+/**
+ * git の共通のディレクトリ（本体の .git）から本体の checkout の実体の道筋を求める。
+ * git が無い・git のリポジトリではない・終了コードが 0 でない・末尾が .git でない（ベアなど）ときは null。
+ * @param {string} real 実体の道筋
+ * @returns {string | null}
+ */
+function mainCheckoutOf(real) {
+  const result = spawnSync("git", ["rev-parse", "--path-format=absolute", "--git-common-dir"], {
+    cwd: real,
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  if (result.error || result.status !== 0) return null;
+  const commonDir = String(result.stdout ?? "").trim();
+  if (path.basename(commonDir) !== ".git") return null;
+  return realPathOr(path.dirname(commonDir));
+}
+
+/**
+ * 自分のフックの承認の記録を、キーの道筋を除いて並べ替えた一覧（worktree と本体の比較用）。
+ * 読めない・書式が不正・自分のフックが 0 件のときは null（比べられない＝違うとみなす）。
+ * @param {string} hooksJsonPath
+ * @returns {string[] | null}
+ */
+function ownSignature(hooksJsonPath) {
+  let text;
+  try {
+    text = fs.readFileSync(hooksJsonPath, "utf8");
+  } catch {
+    return null;
+  }
+  const computed = computeTrustEntries(text, hooksJsonPath);
+  if (!computed.ok || computed.entries.length === 0) return null;
+  const prefix = `${hooksJsonPath}:`;
+  return computed.entries
+    .map((entry) => `${entry.key.startsWith(prefix) ? entry.key.slice(prefix.length) : entry.key} ${entry.hash}`)
+    .sort();
+}
+
+/** worktree の hooks.json が本体と違うときの案内（resolveHooksTarget の notes） */
+function mismatchNote(mainRoot) {
+  return `本体の checkout（${mainRoot}）の .codex/hooks.json が、この worktree のものと違う（または無い）ため、Codex が読むフックと承認の記録が合わない可能性があります。本体の checkout でも同じ導入（update）を実行してください。`;
+}
+
+/**
+ * 承認の記録を書く先（本体の hooks.json）を決める。
+ * repoRoot が worktree なら本体の checkout の .codex/hooks.json（Codex が読む側）を返す。
+ * 本体を特定できないとき（git が無い・非 git・ベア）は repoRoot の実体の道筋を使う。
+ * worktree のとき、本体の hooks.json が無い・自分のフックの一覧が worktree 側と違うなら notes に案内を入れる。
+ * @param {string} repoRoot
+ * @returns {{ hooksJsonPath: string, notes: string[], isWorktree: boolean, mainRoot: string }}
+ */
+export function resolveHooksTarget(repoRoot) {
+  const real = realPathOr(repoRoot);
+  const mainRoot = mainCheckoutOf(real) ?? real;
+  const isWorktree = mainRoot !== real;
+  const hooksJsonPath = path.join(mainRoot, ".codex", "hooks.json");
+  const notes = [];
+  if (isWorktree) {
+    const local = ownSignature(path.join(real, ".codex", "hooks.json"));
+    const main = ownSignature(hooksJsonPath);
+    if (main === null || local === null || JSON.stringify(main) !== JSON.stringify(local)) {
+      notes.push(mismatchNote(mainRoot));
+    }
+  }
+  return { hooksJsonPath, notes, isWorktree, mainRoot };
 }
 
 /**
@@ -196,6 +255,15 @@ export function applyCodexTrust(options = {}) {
       return done("disabled", { reason: "設定 codex.trustHooks が false のため変更していません" });
     }
 
+    // 本体の checkout の特定。worktree からの取り除きは、設定ファイルも hooks.json も読み書きせず見送る
+    const target = resolveHooksTarget(repoRoot);
+    notes.push(...target.notes);
+    if (mode === "remove" && target.isWorktree) {
+      return done("skipped", {
+        reason: `worktree の中では承認の記録を取り除きません。Codex が読む本体の checkout の承認を消してしまうため、本体の checkout（${target.mainRoot}）で uninstall を実行したときに取り除きます`,
+      });
+    }
+
     // 設定の場所。ディレクトリが無ければ作らず、未導入または一度も起動されていないとして返す
     const location = configLocation(env, home);
     configPath = location.configPath;
@@ -204,16 +272,15 @@ export function applyCodexTrust(options = {}) {
         reason: `Codex の設定ディレクトリ（${location.dir}）がありません。Codex が未導入、または一度も起動されていません`,
       });
     }
-    const target = followLinks(location.configPath);
-    configPath = target;
-    const original = readText(target);
+    const configFile = followLinks(location.configPath);
+    configPath = configFile;
+    const original = readText(configFile);
     if (mode === "remove" && original === null) {
       return done("skipped", { reason: "取り除く記録がありません" });
     }
 
     // 本体の hooks.json から自分のフックの記録を求める
-    const { hooksJsonPath, notes: targetNotes } = resolveHooksTarget(realPathOr(repoRoot));
-    notes.push(...targetNotes);
+    const { hooksJsonPath } = target;
     let hooksText;
     try {
       hooksText = fs.readFileSync(hooksJsonPath, "utf8");
@@ -239,7 +306,7 @@ export function applyCodexTrust(options = {}) {
         if (mode === "write") return done("unchanged", { counts: plan.counts });
         return done("skipped", { counts: plan.counts, reason: "取り除く記録がありません" });
       }
-      const outcome = replaceFile(target, location.configPath, plan.text, base, beforeCommit);
+      const outcome = replaceFile(configFile, location.configPath, plan.text, base, beforeCommit);
       if (!outcome.changed) {
         if (mode === "write") return done("written", { counts: plan.counts });
         return done(plan.counts.removed > 0 ? "removed" : "skipped", {

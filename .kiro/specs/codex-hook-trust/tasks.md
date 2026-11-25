@@ -45,7 +45,7 @@
   - _Boundary: codex-trust_
   - _Depends: 1.1, 2.1, 2.2, 2.3, 2.4_
   - _Requirements: 1.1, 1.6, 3.2, 4.1, 4.2_
-- [ ] 3.2 本体の checkout の特定と、worktree での扱いを足す
+- [x] 3.2 本体の checkout の特定と、worktree での扱いを足す
   - `git rev-parse --path-format=absolute --git-common-dir` の末尾が `.git` ならその親を本体の checkout とし、取れない・ベアなら実行した場所の実体の道筋とする。承認の記録は本体の checkout の hooks.json の道筋で求めて書く
   - worktree から実行したとき、本体の hooks.json が無い、または自分のフックの一覧が worktree と違えば、効かない可能性の案内を結果に付ける。worktree からの取り除きは何も変更せず「本体の checkout で実行したときに取り除く」を返す
   - 一時ディレクトリでの試験で、本体の checkout からの書き込みと、worktree から実行したときの本体の道筋での書き込み・案内・取り除きの見送りが確かめられる
@@ -123,3 +123,4 @@
 - 2.3: 取り除きは、表の本体が `trusted_hash` の行と空行だけのときに限り表ごと外す（コメントや他の記録の行があれば表を残して `trusted_hash` の行だけ外す。利用者のコメントを失わないため）。ハッシュが一致しない記録は残す。write と同じ安全の検査（`prepareEdit`）を共用する。
 - 2.4: 結果の形（TrustResult）は `{ status, configPath, counts, reason, notes }`、`status` は written・unchanged・removed・skipped・failed・disabled。`messageTrust(result)` は行の配列、`trustIsEffective(result)` は written・unchanged のとき true（導入コマンドが『信頼の承認が必要です』の案内を出すかの判定に使う）。3.1 以降の `codex-trust.mjs` はこの形で結果を返す。
 - 3.1: `codex-trust.mjs` の `resolveHooksTarget(repoRoot)` は 3.2 で本体の checkout の特定に差し替える入口（今は `repoRoot` 直下の `.codex/hooks.json` と空の notes）。`hooks.json` が無い・自分のフックが無いときは `skipped`（設計の Error Handling の表をこれに合わせた）。`applyCodexTrust` の `beforeCommit` は試験用の差し込み口で、呼び出し側（導入コマンド・準備スクリプト）は使わない。
+- 3.2: `applyCodexTrust` / `resolveHooksTarget` は、呼び出し側が git の最上位（`repoRoot`）を渡す前提。サブディレクトリを渡すと worktree 扱いになりうる（導入コマンドは最上位を要求し、準備スクリプトは自分の位置から最上位を求めるので、実際には起きない）。git が 2.31 より古いと本体を特定できず、実体の道筋で動く（エラーにしない）。
