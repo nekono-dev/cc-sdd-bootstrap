@@ -229,6 +229,34 @@ function replaceFile(target, linkPath, newText, base, beforeCommit) {
   }
 }
 
+/** 承認を省く指定の名前（Codex の exec に付ける引数） */
+const BYPASS_FLAG = "--dangerously-bypass-hook-trust";
+/** 指定の受理を確かめる codex の呼び出しの上限（ミリ秒） */
+const BYPASS_CHECK_TIMEOUT_MS = 15000;
+
+/**
+ * 承認を省く指定（--dangerously-bypass-hook-trust）を、この codex が受け付けるかを確かめる。
+ * `codex exec --help` の終了コードが 0 で、標準出力に指定の名前が含まれるときだけ true。
+ * codex を起動できない・終了コードが 0 でない・指定が出ない・タイムアウトは false。例外は投げない。
+ * 標準入力は使わない（Codex の制限付きサンドボックスでは標準入力のパイプを閉じる処理が失敗するため。delegate.mjs の fetchCatalog と同じ作法）。
+ * @param {{ env?: NodeJS.ProcessEnv }} [options]
+ * @returns {boolean}
+ */
+export function bypassFlagSupported({ env } = {}) {
+  try {
+    const result = spawnSync("codex", ["exec", "--help"], {
+      env: env ?? process.env,
+      encoding: "utf8",
+      timeout: BYPASS_CHECK_TIMEOUT_MS,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    if (result.error || result.status !== 0) return false;
+    return String(result.stdout ?? "").includes(BYPASS_FLAG);
+  } catch {
+    return false;
+  }
+}
+
 /**
  * 承認の記録を書く（mode "write"）・外す（mode "remove"）。例外は投げない。
  * 設定が false のときは何も読み書きせず disabled を返す。

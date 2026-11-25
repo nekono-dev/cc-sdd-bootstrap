@@ -7,7 +7,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
-import { readTrustSetting, applyCodexTrust, resolveHooksTarget } from "../.agent-hooks/cc-sdd-bootstrap/codex-trust.mjs";
+import { readTrustSetting, applyCodexTrust, resolveHooksTarget, bypassFlagSupported } from "../.agent-hooks/cc-sdd-bootstrap/codex-trust.mjs";
 import { messageTrust } from "../.agent-hooks/cc-sdd-bootstrap/codex-trust-rules.mjs";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -667,4 +667,63 @@ test("シンボリックリンク経由の repoRoot で書くと、キーは実�
   const text = fs.readFileSync(configPath, "utf8");
   assert.ok(text.includes(`[hooks.state."${path.join(main, ".codex", "hooks.json")}:session_start:0:0"]`));
   assert.ok(!text.includes(link), "リンク経由の道筋のキーは書かれない");
+});
+
+// --- bypassFlagSupported（承認を省く指定が使えるかの確認・5.4）。偽の codex だけを PATH に置く ---
+
+/**
+ * 偽の codex を一時ディレクトリに置く。exec --help 以外の引数なら終了コード 2 で失敗する。
+ * @param {string} body 引数が期待どおりのときに実行する shell の本文
+ * @returns {NodeJS.ProcessEnv} PATH を偽の codex のディレクトリだけにした env
+ */
+function fakeCodexEnv(body) {
+  const dir = tmpDir("codex-trust-fake");
+  const script = path.join(dir, "codex");
+  const text = [
+    "#!/bin/sh",
+    // 期待の引数（exec --help の 2 つだけ）でなければ終了コード 2
+    '[ "$#" -eq 2 ] && [ "$1" = "exec" ] && [ "$2" = "--help" ] || exit 2',
+    body,
+    "",
+  ].join("\n");
+  fs.writeFileSync(script, text);
+  fs.chmodSync(script, 0o755);
+  return { PATH: dir };
+}
+
+test("bypassFlagSupported: exec --help の出力に指定があり終了コードが 0 なら true", () => {
+  const env = fakeCodexEnv('printf "%s\\n" "  --dangerously-bypass-hook-trust  承認の確認を省く"');
+  assert.equal(bypassFlagSupported({ env }), true);
+});
+
+test("bypassFlagSupported: 出力に指定が無い（古い Codex を模す）なら false", () => {
+  const env = fakeCodexEnv('printf "%s\\n" "Usage: codex exec [OPTIONS]"');
+  assert.equal(bypassFlagSupported({ env }), false);
+});
+
+test("bypassFlagSupported: 終了コードが 1 でも出力に指定があれば false", () => {
+  const env = fakeCodexEnv('printf "%s\\n" "--dangerously-bypass-hook-trust"; exit 1');
+  assert.equal(bypassFlagSupported({ env }), false);
+});
+
+test("bypassFlagSupported: PATH に codex が無ければ false（例外を投げない）", () => {
+  const empty = tmpDir("codex-trust-empty");
+  assert.doesNotThrow(() => bypassFlagSupported({ env: { PATH: empty } }));
+  assert.equal(bypassFlagSupported({ env: { PATH: empty } }), false);
+});
+
+test("bypassFlagSupported: 偽の codex は exec --help の引数で呼ばれ、それ以外なら失敗する", () => {
+  // 引数が正しければ指定を出す。引数が違えば偽の codex 側が終了コード 2 を返し、結果は false になる
+  const env = fakeCodexEnv('printf "%s\\n" "--dangerously-bypass-hook-trust"');
+  assert.equal(bypassFlagSupported({ env }), true, "exec --help で呼ばれたときだけ true");
+
+  // 引数を確かめる偽の codex 単体の確認（exec --help 以外は 2）
+  const dir = tmpDir("codex-trust-argcheck");
+  const script = path.join(dir, "codex");
+  fs.writeFileSync(script, '#!/bin/sh\n[ "$#" -eq 2 ] && [ "$1" = "exec" ] && [ "$2" = "--help" ] || exit 2\necho "--dangerously-bypass-hook-trust"\n');
+  fs.chmodSync(script, 0o755);
+  const ok = spawnSync(script, ["exec", "--help"], { encoding: "utf8" });
+  assert.equal(ok.status, 0);
+  const ng = spawnSync(script, ["debug", "models"], { encoding: "utf8" });
+  assert.equal(ng.status, 2);
 });
