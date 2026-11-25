@@ -30,3 +30,12 @@
 - フックの定義（command・timeout・matcher）を変えるとハッシュも変わる。導入・更新のたびに計算し直して書く。
 - 計算式は Codex の内部実装で、版が変わると合わなくなりうる。合わないときは未承認として扱われるだけで動作は壊れない（案 B と文章による補いが残る）。この PoC を Codex の版を上げるたびに再実行して互換を確かめる。
 - 案 B（`--dangerously-bypass-hook-trust`）は `codex exec` で効く。
+
+## 計算式の履歴（openai/codex、2026-11-25 に調査）
+
+- 承認の仕組み: 2026-05-05（#20321）。`--dangerously-bypass-hook-trust`: 2026-05-13（#21768）。
+- 識別情報 `{event_name, matcher, hooks:[{type, command, timeout, async, statusMessage}]}` は導入から変わっていない。その後に増えたフックの項目（`commandWindows`・`onFailure`・`additionalContextLimit` など）は、未指定なら TOML に出ないため、既存のフックのハッシュは変わらない。
+- `version_for_toml` は 2026-09-29（#49295）に辞書順の整え方を書き直したが、出力は同じと読める（旧版の実行は未確認）。
+- プラグイン由来のフックだけ、2026-10-16（#54619）で中身のハッシュが足された。プロジェクトの `hooks.json` には影響しない。
+- 以前の版で承認した 8 件の記録が、Codex 0.172.0 の計算と一致した。
+- 版との対応はコミットの日付で追った（リリースのタグとの厳密な対応は未確認）。
