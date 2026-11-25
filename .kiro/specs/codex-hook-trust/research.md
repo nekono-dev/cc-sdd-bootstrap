@@ -97,3 +97,33 @@
 
 ---
 _本書は情報の整理で、設計の決定ではない。_
+
+---
+
+# 設計時の調査と合成の記録（2026-11-25）
+
+## 調査の種類
+拡張（既存の導入コマンド・配置物・入口のコマンドへの足し込み）。軽い調査（既存の拡張点・規約・依存の確認）に、実機の PoC（`poc/codex-hook-trust/probe.mjs`）を足した。
+
+## 調査の結果（Research Needed への回答）
+
+| 項目 | 結果 | 設計への反映 |
+|---|---|---|
+| 1. キーの道筋の形 | Codex を起動した道筋そのまま。シンボリックリンク経由で開くと、実体の道筋の記録は効かず、見かけの道筋の記録は効く（A1・A2） | 実体の道筋で書き、リンク経由の起動は既知の制約として文章で案内する |
+| 2. `CODEX_HOME` | 一時の `CODEX_HOME` で動作を確認済み（PoC の全場面）。環境変数があれば優先する | `codex-trust.mjs` が `$CODEX_HOME` を優先 |
+| 3. 指定が使えないときの検出 | `codex exec --help` に指定が出る。未知の指定は終了コード 2・`error: unexpected argument` | 事前に `--help` の出力を確かめ、無ければ起動せず案内（5.4） |
+| 4. `config.toml` の書き方 | `[hooks.state]` の見出し無しの表だけでも動く。コメント・他の表のある設定の末尾追記も動き、既存の行は変わらない（B・C） | 該当の表だけを行単位で追加・更新する。想定外の書式は書かない |
+| 5. 本体の checkout の特定 | `git rev-parse --git-common-dir` の末尾が `.git` ならその親。ベア・取れない場合は `repoRoot` の実体 | `codex-trust.mjs` に実装、取れないときは worktree の道筋に切り替えず案内 |
+| 6. 古い番号の記録 | 消さない（要件 1.4 の「他の記録を変更しない」に従う） | 既知の制約として明記 |
+| 7. `uninstall` で外すキー | 外す前の `hooks.json` から求める。外した後の番号の詰まりは利用者のフックの記録に影響しうる | 既知の制約として明記。取り除きは外す前に行う |
+
+## 合成（Synthesis）
+- **一般化**: 「自分のフックの承認の記録の書き込み・取り除き」は同じ計算（キーとハッシュ）の 2 つの向き。`planTrustEdit` の `mode` で 1 つにまとめた。要件 6.1 の取り除きに別の部品は要らない。
+- **作るか・採用するか**: TOML のライブラリは採用しない（外部パッケージなしの規約）。編集する範囲が 1 つの表の 1 行に限られるため、行単位の編集で足りる。ハッシュは `node:crypto`。
+- **単純化**: 状態ファイル・バックアップ・古い番号の後始末・複数の `config.toml` の検出は持たない。書き込みの安全は「該当の行だけ」「一時ファイル経由の置き換え」「想定外の書式では書かない」で足りる。`computePlan` には混ぜず、適用の前後の別の段階にした（リポジトリ外を書くことが計画の許可範囲の枠と食い違うため）。
+- 子の承認の省略（要件 5）は設定 `codex.trustHooks` と同じスイッチで制御する（要件 4.2）。分けて持つと、書き込みを止めたのに子だけ承認を省く状態ができ、利用者の意図とずれるため。
+
+## 参照した資料
+- openai/codex の `codex-rs/hooks/src/engine/discovery.rs`（`hook_hash`）、`codex-rs/config/src/fingerprint.rs`（`version_for_toml`）、`codex-rs/protocol/src/hooks.rs`（`MatcherGroup`・`HookHandlerConfig`）と各ファイルの履歴。
+- `poc/codex-hook-trust/`（`run.mjs`・`probe.mjs`・`result.md`）、`poc/codex-worktree-hooks/result.md`。
+- 既存の規約: `.kiro/steering/structure.md`・`tech.md`・`project-rules.md`。
