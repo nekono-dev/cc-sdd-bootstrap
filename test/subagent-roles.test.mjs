@@ -865,3 +865,39 @@ test("buildCliCommand: Claude Code の書き込み可・読み取り専用", () 
   const r = buildCliCommand("claude", { permission: "read-only", effort: "low" }, "haiku", "/r");
   assert.deepEqual(r.args, ["-p", "--model", "haiku", "--effort", "low", "--tools", "Read,Grep,Glob"]);
 });
+
+test("buildCliCommand: Codex で bypassHookTrust が true のとき exec の直後に承認を省く指定を足す", () => {
+  const w = buildCliCommand("codex", { permission: "write", effort: "high", bypassHookTrust: true }, "gpt-6.1-sol", "/work");
+  assert.deepEqual(w.args, ["-a", "never", "exec", "--dangerously-bypass-hook-trust", "--sandbox", "workspace-write",
+    "--model", "gpt-6.1-sol", "--config", 'model_reasoning_effort="high"', "--cd", "/work", "-"]);
+  const r = buildCliCommand("codex", { permission: "read-only", effort: "medium", bypassHookTrust: true }, "m", "/r");
+  assert.deepEqual(r.args, ["-a", "never", "exec", "--dangerously-bypass-hook-trust", "--sandbox", "read-only",
+    "--model", "m", "--config", 'model_reasoning_effort="medium"', "--cd", "/r", "-"]);
+});
+
+test("buildCliCommand: bypassHookTrust が無い・false・true 以外のとき Codex の引数は今までと同じ", () => {
+  const base = buildCliCommand("codex", { permission: "write", effort: "high" }, "gpt-6.1-sol", "/work");
+  for (const value of [undefined, false, "true", 1, null]) {
+    const got = buildCliCommand("codex", { permission: "write", effort: "high", bypassHookTrust: value }, "gpt-6.1-sol", "/work");
+    assert.deepEqual(got.args, base.args, `bypassHookTrust=${JSON.stringify(value)} で引数が変わった`);
+    assert.equal(got.args.includes("--dangerously-bypass-hook-trust"), false);
+  }
+  assert.deepEqual(base.args, ["-a", "never", "exec", "--sandbox", "workspace-write", "--model", "gpt-6.1-sol",
+    "--config", 'model_reasoning_effort="high"', "--cd", "/work", "-"]);
+});
+
+test("buildCliCommand: 承認を省く指定のとき --config の値に hook・trust を含めない（設定に保存しない）", () => {
+  const got = buildCliCommand("codex", { permission: "write", effort: "high", bypassHookTrust: true }, "m", "/work");
+  for (let i = 0; i < got.args.length; i++) {
+    if (got.args[i] !== "--config") continue;
+    assert.doesNotMatch(got.args[i + 1], /hook|trust/i);
+  }
+  assert.equal(got.args.filter((a) => a === "--config").length, 1);
+});
+
+test("buildCliCommand: Claude で bypassHookTrust が true でも引数は今までと同じ", () => {
+  const w = buildCliCommand("claude", { permission: "write", effort: "high", bypassHookTrust: true }, "sonnet", "/work");
+  assert.deepEqual(w.args, ["-p", "--model", "sonnet", "--effort", "high", "--permission-mode", "acceptEdits", "--allowedTools", "Bash"]);
+  const r = buildCliCommand("claude", { permission: "read-only", effort: "low", bypassHookTrust: true }, "haiku", "/r");
+  assert.deepEqual(r.args, ["-p", "--model", "haiku", "--effort", "low", "--tools", "Read,Grep,Glob"]);
+});
