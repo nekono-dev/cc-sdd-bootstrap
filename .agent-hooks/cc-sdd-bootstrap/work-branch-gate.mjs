@@ -14,6 +14,7 @@ import {
   isBaseBranch,
   messageGuidance,
   parseBaseBranches,
+  workDirOf,
 } from "./work-branch-gate-rules.mjs";
 
 // 配置先は .agent-hooks/cc-sdd-bootstrap/ なので、2 つ上が導入先の根
@@ -30,7 +31,7 @@ function argumentsOf(argv) {
     throw new Error("フックの種類を判定できません。");
   }
   if (tool !== "claude" && tool !== "codex") throw new Error("作業ツールを判定できません。");
-  return { event };
+  return { event, tool };
 }
 
 /** 標準入力の JSON を読む。session_id が無い入力は判定できないので失敗にする */
@@ -118,7 +119,8 @@ function isState(value) {
   return typeof turn === "object" && !Array.isArray(turn)
     && typeof turn.skill === "string" && turn.skill !== ""
     && Number.isInteger(turn.denials) && turn.denials >= 0
-    && typeof turn.switchTried === "boolean";
+    && typeof turn.switchTried === "boolean"
+    && (value.location === undefined || value.location === null || typeof value.location === "string");
 }
 
 async function loadState(file) {
@@ -130,7 +132,8 @@ async function loadState(file) {
     throw new Error("状態ファイルを読めません。");
   }
   if (!isState(value)) throw new Error("状態ファイルの形が正しくありません。");
-  return value;
+  // 作業場所を持たない古い形の状態は、場所なしとして扱う
+  return { ...value, location: value.location ?? null };
 }
 
 /** 一時ファイルに書いてから置き換える（途中で壊れた状態を残さない） */
@@ -167,6 +170,21 @@ function currentBranch(cwd) {
   return git(cwd, ["branch", "--show-current"]);
 }
 
+/**
+ * 候補の場所を順に試し、最初に現在のブランチを求められた場所とブランチを返す（3.13）。
+ * 存在しない場所・git の外（git が失敗）は次の候補へ進む。候補が全部だめなら null。
+ * @param {Array<string | null | undefined>} candidates - 作業場所の候補（優先順）
+ * @returns {{ branch: string, cwd: string } | null}
+ */
+function branchAt(candidates) {
+  for (const dir of candidates) {
+    if (typeof dir !== "string" || dir === "") continue;
+    const branch = currentBranch(dir);
+    if (branch !== null) return { branch, cwd: dir };
+  }
+  return null;
+}
+
 /** origin の既定ブランチ名。無ければ null */
 function originDefaultOf(cwd) {
   const name = git(cwd, ["symbolic-ref", "--short", "refs/remotes/origin/HEAD"]);
@@ -187,46 +205,67 @@ async function userPromptSubmit(input, settings) {
   state.turn = { skill: target.skill, denials: 0, switchTried: false };
   await saveState(file, state);
 
-  const cwd = cwdOf(input);
-  const branch = currentBranch(cwd);
-  if (branch === null || !isBaseBranch(branch, settings.bases, originDefaultOf(cwd))) return;
-  output({ hookSpecificOutput: { hookEventName: "UserPromptSubmit", additionalContext: messageGuidance(target.skill, branch) } });
+  // 操作の入力が無いので、直近の作業場所（location）→ 入力の cwd の順に判定する
+  const found = branchAt([state.location, cwdOf(input)]);
+  if (found === null || !isBaseBranch(found.branch, settings.bases, originDefaultOf(found.cwd))) return;
+  output({ hookSpecificOutput: { hookEventName: "UserPromptSubmit", additionalContext: messageGuidance(target.skill, found.branch) } });
 }
 
-/** 作業の状態があるときだけ判断し、拒否なら理由を返す。拒否の回数は保存してから返す */
-async function preToolUse(input, settings) {
+/**
+ * 操作の前の処理。作業の操作で作業場所を求められたら、状態の location に記録する（turn が無くても記録する。読み取りでは記録しない）。
+ * 作業の状態があるときだけ判断し、拒否なら理由を返す。拒否の回数と作業場所は保存してから返す。
+ */
+async function preToolUse(input, settings, tool) {
   if (typeof input.tool_name !== "string" || !input.tool_name.trim()) throw new Error("ツール名を判定できません。");
   if (!input.tool_input || typeof input.tool_input !== "object" || Array.isArray(input.tool_input)) {
     throw new Error("ツールへの入力を判定できません。");
   }
   const file = stateFile(input.session_id);
   const state = await loadState(file);
-  if (state.turn === null) return;
 
   const call = { toolName: input.tool_name, toolInput: input.tool_input };
   const cwd = cwdOf(input);
-  // 現在のブランチは作業の操作のときだけ調べる（読み取りや切り替えは判定に使わない）
-  const branch = classifyToolCall(call.toolName, call.toolInput) === "work" ? currentBranch(cwd) : null;
-  const facts = { branch, bases: settings.bases, originDefault: branch === null ? null : originDefaultOf(cwd) };
-
-  const decision = decidePreToolUse(state.turn, call, facts);
-  const before = JSON.stringify(state.turn);
-  state.turn = decision.turn;
-  if (JSON.stringify(state.turn) !== before) await saveState(file, state);
-  if (!decision.allow) {
-    output({ hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "deny", permissionDecisionReason: decision.reason } });
+  // 作業の操作だけ作業場所を求め、ブランチを調べる（読み取りや切り替えは判定に使わない）
+  const kind = classifyToolCall(call.toolName, call.toolInput);
+  const dir = kind === "work" ? workDirOf(tool, call.toolName, call.toolInput, cwd) : null;
+  const previous = state.location;
+  let changed = false;
+  if (dir !== null && dir !== previous) {
+    state.location = dir;
+    changed = true;
   }
+
+  if (state.turn !== null) {
+    // 候補: ① この操作の作業場所 ② 直近の作業場所 ③ 入力の cwd
+    const found = kind === "work" ? branchAt([dir, previous, cwd]) : null;
+    const facts = {
+      branch: found === null ? null : found.branch,
+      bases: settings.bases,
+      originDefault: found === null ? null : originDefaultOf(found.cwd),
+    };
+    const decision = decidePreToolUse(state.turn, call, facts);
+    if (JSON.stringify(decision.turn) !== JSON.stringify(state.turn)) {
+      state.turn = decision.turn;
+      changed = true;
+    }
+    if (changed) await saveState(file, state);
+    if (!decision.allow) {
+      output({ hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "deny", permissionDecisionReason: decision.reason } });
+    }
+    return;
+  }
+  if (changed) await saveState(file, state);
 }
 
 async function run() {
-  const { event } = argumentsOf(process.argv.slice(2));
+  const { event, tool } = argumentsOf(process.argv.slice(2));
   const input = await readInput();
   const settings = await readSettings();
   if (!settings.branchGate) return;
   if (event === "user-prompt-submit") {
     await userPromptSubmit(input, settings);
   } else {
-    await preToolUse(input, settings);
+    await preToolUse(input, settings, tool);
   }
 }
 

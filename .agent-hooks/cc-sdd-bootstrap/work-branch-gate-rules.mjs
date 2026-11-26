@@ -1,5 +1,6 @@
 // 作業前のブランチ確保の判定（純粋な処理）。
 // ファイル・git・環境変数を読まず、入力（ブランチ・状態・設定）から結果だけを計算する。
+import path from "node:path";
 import { detectCommand } from "./kiro-gate-rules.mjs";
 
 /** 作業前のブランチ確保の対象にする新機能追加系の入力 */
@@ -447,6 +448,152 @@ export function classifyToolCall(toolName, toolInput) {
     return command === null ? "work" : classifyShell(command);
   }
   return "work";
+}
+
+/** 入力に対象のパスを持つ道具の鍵（Claude Code の Write・Edit・Read・NotebookEdit など） */
+const PATH_KEYS = ["file_path", "notebook_path", "path"];
+
+/** Codex の apply_patch の対象行（最初の一致を使う） */
+const PATCH_TARGET = /^\*\*\* (?:Add File|Update File|Delete File|Move to): (.+)$/m;
+
+/**
+ * 対象のパスからディレクトリを求める。相対パスは cwd からの相対を解く。cwd が絶対パスでなければ相対は null。
+ * @returns {string | null}
+ */
+function dirOfPath(value, cwd) {
+  if (typeof value !== "string" || value === "") return null;
+  if (path.isAbsolute(value)) return path.dirname(value);
+  if (typeof cwd !== "string" || !path.isAbsolute(cwd)) return null;
+  return path.dirname(path.resolve(cwd, value));
+}
+
+/** 引用符の外で意味を持つ文字（展開・グロブ・エスケープなど）。含む語は移動先を確定できないので null */
+const CD_UNSAFE_UNQUOTED = new Set(["*", "?", "[", "{", "$", "`", "!", "\\"]);
+/** 語の先頭でだけ特別な文字（先頭の # はコメント、先頭の ~ はホームへの展開）。語の途中では文字どおり */
+const CD_UNSAFE_AT_START = new Set(["#", "~"]);
+
+/**
+ * `cd` の引数 1 語を、移動先の絶対パスの文字列にする。シェルが展開する形・確定できない形は null。
+ * 単一引用符の中は文字どおり（`$` も含めてよい）。二重引用符の中は `$`・バッククォート・バックスラッシュを含めば null。
+ * 外側の語は、グロブ・変数・履歴・エスケープの文字を含めば null。語の先頭の # と ~ も null（コメント・ホームへの展開）。
+ * 語の途中の # と ~ は文字どおり。閉じていない引用符も null。
+ * @returns {string | null}
+ */
+function cdWordOf(raw) {
+  let value = "";
+  let quote = null;
+  for (let index = 0; index < raw.length; index += 1) {
+    const ch = raw[index];
+    if (quote === "'") {
+      if (ch === "'") quote = null;
+      else value += ch;
+      continue;
+    }
+    if (quote === '"') {
+      if (ch === '"') {
+        quote = null;
+        continue;
+      }
+      if (ch === "$" || ch === "`" || ch === "\\") return null;
+      value += ch;
+      continue;
+    }
+    if (ch === "'" || ch === '"') {
+      quote = ch;
+      continue;
+    }
+    if (CD_UNSAFE_UNQUOTED.has(ch)) return null;
+    if (index === 0 && CD_UNSAFE_AT_START.has(ch)) return null;
+    value += ch;
+  }
+  return quote === null ? value : null;
+}
+
+/**
+ * コマンドの先頭の `cd <絶対パス> &&`（`;` も可）の絶対パスを取り出す。
+ * 引用符の外の最初の `&&` か `;` より前が、ちょうど `cd` と 1 語だけの形で、その語が確定できるときに限る。
+ * 相対・オプション・`cd -`・区切りの無い形・展開を含む形は null。確定できた値は正規化して返す。
+ * @returns {string | null}
+ */
+function leadingCdTarget(command) {
+  const cut = firstUnquotedSeparator(command);
+  if (cut === null) return null;
+  const tokens = tokenize(command.slice(0, cut));
+  if (tokens === null || tokens.length !== 1 || tokens[0].seg === undefined) return null;
+  const words = splitWords(tokens[0].seg);
+  if (words === null || words.length !== 2 || words[0] !== "cd") return null;
+  const target = cdWordOf(words[1]);
+  if (target === null || !path.isAbsolute(target)) return null;
+  return path.normalize(target);
+}
+
+/**
+ * 引用符の外で最初に現れる `&&` か `;` の位置。無ければ null。
+ * @returns {number | null}
+ */
+function firstUnquotedSeparator(command) {
+  let quote = null;
+  for (let index = 0; index < command.length; index += 1) {
+    const ch = command[index];
+    if (quote === "'") {
+      if (ch === "'") quote = null;
+      continue;
+    }
+    if (ch === "\\" && index + 1 < command.length) {
+      index += 1;
+      continue;
+    }
+    if (quote === '"') {
+      if (ch === '"') quote = null;
+      continue;
+    }
+    if (ch === "'" || ch === '"') {
+      quote = ch;
+      continue;
+    }
+    if (ch === ";" || (ch === "&" && command[index + 1] === "&")) return index;
+  }
+  return null;
+}
+
+/**
+ * Codex の apply_patch の本文から、最初の対象パスのディレクトリを求める。
+ * @returns {string | null}
+ */
+function patchDirOf(command, cwd) {
+  if (typeof command !== "string") return null;
+  const match = PATCH_TARGET.exec(command);
+  return match === null ? null : dirOfPath(match[1].trim(), cwd);
+}
+
+/**
+ * 操作の作業場所（そのディレクトリの絶対パス）を求める（純粋な処理）。求められなければ null。
+ * - Claude Code: `file_path`・`notebook_path`・`path` を持つ道具は、そのパスのディレクトリ。
+ *   `Bash` は、先頭の `cd <絶対パス> &&`（`;` も可）の絶対パス。
+ * - Codex: `apply_patch` は、本文の最初の対象パスのディレクトリ。シェル系（shell・local_shell・exec_command・Bash）は、入力の cwd（workdir）。
+ * @param {"claude" | "codex"} tool - 作業ツール
+ * @param {string} toolName - 道具名
+ * @param {unknown} toolInput - 道具への入力
+ * @param {unknown} cwd - フックの入力の cwd（相対パスの基準。Codex のシェルでは workdir）
+ * @returns {string | null}
+ */
+export function workDirOf(tool, toolName, toolInput, cwd) {
+  if (!toolInput || typeof toolInput !== "object" || Array.isArray(toolInput)) return null;
+  if (tool === "codex") {
+    if (toolName === "apply_patch") return patchDirOf(toolInput.command, cwd);
+    if (SHELL_TOOLS.has(toolName)) return typeof cwd === "string" && path.isAbsolute(cwd) ? cwd : null;
+    return null;
+  }
+  if (tool === "claude") {
+    if (SHELL_TOOLS.has(toolName)) {
+      const command = shellCommandOf(toolInput);
+      return command === null ? null : leadingCdTarget(command);
+    }
+    for (const key of PATH_KEYS) {
+      if (typeof toolInput[key] === "string") return dirOfPath(toolInput[key], cwd);
+    }
+  }
+  return null;
 }
 
 /**

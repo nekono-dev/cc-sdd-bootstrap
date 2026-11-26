@@ -8,6 +8,7 @@ import {
   messageDeny,
   messageGuidance,
   parseBaseBranches,
+  workDirOf,
 } from "../.agent-hooks/cc-sdd-bootstrap/work-branch-gate-rules.mjs";
 
 const BASES = ["main", "master", "develop"];
@@ -288,4 +289,86 @@ test("ブランチなしの案内は空の名前を見せず、特定の別の�
   for (const text of [messageGuidance("kiro-impl", "main"), messageDeny("kiro-impl", "main"), messageGuidance("kiro-discovery", "")]) {
     assert.doesNotMatch(text, /brw|branch-release-workflow|release/i);
   }
+});
+
+test("Claude Code の Write・Read は対象の絶対パスのディレクトリを作業場所とする", () => {
+  assert.equal(workDirOf("claude", "Write", { file_path: "/w/src/a.md" }, "/r"), "/w/src");
+  assert.equal(workDirOf("claude", "Read", { file_path: "/w/a.md" }, "/r"), "/w");
+  assert.equal(workDirOf("claude", "NotebookEdit", { notebook_path: "/w/n.ipynb" }, "/r"), "/w");
+  assert.equal(workDirOf("claude", "Edit", { file_path: "/w/a.md" }, "/r"), "/w");
+});
+
+test("Claude Code の相対パスは cwd からの相対を解く。cwd が無ければ null", () => {
+  assert.equal(workDirOf("claude", "Write", { file_path: "a/b.md" }, "/r"), "/r/a");
+  assert.equal(workDirOf("claude", "Write", { file_path: "a/b.md" }, ""), null);
+  assert.equal(workDirOf("claude", "Write", { file_path: "a/b.md" }, null), null);
+});
+
+test("Claude Code の Bash は先頭の引用符の外の cd <絶対パス> && （; も可）の絶対パスを作業場所とする", () => {
+  assert.equal(workDirOf("claude", "Bash", { command: "cd /x && npm test" }, "/r"), "/x");
+  assert.equal(workDirOf("claude", "Bash", { command: "cd /x; ls" }, "/r"), "/x");
+  assert.equal(workDirOf("claude", "Bash", { command: "cd \"/x y\" && ls" }, "/r"), "/x y");
+});
+
+test("相対の cd・パスの無い操作・cd の後ろに区切りが無い形は null", () => {
+  assert.equal(workDirOf("claude", "Bash", { command: "cd sub && ls" }, "/r"), null);
+  assert.equal(workDirOf("claude", "Bash", { command: "npm test" }, "/r"), null);
+  assert.equal(workDirOf("claude", "Bash", { command: "cd /x" }, "/r"), null);
+  assert.equal(workDirOf("claude", "Bash", { command: "echo 'cd /x && y'" }, "/r"), null);
+  assert.equal(workDirOf("claude", "Glob", { pattern: "*.md" }, "/r"), null);
+});
+
+test("Codex の apply_patch は最初の対象パスのディレクトリ（相対なら cwd からの相対）を作業場所とする", () => {
+  const patch = "*** Begin Patch\n*** Add File: a/b\n+x\n*** End Patch";
+  assert.equal(workDirOf("codex", "apply_patch", { command: patch }, "/r"), "/r/a");
+  const absolute = "*** Begin Patch\n*** Update File: /w/z/c.md\n@@\n-a\n+b\n*** End Patch";
+  assert.equal(workDirOf("codex", "apply_patch", { command: absolute }, "/r"), "/w/z");
+});
+
+test("Codex の apply_patch は複数ファイルのとき最初の対象を使い、Move to も対象に含め、パスの無い形は null", () => {
+  const many = "*** Begin Patch\n*** Delete File: /m/one.md\n*** Add File: /n/two.md\n+x\n*** End Patch";
+  assert.equal(workDirOf("codex", "apply_patch", { command: many }, "/r"), "/m");
+  const moved = "*** Begin Patch\n*** Update File: /p/q.md\n*** Move to: /t/u.md\n*** End Patch";
+  assert.equal(workDirOf("codex", "apply_patch", { command: moved }, "/r"), "/p");
+  assert.equal(workDirOf("codex", "apply_patch", { command: "*** Begin Patch\n*** End Patch" }, "/r"), null);
+});
+
+test("Codex の Bash 相当（shell・local_shell・exec_command）は入力の cwd（workdir）を作業場所とする", () => {
+  for (const name of ["shell", "local_shell", "exec_command", "Bash"]) {
+    assert.equal(workDirOf("codex", name, { command: ["bash", "-lc", "git status"] }, "/w/x"), "/w/x", name);
+  }
+  assert.equal(workDirOf("codex", "shell", { command: "ls" }, ""), null);
+});
+
+test("Claude Code の Bash の cd は、シェルが展開する形・移動先が確定しない形を作業場所にしない（null）", () => {
+  for (const command of [
+    "cd /tmp/* && touch x", "cd /x/? && ls", "cd /x/[ab] && ls", "cd /x/{a,b} && ls", "cd ~/x && ls",
+    "cd /x$HOME && ls", "cd \"$HOME/x\" && ls", "cd \"/x`pwd`\" && ls", "cd /x/`pwd` && ls", "cd /x!y && ls",
+    "cd /x\\ y && ls", "cd \"/x && ls", "cd - && ls", "cd -P /x && ls", "cd /x y && ls",
+    "cd && ls", "cd \"/x\\$y\" && ls", "cd /x/* && ls",
+  ]) {
+    assert.equal(workDirOf("claude", "Bash", { command }, "/r"), null, command);
+  }
+});
+
+test("確定できる cd の形（引用符・正規化を含む）は、移動先の絶対パスを返す", () => {
+  assert.equal(workDirOf("claude", "Bash", { command: "cd /x && ls" }, "/r"), "/x");
+  assert.equal(workDirOf("claude", "Bash", { command: "cd '/x y' && ls" }, "/r"), "/x y");
+  assert.equal(workDirOf("claude", "Bash", { command: "cd '/x$y' && ls" }, "/r"), "/x$y");
+  assert.equal(workDirOf("claude", "Bash", { command: "cd /x/../y && ls" }, "/r"), "/y");
+});
+
+test("cd の語の途中の # と ~ は文字どおりの値として確定する（語の先頭だけが特別）", () => {
+  assert.equal(workDirOf("claude", "Bash", { command: "cd /x#y && x" }, "/r"), "/x#y");
+  assert.equal(workDirOf("claude", "Bash", { command: "cd /x~y && x" }, "/r"), "/x~y");
+  assert.equal(workDirOf("claude", "Bash", { command: "cd '/x y#z' && x" }, "/r"), "/x y#z");
+  assert.equal(workDirOf("claude", "Bash", { command: "cd \"/x~y\" && x" }, "/r"), "/x~y");
+});
+
+test("cd の語の先頭の # と ~ は展開やコメントになるので null。引用符の中の ~ は展開されないが相対なので null", () => {
+  assert.equal(workDirOf("claude", "Bash", { command: "cd #x && y" }, "/r"), null);
+  assert.equal(workDirOf("claude", "Bash", { command: "cd ~ && x" }, "/r"), null);
+  assert.equal(workDirOf("claude", "Bash", { command: "cd ~/x && x" }, "/r"), null);
+  assert.equal(workDirOf("claude", "Bash", { command: "cd \"~/x\" && x" }, "/r"), null);
+  assert.equal(workDirOf("claude", "Bash", { command: "cd '~/x' && x" }, "/r"), null);
 });

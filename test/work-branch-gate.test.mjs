@@ -275,3 +275,92 @@ function denialOrGuidance(result) {
   const output = JSON.parse(result.stdout).hookSpecificOutput;
   return output.additionalContext ?? output.permissionDecisionReason;
 }
+
+/** 本体の checkout を基底（develop）にし、作業ブランチ（feature/x）の worktree を別の場所に作る */
+function worktreeFixture(t) {
+  const f = fixture(t);
+  git(f.root, ["switch", "-q", "-c", "develop"]);
+  const wt = path.join(f.base, "wt");
+  git(f.root, ["worktree", "add", "-q", "-b", "feature/x", wt]);
+  return { ...f, wt };
+}
+
+test("作業場所: 本体の cwd が基底でも、worktree の絶対パスへの Write は許可する（3.13）", (t) => {
+  const f = worktreeFixture(t);
+  prompt(f, "/kiro-impl foo");
+  assert.equal(pre(f, "Write", { file_path: path.join(f.wt, "a.md") }).stdout, "");
+});
+
+test("作業場所: 本体の checkout への Write は、基底ブランチなので拒否する（3.13）", (t) => {
+  const f = worktreeFixture(t);
+  prompt(f, "/kiro-impl foo");
+  assert.equal(denial(pre(f, "Write", { file_path: path.join(f.root, "a.md") })).permissionDecision, "deny");
+});
+
+test("作業場所: worktree への Write の後に本体の Read を挟んでも、記録した場所は worktree のまま（3.13）", (t) => {
+  const f = worktreeFixture(t);
+  prompt(f, "/kiro-impl foo");
+  assert.equal(pre(f, "Write", { file_path: path.join(f.wt, "a.md") }).stdout, "");
+  assert.equal(pre(f, "Read", { file_path: path.join(f.root, "a.md") }).stdout, "");
+  assert.equal(JSON.parse(readFileSync(stateFile(f), "utf8")).location, f.wt);
+  // パスの無い作業（npm test）は、直近の場所（worktree）のブランチで判定して通す
+  assert.equal(pre(f, "Bash", { command: "npm test" }).stdout, "");
+});
+
+test("作業場所: 作業の操作は対象の入力の前でも場所を記録する（Stop が使う。3.13）", (t) => {
+  const f = worktreeFixture(t);
+  assert.equal(pre(f, "Write", { file_path: path.join(f.wt, "a.md") }).stdout, "");
+  assert.equal(JSON.parse(readFileSync(stateFile(f), "utf8")).location, f.wt);
+});
+
+test("作業場所: 対象の入力を受けても、記録した場所は保たれる（3.13）", (t) => {
+  const f = worktreeFixture(t);
+  prompt(f, "/kiro-impl foo");
+  assert.equal(pre(f, "Write", { file_path: path.join(f.wt, "a.md") }).stdout, "");
+  prompt(f, "/kiro-spec-init 説明");
+  assert.equal(JSON.parse(readFileSync(stateFile(f), "utf8")).location, f.wt);
+});
+
+test("作業場所: 求めた場所が存在しない・git の外なら次の候補（直近の場所、入力の cwd）へ進む（3.13）", (t) => {
+  const f = worktreeFixture(t);
+  prompt(f, "/kiro-impl foo");
+  const missing = path.join(f.base, "missing", "a.md");
+  // ① が無効 → ② は無し → ③ の入力の cwd（worktree）で判定して通す
+  assert.equal(pre(f, "Write", { file_path: missing }, { cwd: f.wt }).stdout, "");
+  // 直近の記録も無効になった後は、③ の入力の cwd（本体・基底）で判定して拒否する
+  assert.equal(denial(pre(f, "Write", { file_path: missing })).permissionDecision, "deny");
+});
+
+test("作業場所: 状態ファイルの形が壊れていても拒否にせず通す（1.6 と同じ扱い）", (t) => {
+  const f = fixture(t);
+  prompt(f, "/kiro-impl foo");
+  writeFileSync(stateFile(f), JSON.stringify({ turn: 5, location: 7 }));
+  assert.equal(pre(f, "Write", { file_path: path.join(f.root, "a.md") }).stdout, "");
+});
+
+test("直近の場所（候補②）: 記録が worktree（作業ブランチ）なら、パスの無い作業は本体の cwd（基底）でも許可する（3.13）", (t) => {
+  const f = worktreeFixture(t);
+  prompt(f, "/kiro-impl foo");
+  // Write で location を worktree（作業ブランチ）に記録する。①は無く、②で判定される
+  assert.equal(pre(f, "Write", { file_path: path.join(f.wt, "a.md") }).stdout, "");
+  // cwd は本体（基底）。③で判定すると拒否になるので、許可されることで②の使用を確かめる
+  assert.equal(pre(f, "Bash", { command: "npm test" }, { cwd: f.root }).stdout, "");
+});
+
+test("直近の場所（候補②）: 記録が本体の checkout（基底）なら、cwd が worktree でもパスの無い作業は拒否する（3.13）", (t) => {
+  const f = worktreeFixture(t);
+  prompt(f, "/kiro-impl foo");
+  // 本体への Write は拒否されるが、作業場所（本体）は location に記録される
+  assert.equal(denial(pre(f, "Write", { file_path: path.join(f.root, "a.md") })).permissionDecision, "deny");
+  // cwd は worktree（作業ブランチ）。③で判定すると許可になるので、拒否されることで②の使用を確かめる
+  assert.equal(denial(pre(f, "Bash", { command: "npm test" }, { cwd: f.wt })).permissionDecision, "deny");
+});
+
+test("作業場所: 展開を含む cd（cd /tmp/* && …）は移動先を確定できないので記録しない（3.13）", (t) => {
+  const f = worktreeFixture(t);
+  prompt(f, "/kiro-impl foo");
+  assert.equal(pre(f, "Write", { file_path: path.join(f.wt, "a.md") }).stdout, "");
+  // 展開を含む cd は場所を記録せず、直近の worktree（②）で判定して通す
+  assert.equal(pre(f, "Bash", { command: "cd /tmp/* && touch x" }, { cwd: f.root }).stdout, "");
+  assert.equal(JSON.parse(readFileSync(stateFile(f), "utf8")).location, f.wt);
+});
