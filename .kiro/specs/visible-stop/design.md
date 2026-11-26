@@ -14,6 +14,7 @@
 - Claude Code（リモートセッション・コマンドライン）と Codex で同じ出力を使う。
 
 ### Non-Goals
+- 複数の spec 名を渡された入力で、先頭以外の spec を判定の対象にすること（止める条件の変更になるため、この spec では扱わない。既知の制約として下に記す）。
 - どの入力を止めるかの条件の変更。
 - kiro-gate・work-branch-gate の変更（止めた入力で手順書が読まれることは許容する）。
 - フック以外の原因による無応答の検出。
@@ -125,6 +126,8 @@ sequenceDiagram
 | 2.4 | 作業が進んだときの扱い | 見直しの条件（補強は入れない） | — | — |
 | 2.5 | 理由を解消して再送すれば通る | 両フック（判定は変えない） | — | — |
 | 3.1, 3.2, 3.3, 3.4 | 実現性の関門の各停止に案内を載せる（既存の理由の文面を使う） | `feasibility-gate.mjs` | `stopOutput` | 停止の流れ |
+| 3.6 | 複数の spec 名・`-y` つきの入力でも停止の案内（引数の形によらず、止める判定の出力は同じ形） | `feasibility-gate.mjs`（`classifyPrompt` は変更なし） | `stopOutput` | 停止の流れ |
+| 3.7 | 記録が無い導入前の spec への案内（既存の `messageBlock` の文面が、記録を作る手順と不要判定の手順を含む） | `feasibility-gate-rules.mjs`（文面は変更なし） | `messageBlock` | 停止の流れ |
 | 3.5, 4.6, 5.2, 5.3 | 止める条件・通す条件を変えない | `decideInput`・`decideInstall`（変更なし） | — | — |
 | 4.1, 4.2, 4.3, 4.4, 4.5 | 導入の各停止（失敗・導入中・古い印・区画の書き直しの失敗・判定不能）に案内を載せる | `install-cc-sdd.mjs`（`writeStop`） | `stopOutput` | 停止の流れ |
 | 5.1, 5.4 | 止めない入力には停止の出力を出さない・導入の案内を変えない | 両フック | — | — |
@@ -187,6 +190,11 @@ function stopOutput(notice: StopNotice): {
 
 新しいデータは持たない。追加の文脈は 1 回の出力に限り、状態ファイル・一時ファイルは作らない。
 
+## 既知の制約
+
+- 実現性の関門は、入力の先頭の spec 名だけを判定する（`classifyPrompt` は最初の `-` で始まらない語を spec 名にする）。`/kiro-spec-tasks A B -y` では、A の記録だけが見られ、B は判定されない。A が通過なら B の記録の有無にかかわらず入力は通る。これは止める条件の話で、この spec の対象外（止める条件を変えない）。扱うかは別の判断とする。
+- 事象の 2 件目（`/kiro-spec-tasks brw-enforcement brw-pr-handoff -y`）は、先頭の spec `brw-enforcement`（この仕組みの導入前に作られ、実現性の記録を持たない想定）の記録が無いために止められ、同じ無応答になったと考えられる。実際の記録は確認できていない（セッションを特定できなかった）。停止の出力を変えれば、この経路でも応答の文章が作られる。
+
 ## Error Handling
 
 ### Error Strategy
@@ -205,7 +213,7 @@ function stopOutput(notice: StopNotice): {
 - `stop-notice-rules`: 同じ入力に並ぶ他の案内より優先する旨を含む（7.1・7.2）。
 
 ### Integration Tests
-- `feasibility-gate`（フックの標準入出力）: 記録が無い・未通過・`/kiro-spec-quick` の停止で、出力が `hookSpecificOutput.additionalContext` を持ち、`decision` を持たず、既存の理由の文面を含む（3.1〜3.4）。止めない入力では何も出さない（5.1）。
+- `feasibility-gate`（フックの標準入出力）: 複数の spec 名と `-y` を含む入力（`/kiro-spec-tasks a b -y`）で、先頭の spec の記録が無いとき、停止の案内の出力になる（3.6）。記録が無い・未通過・`/kiro-spec-quick` の停止で、出力が `hookSpecificOutput.additionalContext` を持ち、`decision` を持たず、既存の理由の文面を含む（3.1〜3.4）。止めない入力では何も出さない（5.1）。
 - `install-cc-sdd`（フックの標準入出力）: 導入の失敗・導入中（新しい印・古い印）・区画の書き直しの失敗・判定不能の各経路で、同じ形の出力になる（4.1〜4.5）。導入済みの入力の出力は変わらない（5.4）。
 - 配布物の一覧: `stop-notice-rules.mjs` が `package.json` の `files` と配置の一覧に入っている（8.5）。運用の区画の文章に、停止の理由が応答の文章で示されることが含まれる（8.1）。
 

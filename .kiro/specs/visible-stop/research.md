@@ -4,6 +4,9 @@
 - リモートセッションの記録（Claude Code 2.1.329、auto モード）で、`/kiro-spec-quick install-freshness` が UserPromptSubmit フック（実現性の関門）に止められた。結果は成功扱い・`num_turns=0`・応答の文章なし。理由は結果の文字列とシステムの通知にだけある。同じ入力が別のセッションでも同じ結果だった。
 - 手元の `claude -p` では、`decision: "block"` の理由が表示される（feasibility-review の確認）。リモートセッションの画面では表示されず、確認の範囲が違っていた。
 
+## 事象の 2 件目（2026-11-26、利用者の報告）
+- 別のセッションで `kiro-spec-tasks brw-enforcement brw-pr-handoff -y` を実行して無応答になった。入力の解析では、先頭の spec 名 `brw-enforcement` だけが判定される（`classifyPrompt`: `{skill: "kiro-spec-tasks", spec: "brw-enforcement"}`）。`brw-enforcement` は実現性の記録の導入前に作られた spec で、記録が無いために止められたと考えられる。同じ型の停止（`decision: "block"`）。セッションの記録は特定できず、確認していない。
+
 ## 同じ型の停止の起点
 - `feasibility-gate.mjs`（1 か所）と `install-cc-sdd.mjs`（9 か所）の `decision: "block"`。kiro-gate・work-branch-gate の拒否と終了の停止は、モデルが理由を受け取るので無応答にならない。
 

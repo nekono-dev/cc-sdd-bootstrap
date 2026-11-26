@@ -69,6 +69,8 @@ visible-stop は、cc-sdd-bootstrap のフックが利用者の入力を「止�
 3. When 実現性の関門が、設計の確認が通っていない spec の `/kiro-spec-quick`・`/kiro-spec-batch` の入力を止める, the visible-stop shall 停止の案内を応答の文章で届ける。
 4. The visible-stop shall 実現性の関門の停止の案内に、どの段階の確認が通っていないか、通すための手順（確認の実施と記録、または不要と判定する場合の判定と理由の記録）、個別の段階のコマンドで確認を済ませてから再び送る手順（`/kiro-spec-quick`・`/kiro-spec-batch` の場合）を含める。
 5. The visible-stop shall 実現性の関門が止める条件（どの入力を、どの記録の状態で止めるか）を変えない。
+6. When 実現性の関門が止める入力が、複数の spec 名や `-y` のような引数を含む（例: `/kiro-spec-tasks <spec 名> <spec 名> -y`）, the visible-stop shall 引数の形によらず、停止の案内を応答の文章で届ける。
+7. When 実現性の記録が無い、この仕組みの導入前に作られた spec の入力が止められる, the visible-stop shall 停止の案内に、記録を作る手順（`## 実機検証の要否`・`## 設計の確認` を含む記録を作り、判定を書くこと）と、実機検証が不要なら不要と判定して理由を書く手順を含める。
 
 ### Requirement 4: 導入の停止への適用
 
