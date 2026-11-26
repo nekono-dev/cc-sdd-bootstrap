@@ -20,7 +20,15 @@ const TARGET_SKILLS = new Set([
 const STOP_TARGETS = {
   "kiro-spec-tasks": "design",
   "kiro-impl": "tasks",
+  "kiro-spec-quick": "design",
+  "kiro-spec-batch": "design",
 };
+
+/**
+ * 続けて作るコマンド（設計からタスクまでを一度に作る）。spec が特定できないときだけ案内し、
+ * 特定できて設計が通過なら何も返さない（5.10・5.12）。
+ */
+const CHAINED_COMMANDS = new Set(["kiro-spec-quick", "kiro-spec-batch"]);
 
 /** spec 名の規則。パスの意図しない解決を防ぐため、この規則に合うものだけ採る */
 const SPEC_NAME_PATTERN = /^[a-z0-9][a-z0-9-]*$/;
@@ -214,6 +222,7 @@ export function decideInput(command, specFound, record) {
     if (record[stage] !== "pass") {
       return { kind: "block", reason: messageBlock(spec, stage, "not-passed", command.skill) };
     }
+    if (CHAINED_COMMANDS.has(command.skill)) return { kind: "none" };
   }
   return { kind: "context", text: messageContext(command.skill, name) };
 }
@@ -238,7 +247,7 @@ export function messageBlock(spec, stage, reason, skill) {
     "実機検証が不要なら、`## 実機検証の要否` に `- 判定: 不要` と理由を書いてください。",
   ];
   if (skill === "kiro-spec-quick" || skill === "kiro-spec-batch") {
-    lines.push("このコマンドは設計とタスク計画を続けて作るため、個別の段階のコマンドで確認を済ませてから送ってください。");
+    lines.push("これらは設計とタスクを続けて作るコマンドなので、個別の段階のコマンド（`/kiro-spec-design`・`/kiro-spec-tasks` など）で確認を済ませてから送ってください。");
   }
   return lines.join("\n");
 }
@@ -310,8 +319,15 @@ const CONTEXT_TEXTS = {
   "kiro-spec-design": (path) => designContextOf(path),
   "kiro-validate-design": (path) => designContextOf(path),
   "kiro-spec-tasks": (path) => `【実現性の確認】タスク計画の各前提の根拠と、実施の段取りが確実にできるかを確認してください。実機検証が必要な spec では、実際の配置物・実機を使う確認を、最初の実装タスク（またはその群）に置いてください。実機の確認が最後に置かれている・欠けているなど未解決があれば、「未解決」として記録に残し、計画を直してから更新してください。結果は記録の \`## タスク計画の確認\` に残し、各前提の根拠の有無、実機の確認が最初に置かれているか（最初の実装タスクの番号）を書いてください。判定の語（\`通過\`・\`未通過\`）のうち通過にしてよいのは、根拠の無い前提と未解決が無いときだけです。レビュー役の依頼文にも、この観点（実機の確認が最初の実装タスクにあるか）を入れてください。${recordFormatOf(path)}`,
+  "kiro-spec-quick": (path) => batchNoticeOf(path),
+  "kiro-spec-batch": (path) => batchNoticeOf(path),
   "kiro-impl": (path) => `【実現性の確認】実装中に要件・設計と現実の食い違いが見つかったら、その場で requirements.md・design.md を書き換えないでください。cc-sdd の Blocked の扱い（タスクを止めて理由を残す）で、該当する段階（要件・設計・タスク）へ戻してください。戻した後は、記録の該当節の判定をまず \`未通過\` に戻してから、確認し直して更新してください。${recordFormatOf(path)}`,
 };
+
+/** 続けて作るコマンド（kiro-spec-quick・kiro-spec-batch）の案内。spec を特定できないときに出す（5.12） */
+function batchNoticeOf(path) {
+  return `【実現性の確認】\`kiro-spec-quick\`・\`kiro-spec-batch\` は設計とタスクを続けて作るため、この入力の前に、spec ごとに個別の段階のコマンドで実現性の確認を済ませ、記録（\`${path}\`）の設計の確認が通過になっていることを確かめてください。名前なしの一括作成は入力を止められないので、各 spec の設計・タスク計画の確認を個別に行ってください。`;
+}
 
 /** 設計の段階（kiro-spec-design・kiro-validate-design で同じ文言）の追加の指示 */
 function designContextOf(path) {

@@ -507,11 +507,6 @@ test("decideInput: kiro-impl はタスク計画が通過・spec が特定でき�
   assert.equal(decideInput({ skill: "kiro-impl", spec: "foo" }, true, null).kind, "block");
 });
 
-test("decideInput: kiro-spec-quick と kiro-spec-batch は、2.3 までは何も返さない（既存の挙動のまま）", () => {
-  for (const skill of ["kiro-spec-quick", "kiro-spec-batch"]) {
-    assert.deepEqual(decideInput({ skill, spec: "foo" }, true, null), { kind: "none" });
-  }
-});
 
 test("messageContext（要件 1.1・1.6）: 判定が必要でも不要でも、判定と理由を記録に残すと明示する", () => {
   assertAll(messageContext("kiro-spec-requirements", "foo"), ["必要でも不要でも", "判定と理由を"]);
@@ -537,4 +532,51 @@ test("messageContext（要件 3.3・3.4）: タスク計画の確認は、各前
     "未解決",
     "通過にしてよいのは、根拠の無い前提と未解決が無いときだけ",
   ]);
+});
+
+test("kiro-spec-quick・kiro-spec-batch: spec が特定でき記録が無い・設計が未通過なら止め、理由に個別の段階のコマンドの案内を含む（5.10）", () => {
+  for (const skill of ["kiro-spec-quick", "kiro-spec-batch"]) {
+    const missing = decideInput({ skill, spec: "foo" }, true, null);
+    assert.equal(missing.kind, "block");
+    assert.match(missing.reason, /記録がありません/);
+    assert.match(missing.reason, /個別の段階のコマンド（`\/kiro-spec-design`・`\/kiro-spec-tasks` など）で確認を済ませてから送ってください/);
+    const failed = decideInput({ skill, spec: "foo" }, true, parseRecord(recordText({ design: "未通過" })));
+    assert.equal(failed.kind, "block");
+    assert.match(failed.reason, /判定が通過ではありません/);
+  }
+});
+
+test("kiro-spec-quick・kiro-spec-batch: 設計が通過なら何も返さない（5.10）", () => {
+  const pass = parseRecord(recordText({ design: "通過", tasks: "未通過" }));
+  for (const skill of ["kiro-spec-quick", "kiro-spec-batch"]) {
+    assert.deepEqual(decideInput({ skill, spec: "foo" }, true, pass), { kind: "none" });
+  }
+});
+
+test("kiro-spec-quick・kiro-spec-batch: spec 名なし・特定できないときは止めず、5.12 の案内を追加の指示として返す", () => {
+  const cases = [
+    ["kiro-spec-batch", null, true],
+    ["kiro-spec-quick", "新しい機能を作る", false],
+    ["kiro-spec-quick", "newfeature", false],
+  ];
+  for (const [skill, spec, found] of cases) {
+    const decision = decideInput({ skill, spec }, found, null);
+    assert.equal(decision.kind, "context");
+    assert.equal(decision.text, messageContext(skill, null));
+    assertAll(decision.text, [
+      "設計とタスクを続けて作る",
+      "個別の段階のコマンド",
+      "記録（`.kiro/specs/<spec 名>/feasibility.md`）",
+      "名前なしの一括作成は入力を止められない",
+    ]);
+  }
+});
+
+test("messageBlock: kiro-spec-quick・kiro-spec-batch の理由は、続けて作るコマンドだと示し、個別の段階のコマンドを案内する（5.10・5.11）", () => {
+  for (const skill of ["kiro-spec-quick", "kiro-spec-batch"]) {
+    assertAll(messageBlock("foo", "design", "no-record", skill), [
+      "これらは設計とタスクを続けて作るコマンドなので",
+      "個別の段階のコマンド（`/kiro-spec-design`・`/kiro-spec-tasks` など）で確認を済ませてから送ってください",
+    ]);
+  }
 });

@@ -34,7 +34,7 @@
   - 単体試験で、各段階の文言に上の要素が含まれることが確かめられる
   - _Depends: 2.1_
   - _Requirements: 1.1, 1.2, 1.3, 1.4, 1.5, 1.6, 2.1, 2.2, 2.3, 2.4, 2.5, 3.1, 3.2, 3.3, 3.4, 4.6, 6.1, 6.2, 6.3_
-- [ ] 2.3 自動で続けて作るコマンドの入力を扱う
+- [x] 2.3 自動で続けて作るコマンドの入力を扱う
   - `kiro-spec-quick`・`kiro-spec-batch` も入力時に、設計が通っていなければ止める。停止の理由に、設計とタスクを続けて作るコマンドなので個別の段階のコマンドで確認を済ませてから送るよう足す
   - spec 名が取れない・場所が特定できない入力（名前なしの一括作成、説明文が先頭の `kiro-spec-quick`）は止めず、個別の段階のコマンドで確認するよう追加の指示で案内する
   - 単体試験と標準入力の試験で、名前つきの `kiro-spec-quick`・`kiro-spec-batch` が設計未通過で止まること、名前なしでは止まらず案内が出ることが確かめられる
@@ -74,3 +74,4 @@
 - 1.3: 実機（Claude Code・Codex）で、記録のない・未通過の spec の `kiro-spec-tasks`・`kiro-impl` の入力が止まり、通過の記録を書くと通ることを確かめた（`poc/feasibility-review/result.md` の場面 C）。Codex は停止の理由が出力に出ない（モデルの応答も作業も無い）。PoC の実行では、`install-cc-sdd.mjs` を先に実行しないと、2 回目以降の入力が「導入中」で止まる。
 - 2.1: 候補の根は ① 入力の作業場所の git の根 ② スクリプトの位置の根 ③ `git worktree list --porcelain -z` の各 worktree（先頭 20 個まで。bare・prunable・存在しない・実体の重複は除く）。`-z` が使えない git では `--porcelain` に切り替え、引用符つきのパスは候補に入れない。worktree の一覧の解析は純粋な関数（`feasibility-gate-rules.mjs` の `parseWorktreeListZ`・`parseWorktreeListPorcelain`）。同名の spec が本体と worktree にあるときは、並びの先（入力の作業場所の根）を使う。
 - 2.2: 計画は文言だけだったが、出力に載せないと届かないため、判断の戻り値 `context` と入口の `additionalContext` の出力までを 2.2 に含めた。`kiro-spec-requirements`・`kiro-spec-design`・`kiro-validate-design` は常に追加の指示、`kiro-spec-tasks`・`kiro-impl` は止めないときに追加の指示（止めるときは入力の停止だけ）。`kiro-spec-quick`・`kiro-spec-batch` は 2.3 で扱う。文言は、記録の書式・やり直したら判定を未通過に戻すこと・通過にしてよい条件を共通で含む。「書き込みを機械的に拒否しない」（要件 6.3）は、機械的な拒否を作らないことで満たし、文言には入れていない。
+- 2.3: `kiro-spec-quick`・`kiro-spec-batch` は、spec 名が取れて spec が特定でき、設計が通過でなければ入力を止める（理由に個別の段階のコマンドで確認する案内）。名前なし・説明文が先頭・ディレクトリがまだ無い入力は、止めずに追加の指示で個別の確認を案内する（既知の限界: 名前なしの一括作成は止められない）。設計が通過の名前つきは出力なし。

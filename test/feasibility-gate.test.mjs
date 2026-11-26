@@ -433,3 +433,20 @@ test("追加の指示の入力でもリポジトリの中に何も作られな�
   assertContext(submit(f, "/kiro-spec-tasks foo"));
   assert.equal(git(f.root, ["status", "--porcelain", "--untracked-files=all"]), before);
 });
+
+test("kiro-spec-quick・kiro-spec-batch は記録が無ければ止め、設計が通過なら出力しない（Claude Code と Codex）", (t) => {
+  const f = fixture(t);
+  spec(f, "foo");
+  assert.match(assertBlocked(submit(f, "/kiro-spec-quick foo --auto")), /個別の段階のコマンド/);
+  assert.match(assertBlocked(submit(f, "$kiro-spec-batch foo", { tool: "codex" })), /記録がありません/);
+  spec(f, "foo", recordText({ design: "通過" }));
+  assertPassed(submit(f, "/kiro-spec-quick foo --auto"));
+  assertPassed(submit(f, "/kiro-spec-batch foo"));
+});
+
+test("名前なしの /kiro-spec-batch・説明文が先頭の /kiro-spec-quick・spec のディレクトリが無い /kiro-spec-quick は、止めず案内を出す（5.12）", (t) => {
+  const f = fixture(t);
+  assert.match(assertContext(submit(f, "/kiro-spec-batch")), /名前なしの一括作成は入力を止められない/);
+  assert.match(assertContext(submit(f, "/kiro-spec-quick 新しい機能を作る")), /設計とタスクを続けて作る/);
+  assert.match(assertContext(submit(f, "/kiro-spec-quick newfeature")), /個別の段階のコマンド/);
+});
