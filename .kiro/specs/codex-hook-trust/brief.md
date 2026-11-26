@@ -4,7 +4,7 @@
 Codex のフックは「信頼の承認」が済むまで動かない（承認の前は `codex exec` で黙って飛ばされ、対話の `codex` では「Hooks need review」の確認画面が出る）。利用者は導入・更新のたびに手で承認する必要があり、煩わしい。更新でフックの定義が変わるとハッシュも変わるため、承認し直しが繰り返し起きる。Claude から `codex exec` で起動する子も、未承認のフックは動かないか確認が要る。
 
 ## Current State
-- 承認の記録は利用者の `~/.codex/config.toml` の `[hooks.state."<hooks.json の道筋>:<イベント>:<番号>:0"]` と `trusted_hash = "sha256:…"`。承認は対話の確認画面で `t` を押すと記録される（`poc/codex-worktree-hooks`）。
+- 承認の記録は利用者の `~/.codex/config.toml` の `[hooks.state."<hooks.json の道筋>:<イベント>:<番号>:0"]` と `trusted_hash = "sha256:…"`。承認は対話の確認画面で `t` を押すと記録される。
 - ハッシュは hooks.json の項目をそのまま sha256 にしたものと一致しない（フック 1 件・グループ・コマンド文字列・イベント名付きの 4 通りを試した）。Codex 内部の正規化の方法は未特定。
 - 公式の回避手段 `--dangerously-bypass-hook-trust` は起動 1 回ごとの指定で、設定ファイルは書き換えない。
 - 導入コマンドは `.codex/hooks.json` へ印のある項目を登録するが、承認の記録は書かない。subagent-delegation の文章は「未承認のときは文章で補う」と案内している。

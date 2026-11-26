@@ -69,7 +69,7 @@
   - _Boundary: 既存記録の書き換え_
   - _Requirements: 8.2, 8.3, 8.4_
 
-- [ ] 3.4 (P) installer-core・session-install・codex-hook-trust・install-freshness の設計・調査・タスク・要件・概要の `poc/` の記述を直す
+- [x] 3.4 (P) installer-core・session-install・codex-hook-trust・install-freshness の設計・調査・タスク・要件・概要の `poc/` の記述を直す
   - `grep` で `poc/` の記述を全件の一覧にし、人が 1 件ずつ分類する。(i) 括弧書きや出典の注記のように、場所を取り除いても文が成り立つものは、場所の部分だけ取り除く。(ii) 場所を取り除くと意味が通らないもの、または削除する `poc/` の再実行を指示しているものは、何を実機で確かめたか・再確認が要るかの意味を保つ文に書き換える
   - `installer-core` の引き継ぎの文書（自己適用の手順）の記述も同じ手順で直す
   - 完了の状態: 4 つの spec の文書に、リポジトリ直下の `poc/<名前>` の形の参照が無く、書き換えた文の意味が保たれている（差分の人の確認）

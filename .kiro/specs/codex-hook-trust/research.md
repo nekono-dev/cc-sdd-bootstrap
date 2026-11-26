@@ -28,7 +28,7 @@
 
 | 要件 | 技術的に必要なこと | 既存の部品で足りるか |
 |---|---|---|
-| 1.1・1.2・1.3 | `hooks.json` の自分のフックを列挙し、キーとハッシュを計算（`poc/codex-hook-trust/run.mjs` の `trustEntries` を実装に写す）。`config.toml` の該当の表だけを追加・更新 | **不足**: ハッシュの計算（PoC に原型あり）、TOML の部分的な書き換え、現在の記録との比較 |
+| 1.1・1.2・1.3 | `hooks.json` の自分のフックを列挙し、キーとハッシュを計算（実機検証の `run.mjs` の `trustEntries` を実装に写す）。`config.toml` の該当の表だけを追加・更新 | **不足**: ハッシュの計算（PoC に原型あり）、TOML の部分的な書き換え、現在の記録との比較 |
 | 1.4 | 他の表・他のキーを保つ編集。承認の確認画面は同じファイルを書く（利用者が画面で承認すると Codex も書く） | 不足。書き換えは該当の表の追加・差し替えだけにする必要がある |
 | 1.5 | Codex が実際に承認済みと見ること | PoC 済み（`--e2e` 場面 2） |
 | 1.6・3.2 | 読めない・書けない・形式が想定外のときの失敗の扱い（設定を変えず、理由と手順を表示して続ける） | 不足 |
@@ -41,7 +41,7 @@
 | 6.1 | `uninstall` で自分の記録だけを取り除く | 不足: `uninstall` の計画はリポジトリ内の変更だけ。外すキーは「外す前の `hooks.json`」から計算する必要がある |
 | 6.2 | Codex の版が変わって合わなくなっても壊れない | Codex 側の挙動で保証される（未承認として扱われる。PoC の履歴調査で確認）。実装は不要 |
 | 6.3 | 運用の区画の文章（`agent-section-codex.md` 側）に手で承認する方法と補いを書く | 既存の文章（フックの信頼が未承認のときの案内）の更新で足りる |
-| 6.4 | 再実行できる確認手順 | **済み**（`poc/codex-hook-trust/`）。本実装の単体試験と PoC を併記する |
+| 6.4 | 再実行できる確認手順 | **済み**（実機検証の PoC）。本実装の単体試験と PoC を併記する |
 
 ## 3. 主なギャップと制約
 
@@ -103,7 +103,7 @@ _本書は情報の整理で、設計の決定ではない。_
 # 設計時の調査と合成の記録（2026-11-25）
 
 ## 調査の種類
-拡張（既存の導入コマンド・配置物・入口のコマンドへの足し込み）。軽い調査（既存の拡張点・規約・依存の確認）に、実機の PoC（`poc/codex-hook-trust/probe.mjs`）を足した。
+拡張（既存の導入コマンド・配置物・入口のコマンドへの足し込み）。軽い調査（既存の拡張点・規約・依存の確認）に、実機の PoC（`probe.mjs`）を足した。
 
 ## 調査の結果（Research Needed への回答）
 
@@ -125,5 +125,5 @@ _本書は情報の整理で、設計の決定ではない。_
 
 ## 参照した資料
 - openai/codex の `codex-rs/hooks/src/engine/discovery.rs`（`hook_hash`）、`codex-rs/config/src/fingerprint.rs`（`version_for_toml`）、`codex-rs/protocol/src/hooks.rs`（`MatcherGroup`・`HookHandlerConfig`）と各ファイルの履歴。
-- `poc/codex-hook-trust/`（`run.mjs`・`probe.mjs`・`result.md`）、`poc/codex-worktree-hooks/result.md`。
+- 実機検証（記録は削除済み）: `run.mjs`・`probe.mjs`・`result.md`、git の worktree での Codex のフックの読まれ方の記録。
 - 既存の規約: `.kiro/steering/structure.md`・`tech.md`・`project-rules.md`。
