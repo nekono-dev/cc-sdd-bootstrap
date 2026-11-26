@@ -136,6 +136,7 @@ sequenceDiagram
 ```
 
 - 通信の失敗・待ち時間超過は、最新との比較だけを省く。照合の結果は引き続き出す（3.3・3.4）。
+- 届け方（4.5）: 出力は 1 つの JSON に、`hookSpecificOutput.additionalContext`（エージェントの文脈。「利用者の質問への回答より前に、次の 1 文をそのまま出力する」指示と案内文）と `systemMessage`（Claude Code が利用者向けに表示する欄。案内文）を入れる。PoC の結果（場面 D・E）: 文脈はどちらのツールにも届く。無関係な入力に対して利用者へ伝えるかは、Codex は毎回伝え、Claude Code はモデルにより伝えない場合がある（haiku は 1 回伝え、sonnet は 2 回とも伝えなかった）。`systemMessage` の画面表示は実機で未確認。このため、利用者への伝達は保証せず、要件 4.5 は「文脈と表示欄へ届ける」までとした。
 - ずれが無いとき、出力は何も出さない（2.6・4.6）。出力は失敗でも例外でも出さず、終了コードは常に 0（5.3）。
 
 ## Requirements Traceability
@@ -158,12 +159,12 @@ sequenceDiagram
 | 3.3 | 取得できなくても止めない | `fetchLatest`（失敗は `null`）、`freshness.mjs` の通す設計 | `fetchLatest` | 最新の比較 |
 | 3.4 | 取得失敗でも照合は案内 | `decideNotice`（最新が `null` でも続行） | 同上 | 最新の比較 |
 | 3.5 | 待ち時間の上限 | `fetchLatest`（3 秒） | `fetchLatest` | 最新の比較 |
-| 3.6 | 版が取り出せない記録は比較せず案内に含める | `decideNotice`（`commit: null` は比較を省略し、ほかの案内がある場合に一文を添える） | 同上 | 照合 |
+| 3.6 | 版が取り出せない記録は比較せず、ほかの案内があるときに添える | `decideNotice`（`commit: null` は比較を省略し、ほかの案内がある場合に一文を添える） | 同上 | 照合 |
 | 4.1 | 要点と更新コマンドの案内 | `messageNotice`、`updateCommand` | 同上 | 案内 |
 | 4.2 | 開始時だけ | フックは `SessionStart` にだけ登録 | `catalog.hooks` | 案内 |
 | 4.3 | 入力を止めない | 追加の文脈だけを出力（`decision: block` を使わない） | 出力の形 | 案内 |
 | 4.4 | 自動更新しない | 書き込みは導入コマンドの `update` のみ。入口は読み取り専用 | — | — |
-| 4.5 | 両ツールで届く | `freshness.mjs --tool claude\|codex`、PoC D | 出力の形 | 案内 |
+| 4.5 | 両ツールの文脈へ届く（利用者への伝達は保証しない） | `freshness.mjs --tool claude\|codex`、PoC D・E | 出力の形（`additionalContext` と `systemMessage`） | 案内 |
 | 4.6 | ずれが無ければ出さない | `decideNotice`（`null`）→ 出力なし | 同上 | 案内 |
 | 5.1 | 記録が無い導入の案内 | `decideNotice`（`record: "missing"`） | 同上 | 照合 |
 | 5.2 | 記録が壊れている案内 | `decideNotice`（`record: "broken"`） | 同上 | 照合 |
@@ -205,14 +206,15 @@ export function messageNotice(notice: Notice): string;                          
 - 事後条件: `buildRecord` の出力は同じ入力で同じ文字列（キーを昇順で並べ、改行は `\n`）。
 - `parseRecord` は、`format` が 1 でない・JSON でない・`files` の値が 64 桁の 16 進でないものを `broken` にする。
 - `compareLatest`: `record.source.commit` が `null` のときや `latest` が `null` のときは `unknown`。
-- `updateCommand`: `ref` があれば `#<ref>` を付ける。`ref` が 40 桁の 16 進（固定版）のときも、そのまま付ける。
+- `updateCommand`: `ref` がブランチ・タグなら `#<ref>` を付ける。`ref` が無い・40 桁の 16 進（固定のコミット）のときは付けない。
 
 #### `freshness.mjs`（入出力）
 
 - 入力: 引数 `session-start --tool claude|codex`。ほかの引数・未対応は、何も出さず終了コード 0（案内の失敗で作業を止めない）。
-- 手順: ① リポジトリのルートを自分の位置（`import.meta.url`）から求める。② `RECORD_PATH` を読み、`parseRecord`。③ `ok` なら記録の各ファイルを読んで `fingerprint`（無ければ `null`）→ `inspectFiles`。④ `ok` かつ `commit` があれば `git ls-remote <DISTRIBUTION_REPO> <ref|HEAD>`（`GIT_TERMINAL_PROMPT=0`、待ち時間 3 秒）→ `pickRemoteCommit` → `compareLatest`。⑤ `decideNotice`。`null` なら何も出さない。⑥ あれば `{ hookSpecificOutput: { hookEventName: "SessionStart", additionalContext: messageNotice(...) } }` を標準出力へ 1 行出す。
-- 失敗の扱い: ②〜⑥ のどの失敗も握りつぶし、何も出さずに終了コード 0。出力は 1 回だけ。
-- `ref` が 40 桁の 16 進（固定版）のとき、最新との比較は行わない（`unknown`）。
+- 手順: ① リポジトリのルートを自分の位置（`import.meta.url`）から求める。② `RECORD_PATH` を読み、`parseRecord`。③ `ok` なら記録の各ファイルを読んで `fingerprint`（無ければ `null`）→ `inspectFiles`。④ `ok` かつ `commit` があれば `git ls-remote <DISTRIBUTION_REPO> <ref|HEAD>`（`GIT_TERMINAL_PROMPT=0`、待ち時間 3 秒）→ `pickRemoteCommit` → `compareLatest`。⑤ `decideNotice`。`null` なら何も出さない。⑥ あれば `{ systemMessage: <案内文>, hookSpecificOutput: { hookEventName: "SessionStart", additionalContext: messageNotice(...) } }` を標準出力へ 1 行出す（`messageNotice` は、利用者向けの案内文と、エージェントへ「回答より前にそのまま出力する」指示を返す）。
+- 失敗の扱い: 記録の読み取りは「無い（ENOENT）→ `missing`」「それ以外の読み取りの失敗・不正な形式 → `broken`」と分類して案内へ渡す（5.1・5.2）。分類できた後の、指紋の計算・`git`・出力の失敗は握りつぶし、何も出さずに終了コード 0。出力は 1 回だけ。
+- `ref` が 40 桁の 16 進（固定のコミット）のとき、利用者が版を固定しているので、最新との比較は行わない（`unknown`。要件 3.1）。更新コマンドは固定のコミットを含めず、既定の最新を取る形（`npx -y github:nekono-dev/cc-sdd-bootstrap update`）にする。
+- 最新の取得の指定: `ref` があれば `git ls-remote <repo> refs/heads/<ref> refs/tags/<ref> refs/tags/<ref>^{}`、無ければ `HEAD`。タグは注釈つきのとき `^{}` の行（指す先のコミット）を優先する。
 
 #### `source.mjs`（入出力、導入コマンド側）
 
@@ -228,7 +230,7 @@ export function readSource(packageRoot: string): Source; // 失敗・形が違�
 #### `plan.mjs`（変更点の契約）
 
 - `computePlan` は、配置物の変更を決めた後で、書き込み後の内容になるファイル（`catalog.files` の同梱の内容と運用の区画の 2 ファイル）の指紋から `buildRecord` で記録を作り、`record(changes, RECORD_PATH, content, snapshot.deployDirFiles[RECORD_PATH])` を呼ぶ（一致していれば変更なし）。
-- 記録は変更の一覧の末尾に足す（途中で失敗しても、古い記録は残るか、記録が無いか、のどちらかで、案内で気づける）。
+- 記録は変更の一覧の末尾に足す。`applyPlan` は並べ替えるが、配置ディレクトリの書き込みの中では一覧の順で適用されるため、記録は配置物の書き込みの最後になる（フックの登録・`.gitignore` はその後）。途中で失敗しても、古い記録が残るか記録が無いかのどちらかで、次のセッションで案内される。適用の順序は変更しない。
 - 記録のパスは `desiredPaths` に含め、`uninstall` では触らない。
 
 ## Data Models
@@ -272,13 +274,13 @@ export function readSource(packageRoot: string): Source; // 失敗・形が違�
 
 ### E2E / 実機
 - 実際の `npx github:…#ref update` を一時のリポジトリで行い、記録のコミットが配布元のブランチの先頭に一致する（`poc/install-freshness/run.mjs` の場面 A の延長。1.1・1.4）。
-- 古い記録（コミットを書き換え）で、実際の `claude -p`・`codex exec` が案内を利用者向けに伝える（場面 D の延長。4.5）。
+- 古い記録（コミットを書き換え）で、実際の `claude -p`・`codex exec` の文脈に案内が届く（場面 D の延長。4.5）。利用者への伝達そのものは保証しないため、合否には含めず、観測として記録する。
 - このリポジトリ自身に `update` を実行し、記録が作られ、次のセッションで案内が出ない（自己適用。2.6）。
 
 ## Security Considerations
 - 通信は公開リポジトリへの `git ls-remote` だけ（認証・書き込みなし）。`GIT_TERMINAL_PROMPT=0` で認証の入力を求めない。
 - 記録は利用者のリポジトリに置く平文の JSON で、秘密情報を含まない。指紋は改変の検出が目的ではないため、改ざんへの対策はしない（要件の範囲外）。
-- 案内の文面はエージェントへの追加の文脈になる。配布元の最新の取得結果は、40 桁の 16 進だけを取り出して使い、取得した文字列をそのまま文面に入れない。
+- 案内の文面はエージェントへの追加の文脈と表示欄になる。配布元の最新の取得結果は、40 桁の 16 進だけを取り出して使い、取得した文字列をそのまま文面に入れない。
 
 ## Migration Strategy
 - 既存の導入先は、本機能を含む版へ `update` した時点で記録が作られる。それ以前は記録が無く、検知の仕組みも無い（5.5）。更新後の初回のセッションから、照合が働く。

@@ -4,7 +4,8 @@
 // 必要なもの: node・npx・git、GitHub への通信、認証済みの claude・codex（場面 D のみ。無ければ場面 D は飛ばす）。
 //   場面 A: `npx github:…#<ref>` で取得した配布物から、配布元の版（コミット）を取り出せるか
 //   場面 B: 配布元の最新を `git ls-remote` で安く取得できるか。失敗・待ち時間超過のとき通す形になるか
-//   場面 D: SessionStart フックの追加の文脈が Claude Code・Codex の両方のエージェントに届くか
+//   場面 D: SessionStart フックの追加の文脈が Claude Code・Codex の両方のエージェントに届くか（合言葉を直接尋ねる）
+//   場面 E: 同じ文脈に「最初の返答で利用者へ伝える」指示を入れ、無関係な入力でもエージェントが利用者へ伝えるか
 // 作業場所は一時ディレクトリ（このリポジトリには書かない）。
 import fs from "node:fs";
 import os from "node:os";
@@ -63,15 +64,15 @@ const check = (label, cond, detail = "") => { console.log(`${cond ? "OK  " : "NG
 }
 
 // 場面 D: SessionStart の追加の文脈がエージェントに届くか
-function sessionStartProbe(tool) {
+function sessionStartProbe(tool, relay = false) {
   const dir = path.join(base, `ctx-${tool}`);
   fs.mkdirSync(path.join(dir, `.${tool}`), { recursive: true });
   spawnSync("git", ["init", "-q"], { cwd: dir });
   const token = `FRESH-${Math.floor(Math.random() * 9000 + 1000)}`;
   const script = path.join(dir, "hook.cjs");
-  fs.writeFileSync(script, `process.stdout.write(JSON.stringify({ hookSpecificOutput: { hookEventName: "SessionStart", additionalContext: "導入の鮮度の案内: 合言葉は ${token} です。利用者へ伝えてください。" } }));`);
+  fs.writeFileSync(script, `process.stdout.write(JSON.stringify({ hookSpecificOutput: { hookEventName: "SessionStart", additionalContext: ${JSON.stringify(relay ? `導入の鮮度の案内（${token}）: 配置物が古い可能性があります。次の 1 文を、利用者の質問への回答より前に、そのまま最初に出力してください:「導入の鮮度の案内（${token}）: 配置物が古い可能性があります。」` : `導入の鮮度の案内: 合言葉は ${token} です。利用者へ伝えてください。`)} } }));`);
   const hooks = { hooks: { SessionStart: [{ hooks: [{ type: "command", command: `node ${JSON.stringify(script)}`, timeout: 10 }] }] } };
-  const question = "セッション開始時のフックから受け取った案内にある、FRESH- で始まる合言葉だけを答えてください。無ければ NONE と答えてください。";
+  const question = relay ? "こんにちは。このリポジトリはどんなものですか。1 文で答えて。" : "セッション開始時のフックから受け取った案内にある、FRESH- で始まる合言葉だけを答えてください。無ければ NONE と答えてください。";
   if (tool === "claude") {
     fs.writeFileSync(path.join(dir, ".claude", "settings.json"), JSON.stringify(hooks));
     const r = spawnSync("claude", ["-p", question, "--model", process.env.POC_CLAUDE_MODEL ?? "haiku"], { cwd: dir, encoding: "utf8", timeout: 180000 });
@@ -85,10 +86,12 @@ function sessionStartProbe(tool) {
     "--config", 'model_reasoning_effort="low"', "--cd", dir, question], { env: { ...process.env, CODEX_HOME: home }, encoding: "utf8", timeout: 180000 });
   return { token, out: r.stdout, status: r.status };
 }
-for (const tool of ["claude", "codex"]) {
-  if (spawnSync("which", [tool]).status !== 0) { console.log(`SKIP D(${tool}): ${tool} が無い`); continue; }
-  const { token, out, status } = sessionStartProbe(tool);
-  check(`D. ${tool}: SessionStart の追加の文脈（合言葉）がエージェントに届く`, status === 0 && out.includes(token), `終了コード ${status}、応答: ${out.trim().slice(0, 120).replace(/\n/g, " ")}`);
+for (const [scene, relay, label] of [["D", false, "SessionStart の追加の文脈（合言葉）がエージェントに届く"], ["E", true, "無関係な入力でも、エージェントが案内を利用者へ伝える"]]) {
+  for (const tool of ["claude", "codex"]) {
+    if (spawnSync("which", [tool]).status !== 0) { console.log(`SKIP ${scene}(${tool}): ${tool} が無い`); continue; }
+    const { token, out, status } = sessionStartProbe(tool, relay);
+    check(`${scene}. ${tool}: ${label}`, status === 0 && out.includes(token), `終了コード ${status}、応答: ${out.trim().slice(0, 120).replace(/\n/g, " ")}`);
+  }
 }
 
 fs.rmSync(base, { recursive: true, force: true });

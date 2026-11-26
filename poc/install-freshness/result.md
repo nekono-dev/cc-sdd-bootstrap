@@ -4,7 +4,7 @@
 - 環境: Node.js v22.16.0、npm 10.9.2、Claude Code 2.1.329、Codex CLI 0.172.0（Linux）
 - 実行: `node poc/install-freshness/run.mjs [ブランチ]`（既定 `dev/base-branch-sync`。取得は一時のキャッシュで行い、リポジトリには書かない）
 
-## 結果（OK 11 件、NG 0 件）
+## 結果（場面 A・B・D は OK 11 件。場面 E は下の表のとおり）
 
 | # | 確かめたこと | 結果 |
 |---|---|---|
@@ -19,6 +19,10 @@
 | B4 | 存在しない・非公開のとき（`GIT_TERMINAL_PROMPT=0`）、認証を求めず非 0 で返る | OK |
 | D（claude） | SessionStart のフックの `hookSpecificOutput.additionalContext` の合言葉を、Claude Code のエージェントが答えた | OK |
 | D（codex） | 同じ形の出力の合言葉を、Codex のエージェントが答えた（`--dangerously-bypass-hook-trust` を付けた `codex exec`） | OK |
+| E（codex） | 無関係な入力（「こんにちは。このリポジトリはどんなものですか」）でも、案内の文（合言葉つき）を利用者への回答に含める | OK（3 回中 3 回） |
+| E（claude） | 同じ条件。「回答より前に次の 1 文をそのまま出力する」指示（最終版）。haiku で 1 回 OK、sonnet で 1 回 NG。最初の版の指示（最初の返答の冒頭で 1 文で伝える）は haiku・sonnet の計 3 回とも NG | **保証できない**（モデルと指示に依る） |
+| 参考（claude） | `systemMessage` を付けた出力は、`stream-json` の `hook_response` の `output` に含まれる。利用者の画面での表示は確認していない | 未確認 |
+| 参考（codex） | `systemMessage` は `codex exec` の出力に出ない（`hook: SessionStart` の行のみ）。対話画面での表示は確認していない | 未確認 |
 
 ## 追加の確認（手で実行、再実行は下の手順）
 
@@ -39,4 +43,4 @@
 - 配布元のコミットは、`npx` が配布物の隣に残す `.package-lock.json` から取り出せる。取り出せない場合（手元の checkout からの実行など）は、記録に「取り出せなかった」と書く。
 - 取得したときの `#ref` も取り出せるため、ブランチ指定の利用先では、そのブランチの先頭と比べられる（既定の先頭と比べると常に差が出てしまう）。
 - 最新の取得は `git ls-remote`（外部パッケージ不要、認証不要）で足りる。失敗・待ち時間の超過は、案内を省く側（通す）に倒せる。
-- 追加の文脈は両ツールで届く。ただし「利用者へ伝える」かはエージェントの動作に依る。案内文に、利用者へ短く伝える指示を入れる。
+- 追加の文脈は両ツールで届く。ただし「利用者へ伝える」かはエージェントの動作に依り、Claude Code では保証できない（場面 E）。そのため、`additionalContext` に加えて、利用者向けの表示欄 `systemMessage` も併せて出す（画面表示は未確認）。要件 4.5 は「文脈と表示欄へ届ける」までとし、利用者への伝達の保証は求めない。
