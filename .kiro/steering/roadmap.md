@@ -94,7 +94,8 @@ cc-sdd（Kiro 方式の仕様駆動開発のスキル集）の運用一式を、
 - 2026-11-25: codex-hook-trust を実装し、develop に取り込んだ（PR #6）。取り込み後の worktree と普通の checkout での確認（5.3）も PASS。Codex のクラウドセッションとプロジェクトの信頼の付与は範囲外。
 - 2026-11-25: 利用者の指示で work-branch-flow を足した（作業前のブランチ作成と検証後の PR 作成の運用フロー。設定で on/off、既定 on。brw は知らない前提）。brief を書いた。
 - 2026-11-26: work-branch-flow・feasibility-review を実装し、develop に取り込んだ（PR #8・#9）。取り込み後の普通の checkout と worktree での確認（5.3）も、両ツールで OK 26 / NG 0。`brw create` を重ねた Codex の構成などは未確認として結果に残した。
-- [ ] install-freshness -- 導入時に配布元の版（コミット）と配置物の内容の指紋を記録し、セッション開始時に配置物が古い・欠けていることを検知して更新コマンドを案内する（自動更新はしない）。Dependencies: installer-core, session-install
+- [ ] install-freshness -- 導入時に配布元の版（コミット）と配置物の内容の指紋を記録し、セッション開始時に配置物が古い・欠けていることを検知して更新コマンドを案内する（自動更新はしない）。Dependencies: installer-core, session-install（実装済み・検証前。`- [x]` にしないのは、検証（`/kiro-validate-impl`）が未実施のため）
+- 2026-11-26: 実装（タスク 1.1〜2.3）を作業ブランチで完了。検証は未実施。
 
 ## 基底ブランチ・導入コピーの同期（2026-11-26）
 
