@@ -4,11 +4,11 @@
 //   B: 子のレビュー役の起動（Claude Code の Agent・Codex の spawn_agent）の依頼文を PreToolUse で扱えるか
 //      B1 依頼文に印が無ければ拒否し、理由で入れさせる（拒否→呼び直し）
 //      B2 依頼文の末尾に印を足す（updatedInput）。子が受け取ったかは、子が最後の 1 行を引用して答えるので分かる
-//   C: 関門（入力の停止）は session-install・kiro-gate の PoC（poc/req-feasibility/result.md）で両ツール確認済みのため、ここでは流さない
+//   C: 配置した feasibility-gate（init で導入）で、記録のない spec の /kiro-spec-tasks・/kiro-impl が入力の停止になり、通過の記録を書くと通るか（両ツール）
 // 使い方: node poc/feasibility-review/run.mjs [A] [B]   認証済みの claude・codex、git、Node.js 22、cc-sdd の導入に使うネットワークが要る。
 import fs from 'node:fs';
 import path from 'node:path';
-import { check, observe, summary, run, git, makeRepo, registerHooks, records, invoke, succeeded, finalAnswer } from '../work-branch-flow/common.mjs';
+import { check, observe, summary, run, git, makeRepo, registerHooks, records, invoke, succeeded, finalAnswer, scratch } from '../work-branch-flow/common.mjs';
 
 const repoRoot = path.resolve(import.meta.dirname, '../..');
 const want = process.argv.slice(2).map((s) => s.toUpperCase());
@@ -120,6 +120,63 @@ if (enabled('B')) {
     const answer = finalAnswer(tool, result);
     observe(`B3 ${tool}: 最終の答え`, answer.slice(0, 200).replace(/\n/g, ' '));
     check(`B3 ${tool}: 運用の決まりに従い、子が印を受け取った（子の引用に印がある）`, answer.includes(mark));
+  }
+}
+
+// ---- C: 配置した入口の停止と通過（feasibility-review タスク 1.3） ----
+if (enabled('C')) {
+  console.log('\n## C: 配置した feasibility-gate（init で導入）の停止と通過');
+  const skill = (name) => `---\nname: ${name}\ndescription: 確認用の手順書（${name}）\n---\n\n# ${name}\n\n手順: 「完了」と 1 行で答える。ファイルは作らない。\n`;
+  const record = (design, tasks) => `# 実現性の記録: demo\n\n## 実機検証の要否\n- 判定: 必要\n- 理由: 確認用\n\n## 設計の確認\n- 判定: ${design}\n\n## タスク計画の確認\n- 判定: ${tasks}\n`;
+  const BLOCKED = /実現性の確認が通っていません/;
+  for (const tool of tools) {
+    const dir = makeRepo(`c-${tool}`);
+    const init = run(process.execPath, [path.join(repoRoot, 'bin/cc-sdd-bootstrap.mjs'), 'init'], { cwd: dir });
+    check(`C ${tool}: init が成功し、配置物が入った`, init.status === 0 && fs.existsSync(path.join(dir, '.agent-hooks/cc-sdd-bootstrap/feasibility-gate.mjs')));
+    const registered = [path.join(dir, '.claude/settings.json'), path.join(dir, '.codex/hooks.json')].map((f) => fs.readFileSync(f, 'utf8').includes('feasibility-gate.mjs'));
+    check(`C ${tool}: 両ツールの登録に feasibility-gate がある`, registered.every(Boolean), registered.join(','));
+    // cc-sdd を先に導入しておく（入力時の導入が走って、後の入力を「導入中」で止めないため）。その後、確認用に 2 つの手順書だけを差し替える
+    const install = run(process.execPath, ['.agent-hooks/cc-sdd-bootstrap/install-cc-sdd.mjs'], { cwd: dir });
+    check(`C ${tool}: cc-sdd の導入が成功した`, install.status === 0, String(install.stderr ?? '').trim().split('\n')[0]);
+    for (const base of ['.claude/skills', '.agents/skills']) {
+      for (const name of ['kiro-spec-tasks', 'kiro-impl']) {
+        fs.mkdirSync(path.join(dir, base, name), { recursive: true });
+        fs.writeFileSync(path.join(dir, base, name, 'SKILL.md'), skill(name));
+      }
+    }
+    const specDir = path.join(dir, '.kiro/specs/demo');
+    fs.mkdirSync(specDir, { recursive: true });
+    fs.writeFileSync(path.join(specDir, 'spec.json'), '{"feature_name":"demo"}\n');
+    const sigil = tool === 'claude' ? '/' : '$';
+    let seq = 0;
+    const ask = (command) => {
+      const result = invoke(tool, dir, `${sigil}${command} demo`, { tools: 'Bash,Read,Write,Edit,Skill' });
+      const text = `${result.stdout}\n${result.stderr}`;
+      fs.writeFileSync(path.join(scratch, `c-${tool}-${command}-${++seq}.out.txt`), text);
+      return { text, answer: finalAnswer(tool, result), result };
+    };
+    const cases = [
+      { command: 'kiro-spec-tasks', label: '記録なし', record: null, blocked: true },
+      { command: 'kiro-spec-tasks', label: '設計が通過', record: record('通過', '未通過'), blocked: false },
+      { command: 'kiro-impl', label: '設計だけ通過（タスク計画は未通過）', record: record('通過', '未通過'), blocked: true },
+      { command: 'kiro-impl', label: 'タスク計画が通過', record: record('通過', '通過'), blocked: false },
+    ];
+    for (const c of cases) {
+      if (c.record === null) fs.rmSync(path.join(specDir, 'feasibility.md'), { force: true });
+      else fs.writeFileSync(path.join(specDir, 'feasibility.md'), c.record);
+      const { text, answer } = ask(c.command);
+      // Claude Code は停止の理由が出力に出る。Codex は理由が出ず、モデルの応答も作業も無い（入力の停止の既知の見え方）
+      const wasBlocked = tool === 'claude' ? BLOCKED.test(text) : (answer === '' && !/"command_execution"/.test(text));
+      observe(`C ${tool} ${c.command} (${c.label})`, `停止=${wasBlocked} 答え=${answer.slice(0, 60).replace(/\n/g, ' ')}`);
+      check(`C ${tool}: ${c.command} は ${c.label} のとき${c.blocked ? '入力が止まる' : '通る'}`, wasBlocked === c.blocked);
+      if (c.blocked) {
+        if (tool === 'claude') check(`C ${tool}: 停止の理由に spec 名と記録の場所が入る`, /demo/.test(text) && /feasibility\.md/.test(text));
+        else check(`C ${tool}: 停止のときはモデルの応答も作業も無い`, answer === '');
+      } else {
+        // 通ったときは、モデルが何かを答える（kiro-impl は work-branch-gate の拒否で別の答えになることがある）
+        check(`C ${tool}: 通ったときはモデルが応答した`, answer.trim() !== '');
+      }
+    }
   }
 }
 

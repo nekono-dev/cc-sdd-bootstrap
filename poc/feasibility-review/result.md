@@ -30,3 +30,24 @@
 
 - 子のレビュー役の起動を含む `/kiro-spec-tasks` の通しの実行（長いため流していない。B1〜B3 は同じ起動の形で代用した）。
 - 実際の cc-sdd のレビューが、観点を渡されたときに根拠の有無を判定の理由に含めるかの内容面の確認（A の指定の行が出ないため、内容の差を比べる設計は別に要る）。
+
+## 追記: 配置した入口の停止と通過（場面 C、2026-11-26、タスク 1.3）
+
+- 実行: `node poc/feasibility-review/run.mjs C`（`cc-sdd-bootstrap init` と `install-cc-sdd.mjs` で配置・導入し、`kiro-spec-tasks`・`kiro-impl` の手順書だけを確認用に差し替える。kiro-gate・work-branch-gate も同時に動く）
+- 環境: Claude Code（haiku、`--setting-sources project`）、Codex CLI（`-a never`・`-s workspace-write`・承認の省略指定）
+
+| 入力 | 記録 | Claude Code | Codex |
+|---|---|---|---|
+| `kiro-spec-tasks demo` | なし | 入力が止まる（理由に spec 名・記録の場所が出る） | 入力が止まる（モデルの応答も作業も無い） |
+| `kiro-spec-tasks demo` | 設計が通過 | 通る（モデルが応答） | 通る |
+| `kiro-impl demo` | 設計だけ通過 | 入力が止まる | 入力が止まる |
+| `kiro-impl demo` | タスク計画が通過 | 通る | 通る（作業前のブランチ確保が先に効き、`.git` が書けず止まった。この確認とは別の関門） |
+
+事実:
+1. 停止と通過は、記録の有無と判定の値のとおりに、両ツールで成立した。
+2. 停止の理由は、Claude Code では出力に出る。Codex では出力に出ず、モデルの応答も作業も無い（既知の見え方）。そのため、停止の理由の文面が利用者に見えることは Codex では確認できていない。
+3. 実機の試験の組み立て: 手順書の導入（`install-cc-sdd.mjs`）を先に済ませる必要がある。済ませないと、最初の入力で導入が走り、後の入力が「別のセッションで導入中」で止まる（この PoC 側の事情で、関門とは別）。
+
+未確認:
+- Codex で停止の理由が利用者に見えるか。
+- 並んだ追加の文脈（kiro-gate との併存）は 5.1 で確認する。
