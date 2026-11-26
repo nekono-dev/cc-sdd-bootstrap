@@ -26,6 +26,7 @@
     ".agent-hooks/cc-sdd-bootstrap/work-branch-gate-rules.mjs",
     ".agent-hooks/cc-sdd-bootstrap/feasibility-gate.mjs",
     ".agent-hooks/cc-sdd-bootstrap/feasibility-gate-rules.mjs",
+    ".agent-hooks/cc-sdd-bootstrap/stop-notice-rules.mjs",
     ".agent-hooks/cc-sdd-bootstrap/freshness.mjs",
     ".agent-hooks/cc-sdd-bootstrap/freshness-rules.mjs"
   ],
