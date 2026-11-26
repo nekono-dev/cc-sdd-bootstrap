@@ -327,7 +327,9 @@ test("作業場所: 求めた場所が存在しない・git の外なら次の�
   const missing = path.join(f.base, "missing", "a.md");
   // ① が無効 → ② は無し → ③ の入力の cwd（worktree）で判定して通す
   assert.equal(pre(f, "Write", { file_path: missing }, { cwd: f.wt }).stdout, "");
-  // 直近の記録も無効になった後は、③ の入力の cwd（本体・基底）で判定して拒否する
+  // 1 回目で作業場所が作業ブランチと判定されたので turn は消えている（2.4）。
+  // 対象の入力を改めて受けてから、③ の入力の cwd（本体・基底）で判定して拒否することを確かめる
+  prompt(f, "/kiro-impl foo");
   assert.equal(denial(pre(f, "Write", { file_path: missing })).permissionDecision, "deny");
 });
 
@@ -363,4 +365,86 @@ test("作業場所: 展開を含む cd（cd /tmp/* && …）は移動先を確�
   // 展開を含む cd は場所を記録せず、直近の worktree（②）で判定して通す
   assert.equal(pre(f, "Bash", { command: "cd /tmp/* && touch x" }, { cwd: f.root }).stdout, "");
   assert.equal(JSON.parse(readFileSync(stateFile(f), "utf8")).location, f.wt);
+});
+
+test("対話を挟んだ後も、基底の上の書き込みは拒否される（通常の入力で解除しない。2.4）", (t) => {
+  const f = fixture(t);
+  prompt(f, "/kiro-discovery 新機能");
+  assert.equal(prompt(f, "利用者の答え").stdout, "");
+  assert.equal(denial(pre(f, "Write", { file_path: path.join(f.root, "a.md") })).permissionDecision, "deny");
+});
+
+test("通常の入力を挟むと拒否の回数が 0 に戻り、次の入力の間にまた 2 回まで拒否する（3.5）", (t) => {
+  const f = fixture(t);
+  prompt(f, "/kiro-impl foo");
+  const write = () => pre(f, "Write", { file_path: path.join(f.root, "a.md") }).stdout;
+  assert.notEqual(write(), "");
+  assert.notEqual(write(), "");
+  assert.equal(write(), "");
+  assert.equal(prompt(f, "続けてください").stdout, "");
+  assert.notEqual(write(), "");
+  assert.notEqual(write(), "");
+  assert.equal(write(), "");
+});
+
+test("別の kiro コマンドの入力で作業前のブランチ確保を解除する（2.4）", (t) => {
+  for (const other of ["/kiro-spec-requirements x", "$kiro-validate-impl"]) {
+    const f = fixture(t);
+    prompt(f, "/kiro-discovery 新機能");
+    assert.equal(prompt(f, other).stdout, "", other);
+    assert.equal(pre(f, "Write", { file_path: path.join(f.root, "a.md") }).stdout, "", other);
+  }
+});
+
+test("解除の後の対象の入力は、以前の拒否の記録を引き継がず改めて判定する（2.5）", (t) => {
+  const f = fixture(t);
+  prompt(f, "/kiro-impl foo");
+  pre(f, "Write", { file_path: path.join(f.root, "a.md") });
+  pre(f, "Write", { file_path: path.join(f.root, "a.md") });
+  prompt(f, "/kiro-spec-requirements x");
+  prompt(f, "/kiro-impl bar");
+  assert.equal(denial(pre(f, "Write", { file_path: path.join(f.root, "a.md") })).permissionDecision, "deny");
+  assert.equal(denial(pre(f, "Write", { file_path: path.join(f.root, "a.md") })).permissionDecision, "deny");
+  assert.equal(pre(f, "Write", { file_path: path.join(f.root, "a.md") }).stdout, "");
+});
+
+test("作業場所が基底でないと判定できたら turn を消す（状態ファイルで確かめる。2.4）", (t) => {
+  const f = fixture(t);
+  prompt(f, "/kiro-impl foo");
+  git(f.root, ["switch", "-q", "-c", "feature/x"]);
+  assert.equal(pre(f, "Write", { file_path: path.join(f.root, "a.md") }).stdout, "");
+  assert.equal(JSON.parse(readFileSync(stateFile(f), "utf8")).turn, null);
+});
+
+test("現在のブランチを判定できない（git の外）ときは turn を残して通す（3.9）", (t) => {
+  const f = fixture(t);
+  prompt(f, "/kiro-impl foo");
+  assert.equal(pre(f, "Write", { file_path: path.join(f.base, "x.md") }, { cwd: f.base }).stdout, "");
+  assert.notEqual(JSON.parse(readFileSync(stateFile(f), "utf8")).turn, null);
+});
+
+test("ブランチの切り替えを試みた後、通常の入力では switchTried が戻らず、対象の入力で戻る（3.7）", (t) => {
+  const f = fixture(t);
+  prompt(f, "/kiro-impl foo");
+  pre(f, "Bash", { command: "git switch -c feature/x" });
+  prompt(f, "続き");
+  assert.equal(JSON.parse(readFileSync(stateFile(f), "utf8")).turn.switchTried, true);
+  prompt(f, "/kiro-discovery 別の件");
+  assert.equal(JSON.parse(readFileSync(stateFile(f), "utf8")).turn.switchTried, false);
+});
+
+test("通常の入力では案内を出さず、拒否の出力は拒否の理由だけを含む（3.3・3.12）", (t) => {
+  const f = fixture(t);
+  assert.equal(prompt(f, "通常の依頼").stdout, "");
+  prompt(f, "/kiro-impl foo");
+  assert.equal(prompt(f, "通常の依頼").stdout, "");
+  const parsed = JSON.parse(pre(f, "Write", { file_path: path.join(f.root, "a.md") }).stdout);
+  assert.deepEqual(Object.keys(parsed), ["hookSpecificOutput"]);
+  assert.deepEqual(Object.keys(parsed.hookSpecificOutput).sort(), ["hookEventName", "permissionDecision", "permissionDecisionReason"]);
+});
+
+test("設定で branchGate が無効なら、対象の入力でも操作でも何も出さない（1.4）", (t) => {
+  const f = fixture(t, { config: '{"workflow":{"branchGate":false}}' });
+  assert.equal(prompt(f, "/kiro-impl foo").stdout, "");
+  assert.equal(pre(f, "Write", { file_path: path.join(f.root, "a.md") }).stdout, "");
 });

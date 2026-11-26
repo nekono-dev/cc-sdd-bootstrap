@@ -19,15 +19,29 @@ const SHELL_TOOLS = new Set(["Bash", "shell", "local_shell", "exec_command"]);
 const FIND_WRITE_ARGS = new Set(["-delete", "-exec", "-execdir", "-ok", "-okdir", "-fprint", "-fprint0", "-fprintf", "-fls"]);
 
 /**
- * 入力の先頭のコマンドを分類する。対象の 5 つ以外は null（2.6）。
+ * 入力の先頭の kiro コマンドを分類する。コマンドを含まない通常の入力は null（2.6）。
+ * - 対象の 5 つは target（2.1）。
+ * - kiro-validate-impl は validate-impl（検証後の PR の対象。4.1）。
+ * - それ以外の kiro コマンドは other-kiro（作業前のブランチ確保を解除する。2.4）。
  * @param {unknown} prompt - 利用者の入力
- * @returns {{ kind: "target", skill: string } | null}
+ * @returns {{ kind: "target", skill: string } | { kind: "validate-impl" } | { kind: "other-kiro", skill: string } | null}
  */
 export function classifyPrompt(prompt) {
   if (typeof prompt !== "string") return null;
   const command = detectCommand(prompt);
-  if (!command || !TARGET_SKILLS.has(command.skill)) return null;
-  return { kind: "target", skill: command.skill };
+  if (!command) return null;
+  if (TARGET_SKILLS.has(command.skill)) return { kind: "target", skill: command.skill };
+  if (command.skill === "kiro-validate-impl") return { kind: "validate-impl" };
+  return { kind: "other-kiro", skill: command.skill };
+}
+
+/**
+ * 通常の入力を受けたときに、拒否の回数だけ 0 に戻す（切り替えを試みた記録は保つ。3.5）。
+ * @param {{ skill: string, denials: number, switchTried: boolean } | null} turn
+ * @returns {{ skill: string, denials: number, switchTried: boolean } | null}
+ */
+export function resetDenials(turn) {
+  return turn === null ? null : { ...turn, denials: 0 };
 }
 
 /**
@@ -598,9 +612,10 @@ export function workDirOf(tool, toolName, toolInput, cwd) {
 
 /**
  * 操作の前の判断。turn が無ければ判断しない。
+ * - 現在のブランチが判定できて基底でないなら、基底でなくなったものとして turn を消して通す（2.4）。
  * - 読み取りは通す。ブランチの作成・切り替えを試みたら switchTried を真にして通す（3.6・3.7）。
  * - 作業は、切り替えを試みておらず、拒否が 2 回未満で、現在のブランチが基底のときだけ拒否し、回数を 1 増やす（3.1・3.5）。
- * - 現在のブランチが判定できない（null）・基底でないときは通す（3.9・3.10）。
+ * - 現在のブランチが判定できない（null）ときは通す（3.9）。
  * @param {{ skill: string, denials: number, switchTried: boolean } | null} turn
  * @param {{ toolName: string, toolInput: unknown }} call
  * @param {{ branch: string | null, bases: string[], originDefault: string | null }} facts
@@ -608,6 +623,9 @@ export function workDirOf(tool, toolName, toolInput, cwd) {
  */
 export function decidePreToolUse(turn, call, facts) {
   if (turn === null) return { allow: true, turn: null };
+  if (facts.branch !== null && !isBaseBranch(facts.branch, facts.bases, facts.originDefault)) {
+    return { allow: true, turn: null };
+  }
   const kind = classifyToolCall(call.toolName, call.toolInput);
   if (kind === "read") return { allow: true, turn };
   if (kind === "branch") return { allow: true, turn: { ...turn, switchTried: true } };

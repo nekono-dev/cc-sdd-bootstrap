@@ -14,6 +14,7 @@ import {
   isBaseBranch,
   messageGuidance,
   parseBaseBranches,
+  resetDenials,
   workDirOf,
 } from "./work-branch-gate-rules.mjs";
 
@@ -199,9 +200,25 @@ function output(value) {
 /** 対象の入力を受けたときに作業の状態を作り、基底ブランチなら案内を追加の文脈で返す */
 async function userPromptSubmit(input, settings) {
   const target = classifyPrompt(input.prompt);
-  if (!target) return;
   const file = stateFile(input.session_id);
   const state = await loadState(file);
+  // コマンドを含まない通常の入力: 解除せず、拒否の回数だけ 0 に戻す（案内は出さない。2.4・3.5）
+  if (target === null) {
+    if (state.turn !== null) {
+      state.turn = resetDenials(state.turn);
+      await saveState(file, state);
+    }
+    return;
+  }
+  // 対象以外の kiro コマンド（検証を含む）: 作業前のブランチ確保を解除する（2.4）
+  if (target.kind !== "target") {
+    if (state.turn !== null) {
+      state.turn = null;
+      await saveState(file, state);
+    }
+    return;
+  }
+  // 対象の入力: 以前の記録を引き継がず、改めて作る（2.5）
   state.turn = { skill: target.skill, denials: 0, switchTried: false };
   await saveState(file, state);
 

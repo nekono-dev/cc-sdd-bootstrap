@@ -8,6 +8,7 @@ import {
   messageDeny,
   messageGuidance,
   parseBaseBranches,
+  resetDenials,
   workDirOf,
 } from "../.agent-hooks/cc-sdd-bootstrap/work-branch-gate-rules.mjs";
 
@@ -21,11 +22,13 @@ test("対象の 5 つの入力を、先頭のコマンドとして分類する",
   assert.deepEqual(classifyPrompt("  /kiro-impl foo 1.2"), { kind: "target", skill: "kiro-impl" });
 });
 
-test("対象外のコマンド・文中の言及・直後が空白でない形は対象にしない", () => {
-  assert.equal(classifyPrompt("/kiro-spec-requirements foo"), null);
-  assert.equal(classifyPrompt("/kiro-validate-design foo"), null);
-  assert.equal(classifyPrompt("/kiro-spec-status foo"), null);
-  assert.equal(classifyPrompt("/kiro-steering"), null);
+test("対象外の kiro コマンドは other-kiro、kiro-validate-impl は validate-impl に分類する（2.4）", () => {
+  assert.deepEqual(classifyPrompt("/kiro-spec-requirements foo"), { kind: "other-kiro", skill: "kiro-spec-requirements" });
+  assert.deepEqual(classifyPrompt("/kiro-validate-design foo"), { kind: "other-kiro", skill: "kiro-validate-design" });
+  assert.deepEqual(classifyPrompt("/kiro-spec-status foo"), { kind: "other-kiro", skill: "kiro-spec-status" });
+  assert.deepEqual(classifyPrompt("/kiro-steering"), { kind: "other-kiro", skill: "kiro-steering" });
+  assert.deepEqual(classifyPrompt("$kiro-validate-impl foo"), { kind: "validate-impl" });
+  assert.deepEqual(classifyPrompt("/kiro-validate-impl"), { kind: "validate-impl" });
   assert.equal(classifyPrompt("文中の /kiro-impl は対象外"), null);
   assert.equal(classifyPrompt("/kiro-impl:"), null);
   assert.equal(classifyPrompt("通常の依頼"), null);
@@ -371,4 +374,23 @@ test("cd の語の先頭の # と ~ は展開やコメントになるので null
   assert.equal(workDirOf("claude", "Bash", { command: "cd ~/x && x" }, "/r"), null);
   assert.equal(workDirOf("claude", "Bash", { command: "cd \"~/x\" && x" }, "/r"), null);
   assert.equal(workDirOf("claude", "Bash", { command: "cd '~/x' && x" }, "/r"), null);
+});
+
+test("基底でないと判定できた操作は、turn を消して許可する（2.4）", () => {
+  const turn = { skill: "kiro-impl", denials: 2, switchTried: false };
+  const call = { toolName: "Write", toolInput: { file_path: "/a" } };
+  assert.deepEqual(decidePreToolUse(turn, call, { branch: "feature/x", bases: BASES, originDefault: null }), { allow: true, turn: null });
+});
+
+test("現在のブランチを判定できない（null）と基底では turn を残す（2.4・3.9）", () => {
+  const turn = { skill: "kiro-impl", denials: 0, switchTried: false };
+  const call = { toolName: "Write", toolInput: { file_path: "/a" } };
+  assert.equal(decidePreToolUse(turn, call, { branch: null, bases: BASES, originDefault: null }).turn, turn);
+  assert.equal(decidePreToolUse(turn, call, { branch: "main", bases: BASES, originDefault: null }).allow, false);
+});
+
+test("通常の入力で拒否の回数だけを 0 に戻す。切り替えを試みた記録は保つ（3.5）", () => {
+  assert.deepEqual(resetDenials({ skill: "kiro-impl", denials: 2, switchTried: true }), { skill: "kiro-impl", denials: 0, switchTried: true });
+  assert.deepEqual(resetDenials({ skill: "kiro-impl", denials: 1, switchTried: false }), { skill: "kiro-impl", denials: 0, switchTried: false });
+  assert.equal(resetDenials(null), null);
 });
