@@ -75,7 +75,7 @@ poc-records は、設計の前提を確かめる PoC の記録の置き方を変
 1. The poc-records shall PoC のためのスクリプト・テスト用の入力・実行の生の出力を、リポジトリの管理対象に残さない。
 2. The poc-records shall PoC の実行に必要なスクリプトや資材を、リポジトリの管理対象の外で使うよう求める。
 3. If PoC の実行がリポジトリの管理対象の中にファイルを作った, then the poc-records shall それらを PoC の確認の後に管理対象から取り除くよう求める。
-4. The poc-records shall PoC の前後で、利用者のリポジトリの管理対象が、PoC 文書の追加を除いて変わらないことを求める。
+4. The poc-records shall PoC の前後で、利用者のリポジトリの管理対象が、PoC 文書の追加と、その spec の実現性の記録の更新を除いて変わらないことを求める。
 
 ### Requirement 4: 根拠として認める条件
 

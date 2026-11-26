@@ -1,7 +1,7 @@
 {
   "files": {
-    ".agent-hooks/cc-sdd-bootstrap/agent-section-claude.md": "76dc3a1c47c0e61e51ca037b58956bc89aaa981426a09b4ab90afe4b2839fec1",
-    ".agent-hooks/cc-sdd-bootstrap/agent-section-codex.md": "8d020923e1133028bb5d857cc243c6fadc4c059796ee57a6dc4fad16b404bae6",
+    ".agent-hooks/cc-sdd-bootstrap/agent-section-claude.md": "2219175c2c8e0d49968fe8c6f0a563cbf9814cbf14c267e47a3b8a10e8d93e69",
+    ".agent-hooks/cc-sdd-bootstrap/agent-section-codex.md": "6dfed43d8af3080da9396f5cb92cc18186444d2ff70cda79fe9d1ed8a3c5126c",
     ".agent-hooks/cc-sdd-bootstrap/codex-trust-rules.mjs": "0a95af15bb24f90d3a6fdf47e0bd0a9ba4bd05902b41526331a2e6f5c28d8518",
     ".agent-hooks/cc-sdd-bootstrap/codex-trust.mjs": "e2a2d918ea245e2b6bf92bfb97a31f874c9ac6cd70ddc09beb1cf70d7ba0f590",
     ".agent-hooks/cc-sdd-bootstrap/config-schema.mjs": "832dfd4a069f7ed03a628767d0f4a4f905978f3e0292e1b45b1d7993ab8d835a",
