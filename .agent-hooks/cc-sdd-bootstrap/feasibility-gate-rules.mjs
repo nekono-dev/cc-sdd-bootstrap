@@ -228,3 +228,59 @@ export function messageBlock(spec, stage, reason, skill) {
   }
   return lines.join("\n");
 }
+
+/**
+ * `git worktree list --porcelain -z` の出力から worktree の根を取り出す（純粋な処理）。
+ * -z の出力は NUL 区切りの生のパスなので、引用も改行の折り返しも無い。
+ * 空のフィールド（NUL が続く）で 1 つの worktree のまとまりが終わる。bare と prunable のまとまりは外す。
+ * @param {unknown} text - git の標準出力
+ * @returns {string[]} worktree の根（絶対パス）
+ */
+export function parseWorktreeListZ(text) {
+  const roots = [];
+  let block = [];
+  for (const field of typeof text === "string" ? text.split("\0") : []) {
+    if (field === "") {
+      pushWorktree(block, roots, false);
+      block = [];
+    } else {
+      block.push(field);
+    }
+  }
+  pushWorktree(block, roots, false);
+  return roots;
+}
+
+/**
+ * `git worktree list --porcelain` の出力から worktree の根を取り出す（-z が使えない git のフォールバック。純粋な処理）。
+ * 特殊文字を含むパスは `worktree "..."` の形で引用されうるため、引用符で始まるものは候補に入れない（誤った場所を作らない）。
+ * @param {unknown} text - git の標準出力
+ * @returns {string[]} 引用されていない worktree の根
+ */
+export function parseWorktreeListPorcelain(text) {
+  const roots = [];
+  let block = [];
+  for (const line of typeof text === "string" ? text.split(/\r?\n/) : []) {
+    if (line === "") {
+      pushWorktree(block, roots, true);
+      block = [];
+    } else {
+      block.push(line);
+    }
+  }
+  pushWorktree(block, roots, true);
+  return roots;
+}
+
+/**
+ * worktree の 1 つのまとまりから根を足す。bare と prunable は外す。
+ * rejectQuoted が真（porcelain）なら、引用符で始まるパスも外す。
+ */
+function pushWorktree(block, roots, rejectQuoted) {
+  const line = block.find((item) => item.startsWith("worktree "));
+  if (line === undefined) return;
+  if (block.some((item) => item === "bare" || item.startsWith("prunable"))) return;
+  const root = line.slice("worktree ".length);
+  if (rejectQuoted && root.startsWith("\"")) return;
+  roots.push(root);
+}

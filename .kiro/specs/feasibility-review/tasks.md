@@ -23,7 +23,7 @@
   - _Requirements: 5.1, 5.2, 5.3, 5.6, 8.1_
 
 - [ ] 2. 関門と追加の指示を仕上げる
-- [ ] 2.1 spec の場所の探し方を仕上げる
+- [x] 2.1 spec の場所の探し方を仕上げる
   - 候補の根を、入力の作業場所の git の根、スクリプトの位置の根、その git の worktree の一覧の各 worktree の順に並べ、spec のディレクトリが最初に見つかったものを使う。git の失敗は候補を減らすだけにし、どこにも無ければ「特定できない」として通す
   - 標準入力の試験で、本体の checkout に spec が無く worktree にだけある構成で、worktree の記録を見つけて止める・通すことが確かめられる
   - _Depends: 1.3_
@@ -72,3 +72,4 @@
 - 1.1: `decideInput` は追加の指示（context）をまだ返さない。2.2・2.3 で足す。停止の対象は `kiro-spec-tasks`（設計）と `kiro-impl`（タスク計画）の表で、2.3 で `kiro-spec-quick`・`kiro-spec-batch` を足す。
 - 1.2: spec のディレクトリと記録は、実体のパスが `<根の実体>/.kiro/specs/<spec>/` の下にあるときだけ読む。`.kiro`・`.kiro/specs`・spec のディレクトリが外へのシンボリックリンクなら「特定できない」（通す）、記録のファイルが外へのリンク・壊れたリンクなら記録なし（止める側）。記録が読めないことは停止の条件で、標準エラーには書かない。入口自身の失敗（不正な JSON・例外）は標準エラーに 1 行を書いて通す。候補の根は今は 2 つ（入力の作業場所の git の根・スクリプトの位置の根）で、worktree の候補は 2.1 で `candidateRoots` に足す。Codex の承認の記録の件数は 11 → 12。
 - 1.3: 実機（Claude Code・Codex）で、記録のない・未通過の spec の `kiro-spec-tasks`・`kiro-impl` の入力が止まり、通過の記録を書くと通ることを確かめた（`poc/feasibility-review/result.md` の場面 C）。Codex は停止の理由が出力に出ない（モデルの応答も作業も無い）。PoC の実行では、`install-cc-sdd.mjs` を先に実行しないと、2 回目以降の入力が「導入中」で止まる。
+- 2.1: 候補の根は ① 入力の作業場所の git の根 ② スクリプトの位置の根 ③ `git worktree list --porcelain -z` の各 worktree（先頭 20 個まで。bare・prunable・存在しない・実体の重複は除く）。`-z` が使えない git では `--porcelain` に切り替え、引用符つきのパスは候補に入れない。worktree の一覧の解析は純粋な関数（`feasibility-gate-rules.mjs` の `parseWorktreeListZ`・`parseWorktreeListPorcelain`）。同名の spec が本体と worktree にあるときは、並びの先（入力の作業場所の根）を使う。

@@ -5,7 +5,7 @@ import { spawnSync } from "node:child_process";
 import { promises as fs, realpathSync, statSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { classifyPrompt, decideInput, parseRecord } from "./feasibility-gate-rules.mjs";
+import { classifyPrompt, decideInput, parseRecord, parseWorktreeListPorcelain, parseWorktreeListZ } from "./feasibility-gate-rules.mjs";
 
 // 配置先は .agent-hooks/cc-sdd-bootstrap/ なので、2 つ上が導入先の根
 const scriptRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
@@ -54,13 +54,60 @@ function gitRootOf(cwd) {
   return top === "" ? null : top;
 }
 
+/** spec を探す根の候補の上限。極端に多い worktree で遅くならないよう、先頭からこの個数まで */
+const MAX_CANDIDATES = 20;
+
 /**
- * spec を探す根の候補（優先順）。① 入力の cwd の git の根 ② スクリプトの位置の根。
- * 後で worktree の一覧からの候補を足せるよう、関数にしている。
+ * git worktree list --porcelain の worktree の根を返す。起動は引数の配列（シェルなし）、timeout は 3 秒。
+ * 失敗・git の外・出力の形が不正なら空。bare と prunable の印があるものは外す。
+ * 存在しないパスは、呼び出し側（uniqueRoots）で外す。
+ * @param {string} start - 一覧を求める場所（git の根、または無ければスクリプトの根）
+ * @returns {string[]}
+ */
+function worktreeRootsOf(start) {
+  // まず -z（NUL 区切りの生のパス。git 2.36 以上）を使う。使えない git なら、引用を外せない porcelain に切り替える
+  const z = spawnSync("git", ["worktree", "list", "--porcelain", "-z"], { cwd: start, encoding: "utf8", timeout: GIT_TIMEOUT_MS });
+  if (!z.error && z.status === 0) return parseWorktreeListZ(z.stdout);
+  const plain = spawnSync("git", ["worktree", "list", "--porcelain"], { cwd: start, encoding: "utf8", timeout: GIT_TIMEOUT_MS });
+  if (plain.error || plain.status !== 0) return [];
+  return parseWorktreeListPorcelain(plain.stdout);
+}
+
+/**
+ * 候補の根を、存在するディレクトリだけにし、実体のパスが同じものは先頭のものだけ残す。
+ * 並びは先頭（優先）から保つ。null・空・存在しないものは除く。
+ * @param {Array<string | null>} roots
+ * @returns {string[]}
+ */
+function uniqueRoots(roots) {
+  const seen = new Set();
+  const result = [];
+  for (const root of roots) {
+    if (typeof root !== "string" || root === "") continue;
+    let real;
+    try {
+      if (!statSync(root).isDirectory()) continue;
+      real = realpathSync(root);
+    } catch {
+      continue;
+    }
+    if (seen.has(real)) continue;
+    seen.add(real);
+    result.push(root);
+  }
+  return result;
+}
+
+/**
+ * spec を探す根の候補（優先順）。
+ * ① 入力の cwd の git の根 ② スクリプトの位置の根 ③ git worktree list の各 worktree の根。
+ * ③ の一覧は ① の根で実行し、① が無ければ ② の根で実行する。重複（実体が同じ）は先頭だけ残し、先頭 20 個まで。
  * @returns {string[]}
  */
 function candidateRoots(cwd) {
-  return [gitRootOf(cwd), scriptRoot].filter((root) => root !== null);
+  const top = gitRootOf(cwd);
+  const worktrees = worktreeRootsOf(top ?? scriptRoot);
+  return uniqueRoots([top, scriptRoot, ...worktrees]).slice(0, MAX_CANDIDATES);
 }
 
 /**
