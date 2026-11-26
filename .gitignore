@@ -1,0 +1,15 @@
+node_modules/
+
+# 個人の承認
+.claude/settings.local.json
+# brw create が作る作業ブランチの worktree
+.claude/worktrees/
+
+# >>> cc-sdd-bootstrap
+.claude/skills/kiro-*/
+.agents/skills/kiro-*/
+.kiro/settings/
+/CLAUDE.md
+/AGENTS.md
+/.cache/
+# <<< cc-sdd-bootstrap

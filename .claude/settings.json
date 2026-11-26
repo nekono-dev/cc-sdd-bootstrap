@@ -1,0 +1,143 @@
+{
+  "extraKnownMarketplaces": {
+    "nekono-dev": {
+      "source": {
+        "source": "github",
+        "repo": "nekono-dev/claude-plugins"
+      }
+    }
+  },
+  "enabledPlugins": {
+    "branch-release-workflow@nekono-dev": true
+  },
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"$CLAUDE_PROJECT_DIR/.agent-hooks/cc-sdd-bootstrap/install-cc-sdd.mjs\" session-start --tool claude",
+            "timeout": 30
+          }
+        ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"$CLAUDE_PROJECT_DIR/.agent-hooks/cc-sdd-bootstrap/kiro-gate.mjs\" session-start --tool claude",
+            "timeout": 10
+          }
+        ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"$CLAUDE_PROJECT_DIR/.agent-hooks/cc-sdd-bootstrap/freshness.mjs\" session-start --tool claude",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"$CLAUDE_PROJECT_DIR/.agent-hooks/cc-sdd-bootstrap/install-cc-sdd.mjs\" user-prompt-submit --tool claude",
+            "timeout": 600
+          }
+        ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"$CLAUDE_PROJECT_DIR/.agent-hooks/cc-sdd-bootstrap/kiro-gate.mjs\" user-prompt-submit --tool claude",
+            "timeout": 10
+          }
+        ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"$CLAUDE_PROJECT_DIR/.agent-hooks/cc-sdd-bootstrap/work-branch-gate.mjs\" user-prompt-submit --tool claude",
+            "timeout": 10
+          }
+        ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"$CLAUDE_PROJECT_DIR/.agent-hooks/cc-sdd-bootstrap/feasibility-gate.mjs\" user-prompt-submit --tool claude",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"$CLAUDE_PROJECT_DIR/.agent-hooks/cc-sdd-bootstrap/kiro-gate.mjs\" pre-tool-use --tool claude",
+            "timeout": 10
+          }
+        ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"$CLAUDE_PROJECT_DIR/.agent-hooks/cc-sdd-bootstrap/work-branch-gate.mjs\" pre-tool-use --tool claude",
+            "timeout": 10
+          }
+        ]
+      },
+      {
+        "matcher": "Agent",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"$CLAUDE_PROJECT_DIR/.agent-hooks/cc-sdd-bootstrap/subagent-check.mjs\" pre-tool-use --tool claude",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"$CLAUDE_PROJECT_DIR/.agent-hooks/cc-sdd-bootstrap/kiro-gate.mjs\" post-tool-use --tool claude",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"$CLAUDE_PROJECT_DIR/.agent-hooks/cc-sdd-bootstrap/kiro-gate.mjs\" stop --tool claude",
+            "timeout": 10
+          }
+        ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"$CLAUDE_PROJECT_DIR/.agent-hooks/cc-sdd-bootstrap/work-branch-gate.mjs\" stop --tool claude",
+            "timeout": 15
+          }
+        ]
+      }
+    ]
+  }
+}
