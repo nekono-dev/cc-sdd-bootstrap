@@ -2,7 +2,7 @@
 
 ## ギャップ分析（2026-11-25、`/kiro-validate-gap`）
 
-対象: `.kiro/specs/feasibility-review/requirements.md`（8 要件）。要件は未承認だが、設計の前に分かる食い違いを先に洗い出した。実機の前提は `poc/feasibility-review/result.md`。
+対象: `.kiro/specs/feasibility-review/requirements.md`（8 要件）。要件は未承認だが、設計の前に分かる食い違いを先に洗い出した。実機の前提は実機検証で確認済み（記録は削除済み）。
 
 ### 1. 現状の調査
 
@@ -11,7 +11,7 @@
   - `/kiro-spec-tasks` の Step 3.5 は、独立したレビュー役に「ファイルの道筋・草案・統合の文脈」だけを渡す。指揮役への追加の文脈は、そのままでは届かない。
   - `/kiro-spec-quick`・`/kiro-spec-batch` は、要件・設計・タスクの各段階を 1 回の入力の中で続けて実行しうる（`/kiro-spec-tasks` の入力は途中に現れない）。
 - **kiro-gate**: `detectCommand`（任意の `kiro-*` を取り出す）を共有できる。状態は `os.tmpdir()`。失敗時は通す側（終了コード 0）。根は「スクリプトの位置」から求める。
-- **入力の停止の先例**: `install-cc-sdd.mjs` が `UserPromptSubmit` で `{"decision":"block","reason":…}` を出して止める。**停止そのものは新しい仕組みがいらない**（両ツールで確認済み。`poc/req-feasibility/result.md`）。
+- **入力の停止の先例**: `install-cc-sdd.mjs` が `UserPromptSubmit` で `{"decision":"block","reason":…}` を出して止める。**停止そのものは新しい仕組みがいらない**（両ツールで実機検証済み。記録は削除済み）。
 - **追加の指示の先例**: 同じ `UserPromptSubmit` の `additionalContext`（kiro-gate が使っている）。
 - **子の起動のフック**: `subagent-check.mjs` が両ツールで `PreToolUse` の子の起動（Claude Code は `Agent`、Codex は `spawn_agent`）を見ている。
 - **運用の区画**: `catalog.agentSections` に静的な文章を `id` ごと・ツールごとに置く。更新時に既存の導入先へ自動で届く。
@@ -88,7 +88,7 @@
 
 ## 設計の調査と判断（2026-11-25、`/kiro-spec-design`）
 
-- **Discovery Scope**: Extension（既存の配置物の型・入力の停止の先例に沿って足す）。軽い調査で足りる。前提は実機の PoC（`poc/feasibility-review/result.md`・`poc/work-branch-flow/result.md`）で確かめた。
+- **Discovery Scope**: Extension（既存の配置物の型・入力の停止の先例に沿って足す）。軽い調査で足りる。前提は実機の PoC（実機検証。記録は削除済み）で確かめた。
 - **Key Findings**:
   - 追加の文脈は両ツールに届くが、手順書が決めた出力の形には反映されない。観点が使われた証拠は、文脈を渡したことではなく記録の内容に求める。
   - Codex 0.172 では子の依頼文が暗号化されてフックから読めず、追記もできない。子への観点は、両ツール共通の運用の区画の文章（親が依頼文に入れる）で担保する。

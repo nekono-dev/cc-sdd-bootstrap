@@ -76,7 +76,7 @@
   - _Boundary: 既存記録の書き換え_
   - _Requirements: 8.5, 8.8_
 
-- [ ] 3.5 (P) kiro-gate・subagent-delegation・work-branch-flow・feasibility-review の設計・調査・タスク・要件・概要の `poc/` の記述を直す
+- [x] 3.5 (P) kiro-gate・subagent-delegation・work-branch-flow・feasibility-review の設計・調査・タスク・要件・概要の `poc/` の記述を直す
   - 3.4 と同じ手順で分類して直す。`feasibility-review` の要件の「実機で確かめた前提は `poc/…` を参照」のような参照先としての記述は、意味を保つ文に書き換える
   - 完了の状態: 4 つの spec の文書に、リポジトリ直下の `poc/<名前>` の形の参照が無く、書き換えた文の意味が保たれている（差分の人の確認）
   - _Boundary: 既存記録の書き換え_
