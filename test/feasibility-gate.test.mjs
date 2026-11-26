@@ -99,7 +99,7 @@ test("記録が無いと /kiro-spec-tasks を止め、理由に spec 名・手�
 test("記録の設計が通過なら /kiro-spec-tasks を通す（出力なし）", (t) => {
   const f = fixture(t);
   spec(f, "foo", recordText({ design: "通過", tasks: "未通過" }));
-  assertPassed(submit(f, "/kiro-spec-tasks foo -y"));
+  assertContext(submit(f, "/kiro-spec-tasks foo -y"));
 });
 
 test("Codex は $kiro-impl で動き、タスク計画が未通過なら止め、通過なら通す", (t) => {
@@ -110,7 +110,7 @@ test("Codex は $kiro-impl で動き、タスク計画が未通過なら止め�
   assert.match(reason, /判定が通過ではありません/);
 
   spec(f, "foo", recordText({ tasks: "通過" }));
-  assertPassed(submit(f, "$kiro-impl foo 1.1", { tool: "codex" }));
+  assertContext(submit(f, "$kiro-impl foo 1.1", { tool: "codex" }));
 });
 
 test("kiro-impl は設計だけ通過していても、タスク計画が通らなければ止める", (t) => {
@@ -138,10 +138,10 @@ test("記録が読めない形は止まる: ディレクトリが feasibility.md
 
 test("spec のディレクトリが無い（名前だけ）・spec 名が無い・対象外のコマンド・通常の文章は通す", (t) => {
   const f = fixture(t);
-  assertPassed(submit(f, "/kiro-spec-tasks nothere"));
-  assertPassed(submit(f, "/kiro-spec-tasks"));
+  assertContext(submit(f, "/kiro-spec-tasks nothere"));
+  assertContext(submit(f, "/kiro-spec-tasks"));
   spec(f, "foo");
-  assertPassed(submit(f, "/kiro-spec-requirements foo"));
+  assertContext(submit(f, "/kiro-spec-requirements foo"));
   assertPassed(submit(f, "/kiro-discovery"));
   assertPassed(submit(f, "通常の依頼です。/kiro-impl foo は文中なので対象外"));
 });
@@ -158,7 +158,7 @@ test("cwd が git の外で、スクリプトの位置の根にも spec が無�
   const f = fixture(t, { inGit: false });
   const outside = mkdtempSync(path.join(os.tmpdir(), "feasibility-gate-outside-"));
   t.after(() => rmSync(outside, { recursive: true, force: true }));
-  assertPassed(run(f.entry, { cwd: outside, input: { session_id: "s1", prompt: "/kiro-spec-tasks foo", cwd: outside } }));
+  assertContext(run(f.entry, { cwd: outside, input: { session_id: "s1", prompt: "/kiro-spec-tasks foo", cwd: outside } }));
 });
 
 test("spec のディレクトリが .kiro/specs の外を指すシンボリックリンクなら、特定できない扱いで通す", (t) => {
@@ -167,13 +167,13 @@ test("spec のディレクトリが .kiro/specs の外を指すシンボリッ�
   mkdirSync(outside);
   writeFileSync(path.join(outside, RECORD), recordText({ design: "未通過" }));
   symlinkSync(outside, path.join(f.root, ".kiro/specs/evil"));
-  assertPassed(submit(f, "/kiro-spec-tasks evil"));
+  assertContext(submit(f, "/kiro-spec-tasks evil"));
 });
 
 test("../ を含む名前は分類で除かれ、止めずに通す", (t) => {
   const f = fixture(t);
   spec(f, "foo");
-  assertPassed(submit(f, "/kiro-spec-tasks ../foo"));
+  assertContext(submit(f, "/kiro-spec-tasks ../foo"));
 });
 
 test("入力の JSON が不正なら、標準エラーに日本語で理由を書き、出力せず終了コード 0 で通す", (t) => {
@@ -205,7 +205,7 @@ test("入口は作業場所の状態を作らない（git の作業ツリーが�
   spec(f, "foo");
   const before = git(f.root, ["status", "--porcelain", "--untracked-files=all"]);
   assertBlocked(submit(f, "/kiro-spec-tasks foo"));
-  assertPassed(submit(f, "/kiro-spec-tasks nothere"));
+  assertContext(submit(f, "/kiro-spec-tasks nothere"));
   assert.equal(git(f.root, ["status", "--porcelain", "--untracked-files=all"]), before);
 });
 
@@ -226,7 +226,7 @@ test(".kiro/specs が外のディレクトリへのシンボリックリンク�
   writeFileSync(path.join(outsideSpecs, "foo", RECORD), recordText({ design: "未通過" }));
   rmSync(path.join(f.root, ".kiro/specs"), { recursive: true });
   symlinkSync(outsideSpecs, path.join(f.root, ".kiro/specs"));
-  assertPassed(submit(f, "/kiro-spec-tasks foo"));
+  assertContext(submit(f, "/kiro-spec-tasks foo"));
 });
 
 test(".kiro が外のディレクトリへのシンボリックリンクなら、外の spec を読まず通す（特定できない扱い）", (t) => {
@@ -236,7 +236,7 @@ test(".kiro が外のディレクトリへのシンボリックリンクなら�
   writeFileSync(path.join(outsideKiro, "specs", "foo", RECORD), recordText({ design: "未通過" }));
   rmSync(path.join(f.root, ".kiro"), { recursive: true });
   symlinkSync(outsideKiro, path.join(f.root, ".kiro"));
-  assertPassed(submit(f, "/kiro-spec-tasks foo"));
+  assertContext(submit(f, "/kiro-spec-tasks foo"));
 });
 
 test("同じ根の中のリンク（spec ディレクトリが別の spec へのリンク）は、実体が .kiro/specs の下なので判定どおりに止める", (t) => {
@@ -286,7 +286,7 @@ test("本体に spec が無く worktree にだけあるとき、cwd が本体な
   assert.match(reason, /記録がありません/);
 
   worktreeSpec(wt, "foo", recordText({ design: "通過" }));
-  assertPassed(submit(f, "/kiro-spec-tasks foo", { cwd: f.root }));
+  assertContext(submit(f, "/kiro-spec-tasks foo", { cwd: f.root }));
 });
 
 test("cwd が worktree の中のときも、その worktree の spec で同じように止め、通す", (t) => {
@@ -296,7 +296,7 @@ test("cwd が worktree の中のときも、その worktree の spec で同じ�
   assert.match(reason, /記録がありません/);
 
   worktreeSpec(wt, "foo", recordText({ design: "通過" }));
-  assertPassed(submit(f, "/kiro-spec-tasks foo", { cwd: wt }));
+  assertContext(submit(f, "/kiro-spec-tasks foo", { cwd: wt }));
 });
 
 test("本体と worktree に同名の spec があるとき、並びの先（入力の作業場所の根）の spec を使う", (t) => {
@@ -304,7 +304,7 @@ test("本体と worktree に同名の spec があるとき、並びの先（入�
   spec(f, "foo", recordText({ design: "未通過" }));
   worktreeSpec(wt, "foo", recordText({ design: "通過" }));
   assertBlocked(submit(f, "/kiro-spec-tasks foo", { cwd: f.root }));
-  assertPassed(submit(f, "/kiro-spec-tasks foo", { cwd: wt }));
+  assertContext(submit(f, "/kiro-spec-tasks foo", { cwd: wt }));
 });
 
 test("git の外の cwd では、スクリプトの位置の根だけで探し、見つかれば止め、無ければ通す（例外にしない）", (t) => {
@@ -316,7 +316,7 @@ test("git の外の cwd では、スクリプトの位置の根だけで探し�
   assertBlocked(found);
   assert.equal(found.stderr, "");
   const missing = run(f.entry, { cwd: outside, input: { session_id: "s1", prompt: "/kiro-spec-tasks bar", cwd: outside } });
-  assertPassed(missing);
+  assertContext(missing);
   assert.equal(missing.stderr, "");
 });
 
@@ -337,7 +337,7 @@ test("候補は先頭 20 個まで。上限より後ろの worktree にだけあ
   assert.equal(order.length, 23);
   // 先頭は本体（候補 0）。候補 20 以降（order の 20・21・22 の位置）は上限を超える
   worktreeSpec(order[22], "foo", recordText({ design: "未通過" }));
-  assertPassed(submit(f, "/kiro-spec-tasks foo", { cwd: f.root }));
+  assertContext(submit(f, "/kiro-spec-tasks foo", { cwd: f.root }));
 
   worktreeSpec(order[1], "foo", recordText({ design: "未通過" }));
   const reason = assertBlocked(submit(f, "/kiro-spec-tasks foo", { cwd: f.root }));
@@ -364,7 +364,7 @@ function checkWorktreeNamed(t, name) {
   assert.equal(submit(f, "/kiro-spec-tasks foo", { cwd: f.root }).stderr, "");
 
   worktreeSpec(wt, "foo", recordText({ design: "通過" }));
-  assertPassed(submit(f, "/kiro-spec-tasks foo", { cwd: f.root }));
+  assertContext(submit(f, "/kiro-spec-tasks foo", { cwd: f.root }));
 }
 
 test("タブを含むパスの worktree にだけある未通過の spec で止まり、通過なら通す", (t) => {
@@ -381,4 +381,55 @@ test("日本語を含むパスの worktree にだけある未通過の spec で�
 
 test("改行を含むパスの worktree にだけある未通過の spec で止まり、通過なら通す", (t) => {
   checkWorktreeNamed(t, "wt-line\nname");
+});
+
+/** 追加の指示が出たことを確かめ、その文言を返す。出力は hookSpecificOutput の 1 つだけ（Claude Code・Codex 共通の形） */
+function assertContext(result) {
+  assert.equal(result.status, 0);
+  assert.equal(result.stderr, "");
+  const value = JSON.parse(result.stdout);
+  assert.deepEqual(Object.keys(value), ["hookSpecificOutput"]);
+  assert.equal(value.hookSpecificOutput.hookEventName, "UserPromptSubmit");
+  assert.equal(typeof value.hookSpecificOutput.additionalContext, "string");
+  return value.hookSpecificOutput.additionalContext;
+}
+
+test("要件と設計の入力では追加の指示が出る（Claude Code と Codex は同じ形）", (t) => {
+  const f = fixture(t);
+  spec(f, "foo");
+  const claude = assertContext(submit(f, "/kiro-spec-requirements foo"));
+  assert.match(claude, /実機検証の要否/);
+  assert.match(claude, /\.kiro\/specs\/foo\/feasibility\.md/);
+  const codex = assertContext(submit(f, "$kiro-spec-design foo", { tool: "codex" }));
+  assert.match(codex, /設計の確認/);
+});
+
+test("kiro-spec-tasks は設計が通過なら追加の指示、記録が無ければ止め、止めるときは追加の指示を出さない", (t) => {
+  const f = fixture(t);
+  spec(f, "foo");
+  const reason = assertBlocked(submit(f, "/kiro-spec-tasks foo"));
+  assert.match(reason, /記録がありません/);
+  assert.equal(JSON.parse(submit(f, "/kiro-spec-tasks foo").stdout).hookSpecificOutput, undefined);
+  spec(f, "foo", recordText({ design: "通過" }));
+  assert.match(assertContext(submit(f, "/kiro-spec-tasks foo")), /タスク計画の確認/);
+});
+
+test("kiro-impl はタスク計画が通過なら追加の指示を出す（Codex の $ でも同じ形）", (t) => {
+  const f = fixture(t);
+  spec(f, "foo", recordText({ tasks: "通過" }));
+  assert.match(assertContext(submit(f, "$kiro-impl foo 1.1", { tool: "codex" })), /書き換え/);
+});
+
+test("spec 名なしの /kiro-spec-tasks は追加の指示を出し、spec 名は `<spec 名>` のまま書く", (t) => {
+  const f = fixture(t);
+  assert.match(assertContext(submit(f, "/kiro-spec-tasks")), /<spec 名>/);
+});
+
+test("追加の指示の入力でもリポジトリの中に何も作られない", (t) => {
+  const f = fixture(t);
+  spec(f, "foo", recordText({ design: "通過" }));
+  const before = git(f.root, ["status", "--porcelain", "--untracked-files=all"]);
+  assertContext(submit(f, "/kiro-spec-requirements foo"));
+  assertContext(submit(f, "/kiro-spec-tasks foo"));
+  assert.equal(git(f.root, ["status", "--porcelain", "--untracked-files=all"]), before);
 });

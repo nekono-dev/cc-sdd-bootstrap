@@ -6,6 +6,7 @@ import {
   parseRecord,
   decideInput,
   messageBlock,
+  messageContext,
 } from "../.agent-hooks/cc-sdd-bootstrap/feasibility-gate-rules.mjs";
 
 /** 3 つの判定から記録の本文を組み立てる（節の順序は既定どおり） */
@@ -138,7 +139,7 @@ test("設計が判定の無い（null）ときも kiro-spec-tasks を止める",
 test("設計通過なら kiro-spec-tasks を通す", () => {
   assert.deepEqual(
     decideInput({ skill: "kiro-spec-tasks", spec: "foo" }, true, parseRecord(recordText({ design: "通過", tasks: "未通過" }))),
-    { kind: "none" },
+    { kind: "context", text: messageContext("kiro-spec-tasks", "foo") },
   );
 });
 
@@ -146,7 +147,7 @@ test("タスク計画未通過で kiro-impl を止め、通過なら通す", () 
   const blocked = decideInput({ skill: "kiro-impl", spec: "foo" }, true, parseRecord(recordText({ tasks: "未通過" })));
   assert.equal(blocked.kind, "block");
   assert.match(blocked.reason, /タスク計画/);
-  assert.deepEqual(decideInput({ skill: "kiro-impl", spec: "foo" }, true, parseRecord(recordText({ tasks: "通過" }))), { kind: "none" });
+  assert.deepEqual(decideInput({ skill: "kiro-impl", spec: "foo" }, true, parseRecord(recordText({ tasks: "通過" }))), { kind: "context", text: messageContext("kiro-impl", "foo") });
 });
 
 test("kiro-impl は設計だけ通過していても、タスク計画が通らなければ止める", () => {
@@ -166,16 +167,16 @@ test("need が unneeded でも、段階が未通過なら止める（要否は�
   assert.equal(decideInput({ skill: "kiro-spec-tasks", spec: "foo" }, true, record).kind, "block");
 });
 
-test("spec 名が無い・spec のディレクトリが特定できないときは通す", () => {
-  assert.deepEqual(decideInput({ skill: "kiro-impl", spec: null }, true, null), { kind: "none" });
-  assert.deepEqual(decideInput({ skill: "kiro-impl", spec: "foo" }, false, null), { kind: "none" });
+test("spec 名が無い・spec のディレクトリが特定できないときは止めず追加の指示を返す", () => {
+  assert.deepEqual(decideInput({ skill: "kiro-impl", spec: null }, true, null), { kind: "context", text: messageContext("kiro-impl", null) });
+  assert.deepEqual(decideInput({ skill: "kiro-impl", spec: "foo" }, false, null), { kind: "context", text: messageContext("kiro-impl", null) });
 });
 
 test("停止の対象外のコマンドは止めない", () => {
   const record = parseRecord(recordText({ design: "未通過", tasks: "未通過" }));
-  assert.deepEqual(decideInput({ skill: "kiro-spec-requirements", spec: "foo" }, true, record), { kind: "none" });
-  assert.deepEqual(decideInput({ skill: "kiro-spec-design", spec: "foo" }, true, null), { kind: "none" });
-  assert.deepEqual(decideInput({ skill: "kiro-validate-design", spec: "foo" }, true, null), { kind: "none" });
+  assert.deepEqual(decideInput({ skill: "kiro-spec-requirements", spec: "foo" }, true, record), { kind: "context", text: messageContext("kiro-spec-requirements", "foo") });
+  assert.deepEqual(decideInput({ skill: "kiro-spec-design", spec: "foo" }, true, null), { kind: "context", text: messageContext("kiro-spec-design", "foo") });
+  assert.deepEqual(decideInput({ skill: "kiro-validate-design", spec: "foo" }, true, null), { kind: "context", text: messageContext("kiro-validate-design", "foo") });
 });
 
 test("command が null など想定外の型は通す", () => {
@@ -379,4 +380,161 @@ test("回帰: 3 節に表・箇条書き・### 小見出し・コードブロッ
     "",
   ].join("\n");
   assert.deepEqual(parseRecord(text), { need: "required", design: "pass", tasks: "pass" });
+});
+
+/** 追加の指示の文言に、必要な要点がすべて含まれることを確かめる */
+function assertAll(text, phrases) {
+  for (const phrase of phrases) assert.ok(text.includes(phrase), `要点が含まれていません: ${phrase}`);
+}
+
+/** 段階ごとの指示に共通する、実現性の記録の書式の要点 */
+const COMMON_PHRASES = [
+  "`.kiro/specs/foo/feasibility.md`",
+  "## 実機検証の要否",
+  "## 設計の確認",
+  "## タスク計画の確認",
+  "- 判定:",
+  "必要",
+  "不要",
+  "通過",
+  "未通過",
+  "水平線",
+  "まず `未通過` に戻してから",
+];
+
+test("messageContext: 要件の段階は、実機検証の要否の判定・外部の動作・PoC を基本・不要の条件・理由の記録を含む", () => {
+  assertAll(messageContext("kiro-spec-requirements", "foo"), [
+    ...COMMON_PHRASES,
+    "外部の動作",
+    "1 つでも",
+    "PoC",
+    "再実行",
+    "前提と理由",
+    "判定と理由",
+  ]);
+});
+
+test("messageContext: 設計の段階（kiro-spec-design・kiro-validate-design）は、前提ごとの根拠・一次資料・PoC・未確認・レビュー役の観点を含む", () => {
+  for (const skill of ["kiro-spec-design", "kiro-validate-design"]) {
+    assertAll(messageContext(skill, "foo"), [
+      ...COMMON_PHRASES,
+      "前提ごと",
+      "一次資料",
+      "出典",
+      "PoC",
+      "再実行",
+      "実行日",
+      "未確認",
+      "設計の承認",
+      "レビュー役",
+      "前提ごとの根拠が一次資料か PoC で確かめられているか",
+    ]);
+  }
+});
+
+test("messageContext: タスク計画の段階は、根拠と段取り・最初の実装タスクに実機の確認・未解決・レビュー役の観点を含む", () => {
+  assertAll(messageContext("kiro-spec-tasks", "foo"), [
+    ...COMMON_PHRASES,
+    "根拠",
+    "段取り",
+    "最初の実装タスク",
+    "実機",
+    "未解決",
+    "レビュー役の依頼文",
+  ]);
+});
+
+test("messageContext: 実装の段階は、requirements.md・design.md を書き換えない・Blocked で戻す・記録を更新し直す", () => {
+  assertAll(messageContext("kiro-impl", "foo"), [
+    ...COMMON_PHRASES,
+    "requirements.md",
+    "design.md",
+    "書き換え",
+    "Blocked",
+    "戻",
+  ]);
+});
+
+test("messageContext: spec 名が分からないときは `<spec 名>` のまま書き、特定の仕組みの名前を含まない", () => {
+  const text = messageContext("kiro-spec-tasks", null);
+  assert.ok(text.includes(".kiro/specs/<spec 名>/feasibility.md"));
+  for (const skill of ["kiro-spec-requirements", "kiro-spec-design", "kiro-validate-design", "kiro-spec-tasks", "kiro-impl"]) {
+    assert.doesNotMatch(messageContext(skill, "foo"), /brw|branch-release-workflow/);
+  }
+});
+
+test("decideInput: 要件・設計・設計の確認は、spec が特定できなくても追加の指示を返す", () => {
+  assert.deepEqual(decideInput({ skill: "kiro-spec-requirements", spec: null }, false, null), {
+    kind: "context",
+    text: messageContext("kiro-spec-requirements", null),
+  });
+  assert.deepEqual(decideInput({ skill: "kiro-spec-design", spec: "foo" }, false, null), {
+    kind: "context",
+    text: messageContext("kiro-spec-design", null),
+  });
+  assert.deepEqual(decideInput({ skill: "kiro-validate-design", spec: null }, true, null), {
+    kind: "context",
+    text: messageContext("kiro-validate-design", null),
+  });
+});
+
+test("decideInput: kiro-spec-tasks は設計が通過・spec が特定できない・spec 名なしのとき追加の指示、それ以外は止める", () => {
+  const pass = parseRecord(recordText({ design: "通過", tasks: "未通過" }));
+  assert.deepEqual(decideInput({ skill: "kiro-spec-tasks", spec: "foo" }, true, pass), {
+    kind: "context",
+    text: messageContext("kiro-spec-tasks", "foo"),
+  });
+  assert.deepEqual(decideInput({ skill: "kiro-spec-tasks", spec: null }, true, null), {
+    kind: "context",
+    text: messageContext("kiro-spec-tasks", null),
+  });
+  assert.deepEqual(decideInput({ skill: "kiro-spec-tasks", spec: "foo" }, false, null), {
+    kind: "context",
+    text: messageContext("kiro-spec-tasks", null),
+  });
+  const blocked = decideInput({ skill: "kiro-spec-tasks", spec: "foo" }, true, null);
+  assert.equal(blocked.kind, "block");
+  assert.equal(blocked.text, undefined);
+});
+
+test("decideInput: kiro-impl はタスク計画が通過・spec が特定できない・spec 名なしのとき追加の指示、それ以外は止める", () => {
+  const pass = parseRecord(recordText({ tasks: "通過" }));
+  assert.deepEqual(decideInput({ skill: "kiro-impl", spec: "foo" }, true, pass), {
+    kind: "context",
+    text: messageContext("kiro-impl", "foo"),
+  });
+  assert.equal(decideInput({ skill: "kiro-impl", spec: "foo" }, true, parseRecord(recordText({ tasks: "未通過" }))).kind, "block");
+  assert.equal(decideInput({ skill: "kiro-impl", spec: "foo" }, true, null).kind, "block");
+});
+
+test("decideInput: kiro-spec-quick と kiro-spec-batch は、2.3 までは何も返さない（既存の挙動のまま）", () => {
+  for (const skill of ["kiro-spec-quick", "kiro-spec-batch"]) {
+    assert.deepEqual(decideInput({ skill, spec: "foo" }, true, null), { kind: "none" });
+  }
+});
+
+test("messageContext（要件 1.1・1.6）: 判定が必要でも不要でも、判定と理由を記録に残すと明示する", () => {
+  assertAll(messageContext("kiro-spec-requirements", "foo"), ["必要でも不要でも", "判定と理由を"]);
+});
+
+test("messageContext（要件 2.4・4.3）: 設計の確認は、出典・PoC の場所・根拠の無い前提の有無（無ければ「なし」）と、通過にしてよい条件を含む", () => {
+  for (const skill of ["kiro-spec-design", "kiro-validate-design"]) {
+    assertAll(messageContext(skill, "foo"), [
+      "根拠の無い前提の有無",
+      "「なし」と明記",
+      "出典",
+      "PoC の場所",
+      "通過にしてよいのは、根拠の無い前提が無いときだけ",
+    ]);
+  }
+});
+
+test("messageContext（要件 3.3・3.4）: タスク計画の確認は、各前提の根拠の有無・実機の確認の位置・未解決・通過の条件を含む", () => {
+  assertAll(messageContext("kiro-spec-tasks", "foo"), [
+    "各前提の根拠の有無",
+    "実機の確認が最初に置かれているか",
+    "最初の実装タスクの番号",
+    "未解決",
+    "通過にしてよいのは、根拠の無い前提と未解決が無いときだけ",
+  ]);
 });

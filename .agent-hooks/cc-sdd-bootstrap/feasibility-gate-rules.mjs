@@ -181,27 +181,41 @@ function judgementOf(sections, heading, words) {
 }
 
 /**
- * 入力を止めるかを判断する。
- * 止めるのは、spec 名が特定でき、停止の対象のコマンドで、必要な段階が通過でないとき（記録が無い・読めないときも止める）。
+ * 追加の指示だけを返すコマンド。spec が特定できなくても、段階の指示を出す（1.1〜2.6）。
+ * kiro-spec-quick・kiro-spec-batch は 2.3 で扱うので、ここには含めない。
+ */
+const ALWAYS_CONTEXT = new Set(["kiro-spec-requirements", "kiro-spec-design", "kiro-validate-design"]);
+
+/**
+ * 入力を判断する。
+ * - 要件・設計・設計の確認: spec の特定の有無によらず、追加の指示（context）。
+ * - 停止の対象（kiro-spec-tasks・kiro-impl）: spec が特定でき、必要な段階が通過でないときだけ止める（block。記録が無い・読めないも止める）。それ以外は追加の指示（context）。
+ * - それ以外（kiro-spec-quick・kiro-spec-batch を含む）: 何も返さない（none）。
  * 要否（need）は判断に使わない（5.9）。想定外の型は止めない側に倒す。
  * @param {{ skill: string, spec: string | null } | null} command - classifyPrompt の結果
  * @param {boolean} specFound - spec のディレクトリが特定できたか
  * @param {{ need: unknown, design: unknown, tasks: unknown } | null} record - 記録の解析結果。読めなければ null
- * @returns {{ kind: "none" } | { kind: "block", reason: string }}
+ * @returns {{ kind: "none" } | { kind: "context", text: string } | { kind: "block", reason: string }}
  */
 export function decideInput(command, specFound, record) {
   if (!command || typeof command !== "object") return { kind: "none" };
-  if (typeof command.spec !== "string" || specFound !== true) return { kind: "none" };
+  const spec = typeof command.spec === "string" ? command.spec : null;
+  // 記録を読む対象が特定できたか（spec 名があり、spec のディレクトリが見つかった）
+  const known = spec !== null && specFound === true;
+  const name = known ? spec : null;
+  if (ALWAYS_CONTEXT.has(command.skill)) return { kind: "context", text: messageContext(command.skill, name) };
   if (!Object.hasOwn(STOP_TARGETS, command.skill)) return { kind: "none" };
 
   const stage = STOP_TARGETS[command.skill];
-  if (!record || typeof record !== "object") {
-    return { kind: "block", reason: messageBlock(command.spec, stage, "no-record", command.skill) };
+  if (known) {
+    if (!record || typeof record !== "object") {
+      return { kind: "block", reason: messageBlock(spec, stage, "no-record", command.skill) };
+    }
+    if (record[stage] !== "pass") {
+      return { kind: "block", reason: messageBlock(spec, stage, "not-passed", command.skill) };
+    }
   }
-  if (record[stage] !== "pass") {
-    return { kind: "block", reason: messageBlock(command.spec, stage, "not-passed", command.skill) };
-  }
-  return { kind: "none" };
+  return { kind: "context", text: messageContext(command.skill, name) };
 }
 
 /**
@@ -283,4 +297,37 @@ function pushWorktree(block, roots, rejectQuoted) {
   const root = line.slice("worktree ".length);
   if (rejectQuoted && root.startsWith("\"")) return;
   roots.push(root);
+}
+
+/** 段階ごとの指示に共通する、実現性の記録の書式（エージェント向け）。path は記録の場所 */
+function recordFormatOf(path) {
+  return `実現性の記録は \`${path}\` に置きます。3 つの節 \`## 実機検証の要否\`・\`## 設計の確認\`・\`## タスク計画の確認\` があり、各節に \`- 判定: <語>\` の行をちょうど 1 つ書きます。要否の語は \`必要\`・\`不要\`、段階の語は \`通過\`・\`未通過\` です。判定の行より前に水平線 \`---\` を置かないでください。確認をやり直したら、該当節の判定をまず \`未通過\` に戻してから、結果で更新してください。`;
+}
+
+/** 段階ごとの追加の指示の文言（エージェント向けの日本語）。対象外のコマンドは空文字 */
+const CONTEXT_TEXTS = {
+  "kiro-spec-requirements": (path) => `【実現性の確認】この依頼は要件を作る段階です。実機検証の要否を判定し、必要でも不要でも、判定と理由を記録の \`## 実機検証の要否\` に残してください。外部の動作（ツール・API・OS・外部サービスの挙動）に依存する前提が 1 つでもあれば「必要」にします。「不要」にできるのは、外部の動作に依存する前提が無い場合に限ります。必要なら、前提ごとに PoC（実機で再実行できる試作）を作ることを基本とし、PoC を作らない前提は、その前提と理由を記録してください。不要でも、判定と理由を記録してください。${recordFormatOf(path)}`,
+  "kiro-spec-design": (path) => designContextOf(path),
+  "kiro-validate-design": (path) => designContextOf(path),
+  "kiro-spec-tasks": (path) => `【実現性の確認】タスク計画の各前提の根拠と、実施の段取りが確実にできるかを確認してください。実機検証が必要な spec では、実際の配置物・実機を使う確認を、最初の実装タスク（またはその群）に置いてください。実機の確認が最後に置かれている・欠けているなど未解決があれば、「未解決」として記録に残し、計画を直してから更新してください。結果は記録の \`## タスク計画の確認\` に残し、各前提の根拠の有無、実機の確認が最初に置かれているか（最初の実装タスクの番号）を書いてください。判定の語（\`通過\`・\`未通過\`）のうち通過にしてよいのは、根拠の無い前提と未解決が無いときだけです。レビュー役の依頼文にも、この観点（実機の確認が最初の実装タスクにあるか）を入れてください。${recordFormatOf(path)}`,
+  "kiro-impl": (path) => `【実現性の確認】実装中に要件・設計と現実の食い違いが見つかったら、その場で requirements.md・design.md を書き換えないでください。cc-sdd の Blocked の扱い（タスクを止めて理由を残す）で、該当する段階（要件・設計・タスク）へ戻してください。戻した後は、記録の該当節の判定をまず \`未通過\` に戻してから、確認し直して更新してください。${recordFormatOf(path)}`,
+};
+
+/** 設計の段階（kiro-spec-design・kiro-validate-design で同じ文言）の追加の指示 */
+function designContextOf(path) {
+  return `【実現性の確認】設計の前提ごとに根拠を確認してください。認める根拠は、一次資料（出典の場所と版が示せるもの）か、実機の PoC（再実行できる手順があり、実行日・環境・結果が残るもの）だけです。根拠の無い前提は「未確認」として記録に残し、設計の承認の前に根拠を足してください。結果は記録の \`## 設計の確認\` に残し、前提ごとの根拠（一次資料の出典、または PoC の場所）と、根拠の無い前提の有無（無ければ「なし」と明記）を書いてください。判定の語（\`通過\`・\`未通過\`）のうち通過にしてよいのは、根拠の無い前提が無いときだけです。根拠の無い前提が残るうちは \`未通過\` のままにしてください。レビュー役（子のエージェント）を起動するときは、依頼文に観点「前提ごとの根拠が一次資料か PoC で確かめられているか」を入れてください。${recordFormatOf(path)}`;
+}
+
+/**
+ * 段階ごとの追加の指示（エージェント向け）。spec 名が分かるときは記録の場所を具体的に書き、分からないときは `<spec 名>` のまま書く。
+ * 対象外のコマンドは空文字。
+ * @param {string} skill - コマンド名
+ * @param {string | null} spec - spec 名（分からなければ null）
+ * @returns {string}
+ */
+export function messageContext(skill, spec = null) {
+  const build = Object.hasOwn(CONTEXT_TEXTS, skill) ? CONTEXT_TEXTS[skill] : null;
+  if (build === null) return "";
+  const path = typeof spec === "string" ? `.kiro/specs/${spec}/feasibility.md` : ".kiro/specs/<spec 名>/feasibility.md";
+  return build(path);
 }

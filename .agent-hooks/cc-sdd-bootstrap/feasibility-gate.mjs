@@ -191,7 +191,11 @@ async function run() {
   const dir = command.spec === null ? null : locateSpec(candidateRoots(cwd), command.spec);
   const record = dir === null ? null : await readRecord(dir);
   const decision = decideInput(command, dir !== null, record);
+  // 止めるときは理由を出す。止めないときは、段階ごとの追加の指示を文脈として渡す（Claude Code・Codex 共通の形）
   if (decision.kind === "block") output({ decision: "block", reason: decision.reason });
+  if (decision.kind === "context") {
+    output({ hookSpecificOutput: { hookEventName: "UserPromptSubmit", additionalContext: decision.text } });
+  }
 }
 
 run().catch((error) => {
