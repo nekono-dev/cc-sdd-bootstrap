@@ -94,7 +94,8 @@ graph TB
 - `lib/catalog.mjs` — 配布する `stop-notice-rules.mjs` を配置の一覧に足す（8.5）。運用の区画の文章の「入力が止まります」の説明に、止めた理由は応答の文章で示されることを足す（8.1）。
 - `package.json` — `files` に `stop-notice-rules.mjs` を足す。
 - `.agent-hooks/cc-sdd-bootstrap/agent-section-claude.md`・`agent-section-codex.md` — `update` コマンドで再生成する（8.4）。
-- `test/stop-notice-rules.test.mjs`（新規）、`test/feasibility-gate.test.mjs`、`test/install-cc-sdd.test.mjs`、`test/catalog.test.mjs`、`test/package.test.mjs` — 出力の形・文面・配布物の一覧を直す（8.3）。
+- `test/stop-notice-rules.test.mjs`（新規）、`test/feasibility-gate.test.mjs`、`test/install-cc-sdd.test.mjs`、`test/catalog.test.mjs` — 出力の形・文面を直す（8.3）。`test/helpers/entry-harness.mjs`・`test/cli.e2e.test.mjs` — 試験の土台が配置物をコピーする一覧に新しいファイルを足す（実装中に分かった。足さないとフックが起動できない）。`test/package.test.mjs` — 配置の一覧とパッケージの内容の一致を確かめる既存の確認が、新しいファイルを含めて成功することを確かめる（期待の変更は不要）。
+- `.agent-hooks/cc-sdd-bootstrap/install-record.json` — `update` の実行で、配置したファイルのハッシュが更新される（8.4）。
 - `.kiro/specs/feasibility-review/{requirements,design,feasibility}.md`、`.kiro/specs/session-install/requirements.md` — 「停止の理由は利用者に示される」とする記述（要件 5.5・5.11・8.2、記録の根拠の行、session-install 要件 5）を、停止の案内が応答の文章で届くことに合わせて直す（8.2）。
 
 ## System Flows
