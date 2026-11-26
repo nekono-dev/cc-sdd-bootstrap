@@ -40,9 +40,15 @@ node bin/cc-sdd-bootstrap.mjs uninstall       # 適用内容の取り除き
 poc/<名前>/run.sh                            # 個別の前提確認
 ```
 
-設定ファイルに保存した cc-sdd の版と言語で、起動前（環境の準備スクリプトから `node .agent-hooks/cc-sdd-bootstrap/install-cc-sdd.mjs`）か、セッション開始・最初の入力のフックで導入物を揃える。導入物が揃っていれば入れ直しを省く。Codex の利用設定（`codex.enabled`）と役割ごとのモデル（`models`）は今は保存だけで、後続の仕様（subagent-delegation）で役割表に置き換える。`ccSdd.keepTemplates` は単純化で廃止し、残っていても読まない（このリポジトリの設定からも外した）。
+設定ファイル（`.cc-sdd-bootstrap.json`）の版と言語で、起動前（環境の準備スクリプトから `node .agent-hooks/cc-sdd-bootstrap/install-cc-sdd.mjs`）か、セッション開始・最初の入力のフックで導入物を揃える。導入物が揃っていれば入れ直しを省く。設定の項目は小さく保ち、定義は `config-schema.mjs` の 1 か所に置く: `ccSdd.version`・`ccSdd.lang`、`codex.trustHooks`（Codex のフックの承認の記録と子の承認確認の省略）、`workflow.branchGate`・`workflow.prAfterValidate`・`workflow.baseBranches`（作業ブランチの確保と検証後の PR）、役割ごとのモデル（`subagents`）。`ccSdd.keepTemplates` は単純化で廃止し、残っていても読まない。
 
 2026-11-22 の単純化の discovery で要件に戻した installer-core・session-install・kiro-gate は、改訂後の実装を develop に取り込んだ（2026-11-24、#3）。
+
+## フックの構成
+
+- 関門ごとに配置物を分ける（入口 `<名前>.mjs` と純粋な判定 `<名前>-rules.mjs`）。現在の関門: `install-cc-sdd`（導入）、`kiro-gate`（手順書の先読み）、`subagent-check`（子のモデルの拒否）、`work-branch-gate`（作業ブランチ）、`feasibility-gate`（実現性の確認）、`codex-trust`（Codex の承認の記録）。別提供元の子は `delegate.mjs` から `codex exec`・`claude -p` で起動する。
+- 新しい関門は、同じ型で配置物を足し、`lib/catalog.mjs` と `package.json` の `files` に登録し、設定で切るものは `config-schema.mjs` に項目を足す。
+- 利用先で動く判定は、spec ごとの記録（`.kiro/specs/<spec 名>/feasibility.md` の `- 判定:` の行）や git の状態など、利用先のファイルだけを読む。cc-sdd のファイルには印を足さない。
 
 ## 主要な技術判断
 
@@ -51,10 +57,11 @@ poc/<名前>/run.sh                            # 個別の前提確認
 - **CLAUDE.md・AGENTS.md は cc-sdd の標準の文書＋運用の区画として作り直す**（2026-11-23、利用者の指示。2026-11-18 の「管理区画だけを書き換え、標準の文書は `.kiro/settings/cc-sdd-guide.md` へ出して `@` で取り込む」判断を置き換える）: cc-sdd の導入で CLAUDE.md（Claude Code 向け）・AGENTS.md（Codex 向け）を標準の文書として書き出し、その後に cc-sdd-bootstrap の運用の区画（目印の行で囲んだ案内）を末尾へ書き足す。導入物なのでコミットしない。プロジェクト独自の決まりは `.kiro/steering/` に置く（`poc/req-feasibility/doc-append.sh` で確認）。
 - **フックは Claude Code と Codex の両方へ同じスクリプトを登録する**（2026-11-24）: 同じ配置物を `--tool claude|codex` の引数で呼び分ける。登録先は `.claude/settings.json`（`$CLAUDE_PROJECT_DIR` で道筋を作る）と `.codex/hooks.json`（`git rev-parse --show-toplevel` で道筋を作る。worktree の中でもその worktree の配置物が動く）。導入コマンドは印（`/.agent-hooks/cc-sdd-bootstrap/` を含むコマンド）のある項目だけを書き換え、利用者の他のフックは保つ。
 - **フックの止め方の向き**: 導入の失敗・未完了は次の入力を止める（session-install）。手順書の先読みの強制は、判定できない入力・状態の読み書きの失敗・手順書が無いときは通す（kiro-gate）。未読のままの終了は 1 回だけ止める。
+- **作業ブランチと実現性の関門は「止めるのは明示的に満たされたときだけ」**（2026-11-26）: ブランチや PR の有無が判定できないとき、設定が無効のとき、型が想定外のときは通す。拒否の回数は入力ごとに上限を持ち、試みた後は拒否しない。別の仕組み（branch-release-workflow）を重ねても行き詰まらないよう、特定の仕組みの名前には依存しない。
 - **uninstall はフックの登録と運用の区画だけを外す**: 配置物や設定ファイルは消さない（利用者が git で確かめて消す）。
 - **このリポジトリ自身にも適用する**: 導入コマンドができたら、このリポジトリにも同じ方法で導入し、作るものを自分で使って確かめる。
 
 ---
 _依存の一覧ではなく、決まりと判断を書く_
 
-_updated_at: 2026-11-24（単純化した 3 つの spec の取り込みと Codex への登録を反映）_
+_updated_at: 2026-11-26（作業ブランチ・実現性の関門、Codex の承認の記録、設定項目の現状を反映）_
