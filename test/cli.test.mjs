@@ -440,3 +440,25 @@ test("init の区画を導入側の置き換えに通すと、CLAUDE.md と AGEN
     assert.doesNotMatch(written, /brw|branch-release-workflow/, tool);
   }
 });
+
+test("init の区画を導入側の置き換えに通すと、CLAUDE.md と AGENTS.md に feasibility-review の区画が入る（2.6・3.5・7・8.3）", async (t) => {
+  const root = temporary(t);
+  const iso = codexIsolation(t);
+  assert.equal(await runCli(["init"], io(root, iso).value), 0);
+  const rules = await import("../.agent-hooks/cc-sdd-bootstrap/install-rules.mjs");
+  // 区画の目印だけがある文書（導入の前の空の区画）を、配置物の区画で置き換える
+  const doc = `利用者の文書\n\n${rules.SECTION_BEGIN_MARKER}\n${rules.SECTION_END_MARKER}\n`;
+  const sections = {
+    claude: fs.readFileSync(path.join(root, ".agent-hooks/cc-sdd-bootstrap/agent-section-claude.md"), "utf8"),
+    codex: fs.readFileSync(path.join(root, ".agent-hooks/cc-sdd-bootstrap/agent-section-codex.md"), "utf8"),
+  };
+  for (const tool of ["claude", "codex"]) {
+    assert.equal(rules.validateSectionText(sections[tool]), null, tool);
+    const written = rules.replaceSection(doc, sections[tool]);
+    assert.ok(written.startsWith("利用者の文書"), tool);
+    assert.ok(written.includes("要件の段階"), tool);
+    assert.ok(written.includes("## タスク計画の確認"), tool);
+    assert.ok(written.includes("文章で守って"), tool);
+    assert.doesNotMatch(written, /brw|branch-release-workflow/, tool);
+  }
+});
