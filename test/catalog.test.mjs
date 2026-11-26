@@ -325,3 +325,54 @@ test("subagent-delegation の承認を省く指定の項目は各要素を同じ
   assert.equal(pieceContaining(section.codex, "--dangerously-bypass-hook-trust", "\n"), "", "Codex 向けに指定の案内が入らない");
   assert.equal(section.codex.includes("codex.trustHooks"), false, "Codex 向けに trustHooks の案内が入らない");
 });
+
+test("work-branch-flow の区画は両ツール向けに同じ項目を持ち、5 つの内容を含む（6.1〜6.4・7.4）", () => {
+  const section = catalog.agentSections.find((item) => item.id === "work-branch-flow");
+  assert.ok(section, "work-branch-flow の区画が無い");
+  for (const tool of ["claude", "codex"]) {
+    const body = section[tool];
+    const sigil = tool === "claude" ? "/" : "$";
+    for (const phrase of [
+      "作業用ブランチ", "基底ブランチ", "新機能追加系", `${sigil}kiro-discovery`, `${sigil}kiro-impl`,
+      "NO-GO", "push", "PR", "既定の運用", "タイトルと本文",
+      ".cc-sdd-bootstrap.json", "workflow.branchGate", "workflow.prAfterValidate", "workflow.baseBranches", "main,master,develop",
+      "別の仕組み", "案内に従",
+      "承認されていない", "機械的",
+      ".kiro/steering/",
+    ]) {
+      assert.ok(body.includes(phrase), `${tool}: ${phrase}`);
+    }
+  }
+  assert.ok(section.codex.includes("$kiro-impl"));
+  assert.ok(section.claude.includes("/kiro-impl"));
+  assert.ok(!section.codex.includes("/kiro-impl"));
+});
+
+test("work-branch-flow の区画は特定の別の仕組みの名前と宣言ファイル名を含まない（6.5）", () => {
+  const section = catalog.agentSections.find((item) => item.id === "work-branch-flow");
+  for (const tool of ["claude", "codex"]) {
+    assert.doesNotMatch(section[tool], /brw|branch-release-workflow|release-workflow|宣言/i, tool);
+  }
+});
+
+test("work-branch-gate の登録・配置物・package.json の配布範囲が一致する（7.1）", () => {
+  for (const tool of ["claude", "codex"]) {
+    const gate = catalog.hooks.filter((hook) => hook.script === "work-branch-gate.mjs" && hook.tools.includes(tool));
+    assert.deepEqual(gate.map((hook) => hook.event), ["UserPromptSubmit", "PreToolUse", "Stop"], tool);
+  }
+  for (const name of ["work-branch-gate.mjs", "work-branch-gate-rules.mjs"]) {
+    const file = `${DEPLOY_DIR}/${name}`;
+    assert.ok(catalog.files.some((entry) => entry.path === file), file);
+    assert.ok(pkg.files.includes(file), file);
+  }
+});
+
+test("work-branch-flow の区画は、拒否と停止の実際の条件を断定せずに示す（6.1・6.2）", () => {
+  const section = catalog.agentSections.find((item) => item.id === "work-branch-flow");
+  for (const tool of ["claude", "codex"]) {
+    const body = section[tool];
+    for (const phrase of ["入力ごとに最大 2 回", "判定できないときは拒否しません", "PR が無いと判定できたときだけ止まります", "PR が既にある"]) {
+      assert.ok(body.includes(phrase), `${tool}: ${phrase}`);
+    }
+  }
+});

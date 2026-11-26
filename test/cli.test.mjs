@@ -418,3 +418,25 @@ test("適用の途中で失敗した update は終了コード 1 で、既存の
     fs.chmodSync(blocked, 0o755);
   }
 });
+
+test("init の区画を導入側の置き換えに通すと、CLAUDE.md と AGENTS.md に work-branch-flow の区画が入る（6.1・6.4・6.5）", async (t) => {
+  const root = temporary(t);
+  const iso = codexIsolation(t);
+  assert.equal(await runCli(["init"], io(root, iso).value), 0);
+  const rules = await import("../.agent-hooks/cc-sdd-bootstrap/install-rules.mjs");
+  // 区画の目印だけがある文書（導入の前の空の区画）を、配置物の区画で置き換える
+  const doc = `利用者の文書\n\n${rules.SECTION_BEGIN_MARKER}\n${rules.SECTION_END_MARKER}\n`;
+  const sections = {
+    claude: fs.readFileSync(path.join(root, ".agent-hooks/cc-sdd-bootstrap/agent-section-claude.md"), "utf8"),
+    codex: fs.readFileSync(path.join(root, ".agent-hooks/cc-sdd-bootstrap/agent-section-codex.md"), "utf8"),
+  };
+  for (const tool of ["claude", "codex"]) {
+    assert.equal(rules.validateSectionText(sections[tool]), null, tool);
+    const written = rules.replaceSection(doc, sections[tool]);
+    assert.ok(written.startsWith("利用者の文書"), tool);
+    assert.ok(written.includes("新機能追加系の作業"), tool);
+    assert.ok(written.includes("workflow.prAfterValidate"), tool);
+    assert.ok(written.includes("別の仕組み"), tool);
+    assert.doesNotMatch(written, /brw|branch-release-workflow/, tool);
+  }
+});
