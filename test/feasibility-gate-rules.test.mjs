@@ -408,10 +408,12 @@ test("messageContext: 要件の段階は、実機検証の要否の判定・外�
     "外部の動作",
     "1 つでも",
     "PoC",
-    "再実行",
+    "実機で前提を確かめる試作",
+    "PoC 文書",
     "前提と理由",
     "判定と理由",
   ]);
+  assert.ok(!messageContext("kiro-spec-requirements", "foo").includes("再実行"), "要件の段階に再実行を含んではならない");
 });
 
 test("messageContext: 設計の段階（kiro-spec-design・kiro-validate-design）は、前提ごとの根拠・一次資料・PoC・未確認・レビュー役の観点を含む", () => {
@@ -422,13 +424,15 @@ test("messageContext: 設計の段階（kiro-spec-design・kiro-validate-design�
       "一次資料",
       "出典",
       "PoC",
-      "再実行",
-      "実行日",
+      "PoC 文書",
+      "位置付けと結果が文書で追える",
+      "実施日",
       "未確認",
       "設計の承認",
       "レビュー役",
-      "前提ごとの根拠が一次資料か PoC で確かめられているか",
+      "前提ごとの根拠が一次資料か、PoC 文書で位置付けと結果が追える PoC で確かめられているか",
     ]);
+    assert.ok(!messageContext(skill, "foo").includes("再実行"), `${skill} に再実行を含んではならない`);
   }
 });
 
@@ -436,6 +440,7 @@ test("messageContext: タスク計画の段階は、根拠と段取り・最初�
   assertAll(messageContext("kiro-spec-tasks", "foo"), [
     ...COMMON_PHRASES,
     "根拠",
+    "PoC 文書の場所",
     "段取り",
     "最初の実装タスク",
     "実機",
@@ -518,7 +523,7 @@ test("messageContext（要件 2.4・4.3）: 設計の確認は、出典・PoC �
       "根拠の無い前提の有無",
       "「なし」と明記",
       "出典",
-      "PoC の場所",
+      "PoC 文書の場所",
       "通過にしてよいのは、根拠の無い前提が無いときだけ",
     ]);
   }
