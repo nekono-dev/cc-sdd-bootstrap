@@ -95,3 +95,8 @@
 - 同じセッションで `brw create` の worktree へ移った後に `kiro-validate-impl` を入力して Stop が worktree のブランチで判定される流れ（`-p` では 1 回の入力しか送れないため、実機では確かめていない。入口の統合試験で、`location` による判定を確かめた）。
 - 実際の `gh pr create`・`brw publish` による PR の作成（偽の `gh` のみ）。
 - Codex に brw を重ねた構成（brw の Codex 用の登録に信頼の承認が要る）。
+
+## 追記: 入力時の案内が届いたこと（2026-11-26、feasibility-review の場面 D）
+
+- 場面 F・G・H ではストリームに出ず確認できなかった「入力時の案内（追加の文脈）が届いたか」を、`poc/feasibility-review/run.mjs D`（答えさせる手順書。片方のフックを外した対照つき）で確認した。基底ブランチ（`develop`）の上の `/kiro-impl demo`（Codex は `$kiro-impl demo`）で、work-branch-gate の案内（本文の「現在のブランチ 「develop」 は基底ブランチです」）が、feasibility-gate の案内と並んで、Claude Code・Codex の両方でモデルに届いた（要件 3.12・7.2）。作業前のブランチ確保を設定で無効にした対照では、同じ答えが「なし」になった。
+- 確認した範囲は、案内の本文の基底ブランチの文まで。案内の他の内容（切り替えの手順など）は単体試験で確かめている。

@@ -35,11 +35,10 @@ for (const name of COMPLETED_SPECS) {
 }
 
 // この 2 つの spec 自身の記録（要件 5.4）。根拠の PoC の場所が実在する。
-// work-branch-flow は設計・タスク計画ともに通過。feasibility-review は、並んだ追加の文脈の実機の確認（タスク 5.1）が済むまで、
-// タスク計画の確認が未通過（未解決を残したまま通過にしない）
+// どちらも設計・タスク計画の確認が通過（未解決が無い）
 const OWN_RECORDS = [
   { name: "work-branch-flow", expected: { need: "required", design: "pass", tasks: "pass" } },
-  { name: "feasibility-review", expected: { need: "required", design: "pass", tasks: "fail" } },
+  { name: "feasibility-review", expected: { need: "required", design: "pass", tasks: "pass" } },
 ];
 
 for (const { name, expected } of OWN_RECORDS) {

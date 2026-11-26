@@ -4,6 +4,7 @@
 //   B: 子のレビュー役の起動（Claude Code の Agent・Codex の spawn_agent）の依頼文を PreToolUse で扱えるか
 //      B1 依頼文に印が無ければ拒否し、理由で入れさせる（拒否→呼び直し）
 //      B2 依頼文の末尾に印を足す（updatedInput）。子が受け取ったかは、子が最後の 1 行を引用して答えるので分かる
+//   D: 同じ入力に複数のフックの追加の文脈が並ぶとき（feasibility-gate と work-branch-gate）、両方がモデルに届くか（両ツール）
 //   C: 配置した feasibility-gate（init で導入）で、記録のない spec の /kiro-spec-tasks・/kiro-impl が入力の停止になり、通過の記録を書くと通るか（両ツール）
 // 使い方: node poc/feasibility-review/run.mjs [A] [B]   認証済みの claude・codex、git、Node.js 22、cc-sdd の導入に使うネットワークが要る。
 import fs from 'node:fs';
@@ -176,6 +177,62 @@ if (enabled('C')) {
         // 通ったときは、モデルが何かを答える（kiro-impl は work-branch-gate の拒否で別の答えになることがある）
         check(`C ${tool}: 通ったときはモデルが応答した`, answer.trim() !== '');
       }
+    }
+  }
+}
+
+// ---- D: 並んだ追加の文脈（feasibility-review タスク 5.1） ----
+// 偽陽性を避けるため、2 つのフックの両方がある場合（full）と、片方を外した対照（no-branch・no-feas）を比べる。
+// 答えは「追加の指示（フックが入力と一緒に出した案内）にあるものだけ」とし、CLAUDE.md・AGENTS.md の運用の区画や入力から推測しないよう指示する。
+if (enabled('D')) {
+  console.log('\n## D: 並んだ追加の文脈（kiro-impl の入力。feasibility-gate と work-branch-gate が同時に追加の文脈を出す。片方を外した対照つき）');
+  const record = '# 実現性の記録: demo\n\n## 実機検証の要否\n- 判定: 必要\n- 理由: 確認用\n\n## 設計の確認\n- 判定: 通過\n\n## タスク計画の確認\n- 判定: 通過\n';
+  const skill = `---\nname: kiro-impl\ndescription: 確認用の手順書（kiro-impl）\n---\n\n# kiro-impl\n\n手順: ツールは使わない。この入力と一緒に、フックが渡した「追加の指示（案内）」があるか確かめる。CLAUDE.md・AGENTS.md の運用の区画や、この手順書、入力から推測してはいけない。追加の指示に実際に書かれているものだけを、次の形で答える。\n1 行目「基底: <追加の指示に「現在のブランチ 「…」 は基底ブランチです」とあれば、その「…」の中のブランチ名。無ければ なし>」\n2 行目「記録: <追加の指示に、実現性の記録に関する案内（判定の語『通過』『未通過』を使う書式の説明）があれば あり。無ければ なし>」\n`;
+  const variants = [
+    { id: 'full', label: '両方のフックあり', expectBranch: true, expectRecord: true },
+    { id: 'no-branch', label: '作業前のブランチ確保を設定で無効（対照）', expectBranch: false, expectRecord: true },
+    { id: 'no-feas', label: '実現性のフックを外す（対照）', expectBranch: true, expectRecord: false },
+  ];
+  for (const tool of tools) {
+    for (const v of variants) {
+      const dir = makeRepo(`d-${tool}-${v.id}`);
+      const init = run(process.execPath, [path.join(repoRoot, 'bin/cc-sdd-bootstrap.mjs'), 'init'], { cwd: dir });
+      const install = run(process.execPath, ['.agent-hooks/cc-sdd-bootstrap/install-cc-sdd.mjs'], { cwd: dir });
+      check(`D ${tool} ${v.id}: init と cc-sdd の導入が成功した`, init.status === 0 && install.status === 0);
+      if (v.id === 'no-branch') {
+        const file = path.join(dir, '.cc-sdd-bootstrap.json');
+        const config = JSON.parse(fs.readFileSync(file, 'utf8'));
+        config.workflow = { ...(config.workflow ?? {}), branchGate: false };
+        fs.writeFileSync(file, `${JSON.stringify(config, null, 2)}\n`);
+      }
+      if (v.id === 'no-feas') {
+        for (const f of ['.claude/settings.json', '.codex/hooks.json']) {
+          const text = fs.readFileSync(path.join(dir, f), 'utf8');
+          const config = JSON.parse(text);
+          for (const entries of Object.values(config.hooks ?? {})) {
+            for (const entry of entries) entry.hooks = (entry.hooks ?? []).filter((h) => !String(h.command).includes('feasibility-gate.mjs'));
+          }
+          fs.writeFileSync(path.join(dir, f), `${JSON.stringify(config, null, 2)}\n`);
+        }
+      }
+      for (const base of ['.claude/skills', '.agents/skills']) {
+        fs.mkdirSync(path.join(dir, base, 'kiro-impl'), { recursive: true });
+        fs.writeFileSync(path.join(dir, base, 'kiro-impl/SKILL.md'), skill);
+      }
+      const specDir = path.join(dir, '.kiro/specs/demo');
+      fs.mkdirSync(specDir, { recursive: true });
+      fs.writeFileSync(path.join(specDir, 'spec.json'), '{"feature_name":"demo"}\n');
+      fs.writeFileSync(path.join(specDir, 'feasibility.md'), record);
+      const sigil = tool === 'claude' ? '/' : '$';
+      const result = invoke(tool, dir, `${sigil}kiro-impl demo`, { tools: 'Bash,Read,Write,Edit,Skill' });
+      const answer = finalAnswer(tool, result);
+      fs.writeFileSync(path.join(scratch, `d-${tool}-${v.id}.out.txt`), `${result.stdout}\n${result.stderr}`);
+      observe(`D ${tool} ${v.id} (${v.label}): 答え`, answer.replace(/\n/g, ' / ').slice(0, 240));
+      const gotBranch = /基底[:：]\s*[`「]?develop/.test(answer);
+      const gotRecord = /記録[:：]\s*あり/.test(answer);
+      check(`D ${tool} ${v.id}: 応答があった`, succeeded(result) && answer.trim() !== '');
+      check(`D ${tool} ${v.id}: 作業前のブランチ確保の案内（現在のブランチ名 develop を含む）が${v.expectBranch ? '届いた' : '届かない'}`, gotBranch === v.expectBranch);
+      check(`D ${tool} ${v.id}: 実現性の記録の案内が${v.expectRecord ? '届いた' : '届かない'}`, gotRecord === v.expectRecord);
     }
   }
 }
