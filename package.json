@@ -23,7 +23,9 @@
     ".agent-hooks/cc-sdd-bootstrap/codex-trust.mjs",
     ".agent-hooks/cc-sdd-bootstrap/codex-trust-rules.mjs",
     ".agent-hooks/cc-sdd-bootstrap/work-branch-gate.mjs",
-    ".agent-hooks/cc-sdd-bootstrap/work-branch-gate-rules.mjs"
+    ".agent-hooks/cc-sdd-bootstrap/work-branch-gate-rules.mjs",
+    ".agent-hooks/cc-sdd-bootstrap/feasibility-gate.mjs",
+    ".agent-hooks/cc-sdd-bootstrap/feasibility-gate-rules.mjs"
   ],
   "scripts": {
     "test": "node --test \"test/**/*.test.mjs\""
