@@ -678,3 +678,54 @@ export function messageGuidance(skill, branch) {
 export function messageDeny(skill, branch) {
   return `【作業前のブランチ確保】作業を拒否しました。\n${body(skill, branch)}`;
 }
+
+/**
+ * 終了の判断（5.1〜5.4）。止めるのは、検証の案内を受けた・まだ止めていない・再開でない・作業ブランチの上・PR が無い、のすべてを満たすときだけ。
+ * PR の有無が判定できない（null）・PR がある・基底（ブランチなしを含む）のときは止めない。
+ * @param {{ stopped: boolean } | null} validated - 検証の案内の状態。無ければ null
+ * @param {{ stopHookActive: boolean, branch: string | null, bases: string[], originDefault: string | null, prExists: boolean | null }} facts
+ * @returns {{ block: false } | { block: true, reason: string }}
+ */
+export function decideStop(validated, facts) {
+  // 想定外の型は判定できないので止めずに通す。止めるのは、各条件が明示的に満たされたときだけ
+  if (typeof validated !== "object" || validated === null || validated.stopped !== false) return { block: false };
+  if (typeof facts !== "object" || facts === null) return { block: false };
+  if (facts.stopHookActive !== false) return { block: false };
+  if (typeof facts.branch !== "string" || !Array.isArray(facts.bases)) return { block: false };
+  // 空文字（ブランチなし）は基底扱いなので、ここで止めない
+  if (isBaseBranch(facts.branch, facts.bases, facts.originDefault)) return { block: false };
+  if (facts.prExists !== false) return { block: false };
+  return { block: true, reason: messageStop(facts.branch) };
+}
+
+/**
+ * kiro-validate-impl の入力で追加の文脈として出す、検証後の PR の案内（4.1〜4.5）。
+ * 特定の別の仕組みの名前は含めない。
+ * @returns {string}
+ */
+export function messagePrContext() {
+  return [
+    "【検証後の PR の作成】",
+    "- 検証が GO で、作業ブランチの上にいる（基底ブランチの上ではない）場合は、その作業ブランチを push して PR を作ってください。",
+    "- 基底ブランチの上にいる場合は、PR を求めない（作らない）。",
+    "- NO-GO・MANUAL_VERIFY_REQUIRED の場合は、PR を作らず結果を報告してください。",
+    "- PR の作成は設定の既定の運用であり、利用者が事前に求めたものとして扱ってください。その場で確認を求めないでください。",
+    "- PR の作成は通常の操作（作業ブランチの push と PR の作成）で試みてください。別の仕組みがその操作を拒否して別の手順を案内した場合は、その案内に従ってください。",
+    "- PR のタイトルと本文は、作業の内容から作ってください。",
+  ].join("\n");
+}
+
+/**
+ * 終了を 1 回止めるときの理由（5.1・5.2）。
+ * @param {string} branch - 現在の作業ブランチ名
+ * @returns {string}
+ */
+export function messageStop(branch) {
+  return [
+    `【検証後の PR の作成】終了を止めました。現在のブランチ「${branch}」には、検証の後の PR がまだありません。`,
+    "- この作業ブランチの PR を作ってから終えてください（作業ブランチの push と PR の作成を通常の操作で試みてください）。",
+    "- 別の仕組みがその操作を拒否して別の手順を案内した場合は、その案内に従ってください。",
+    "- PR を作らない理由（NO-GO など）がある場合は、その理由を示してから終えてください。",
+    "- この止めは 1 回だけです。2 回目の終了は止めません。",
+  ].join("\n");
+}

@@ -4,7 +4,10 @@ import {
   classifyPrompt,
   classifyToolCall,
   decidePreToolUse,
+  decideStop,
   isBaseBranch,
+  messagePrContext,
+  messageStop,
   messageDeny,
   messageGuidance,
   parseBaseBranches,
@@ -393,4 +396,61 @@ test("通常の入力で拒否の回数だけを 0 に戻す。切り替えを�
   assert.deepEqual(resetDenials({ skill: "kiro-impl", denials: 2, switchTried: true }), { skill: "kiro-impl", denials: 0, switchTried: true });
   assert.deepEqual(resetDenials({ skill: "kiro-impl", denials: 1, switchTried: false }), { skill: "kiro-impl", denials: 0, switchTried: false });
   assert.equal(resetDenials(null), null);
+});
+
+const STOP_BASE = { stopHookActive: false, branch: "feature/x", bases: BASES, originDefault: null, prExists: false };
+
+test("decideStop: 検証の案内を受けた・未停止・再開でない・作業ブランチの上・PR が無いときだけ止め、理由は messageStop と同じ", () => {
+  assert.deepEqual(decideStop({ stopped: false }, STOP_BASE), { block: true, reason: messageStop("feature/x") });
+});
+
+test("decideStop: 検証の案内が無い・停止済み・再開・ブランチなし・基底・PR あり・PR の判定不能のときは止めない", () => {
+  const validated = { stopped: false };
+  assert.deepEqual(decideStop(null, STOP_BASE), { block: false });
+  assert.deepEqual(decideStop({ stopped: true }, STOP_BASE), { block: false });
+  assert.deepEqual(decideStop(validated, { ...STOP_BASE, stopHookActive: true }), { block: false });
+  assert.deepEqual(decideStop(validated, { ...STOP_BASE, branch: null }), { block: false });
+  assert.deepEqual(decideStop(validated, { ...STOP_BASE, branch: "main" }), { block: false });
+  assert.deepEqual(decideStop(validated, { ...STOP_BASE, branch: "" }), { block: false });
+  assert.deepEqual(decideStop(validated, { ...STOP_BASE, branch: "release", originDefault: "release" }), { block: false });
+  assert.deepEqual(decideStop(validated, { ...STOP_BASE, prExists: true }), { block: false });
+  assert.deepEqual(decideStop(validated, { ...STOP_BASE, prExists: null }), { block: false });
+});
+
+test("decideStop: 基底は設定の一覧に従う（trunk は基底、feature/x は作業ブランチ）", () => {
+  const facts = { ...STOP_BASE, bases: ["main", "trunk"] };
+  assert.deepEqual(decideStop({ stopped: false }, { ...facts, branch: "trunk" }), { block: false });
+  assert.deepEqual(decideStop({ stopped: false }, { ...facts, branch: "feature/x" }).block, true);
+});
+
+test("messagePrContext: 既定の運用・事前の指示・通常の操作・別の仕組みの案内に従う・作業の内容からの作成・NO-GO・基底なら求めないを含む", () => {
+  const text = messagePrContext();
+  for (const pattern of [/既定の運用/, /事前/, /push/, /PR/, /通常の操作/, /別の仕組み/, /案内に従/, /作業の内容/, /NO-GO/, /MANUAL_VERIFY_REQUIRED/, /基底ブランチの上[^\n]*求めない/, /確認を求めない/]) {
+    assert.match(text, pattern);
+  }
+  assert.doesNotMatch(text, /brw|branch-release-workflow|release|宣言/i);
+});
+
+test("messageStop: ブランチ名・PR が無いこと・作らない理由を示すこと・2 回目は止めないことを含み、特定の仕組みの名前を含まない", () => {
+  const text = messageStop("feature/x");
+  for (const pattern of [/feature\/x/, /PR/, /理由/, /2 回目/, /通常の操作/, /別の仕組み/]) assert.match(text, pattern);
+  assert.doesNotMatch(text, /brw|branch-release-workflow|release/i);
+});
+
+test("decideStop: stopHookActive・validated.stopped・prExists・branch の型が想定外なら、止めずに通す", () => {
+  const validated = { stopped: false };
+  for (const value of [null, undefined, 0, "", "false"]) {
+    assert.deepEqual(decideStop(validated, { ...STOP_BASE, stopHookActive: value }), { block: false }, `stopHookActive=${JSON.stringify(value)}`);
+  }
+  for (const value of [undefined, null, 0]) {
+    assert.deepEqual(decideStop({ stopped: value }, STOP_BASE), { block: false }, `validated.stopped=${JSON.stringify(value)}`);
+  }
+  for (const value of [undefined, 0, ""]) {
+    assert.deepEqual(decideStop(validated, { ...STOP_BASE, prExists: value }), { block: false }, `prExists=${JSON.stringify(value)}`);
+  }
+  for (const value of [undefined, 1]) {
+    assert.deepEqual(decideStop(validated, { ...STOP_BASE, branch: value }), { block: false }, `branch=${JSON.stringify(value)}`);
+  }
+  assert.deepEqual(decideStop({ stopped: false, extra: 1 }, { ...STOP_BASE, bases: "main" }), { block: false }, "bases が文字列");
+  assert.deepEqual(decideStop(validated, { ...STOP_BASE, bases: undefined }), { block: false }, "bases が undefined");
 });
