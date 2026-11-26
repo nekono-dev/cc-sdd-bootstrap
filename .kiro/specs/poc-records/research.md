@@ -14,7 +14,7 @@
 | 配布物のコメント | `.agent-hooks/cc-sdd-bootstrap/codex-trust-rules.mjs` 3 行目 | 「出典: `poc/codex-hook-trust/run.mjs`」。**配布物に入る** | 8.7（間接） |
 | steering | `structure.md` 34 行（`## PoC` の項）、`project-rules.md` 9〜11 行、`tech.md` 26・32・40・57 行付近、`roadmap.md` 35・47・62・91 行付近 | 再実行できるスクリプト＋ `result.md`、`poc/<名前>/run.sh` | 7 |
 | テスト | `test/feasibility-records.test.mjs`（`poc/` の実在を 3 種類のテストで確認）、`test/package.test.mjs` 59 行（`poc/` が同梱されない）、`test/catalog.test.mjs` 389 行・`test/feasibility-gate-rules.test.mjs` 411・425 行（「再実行」の語を必須にしている） | 要件 9 で置き換え。**「再実行」の語を含むことを検査しているので、文言を直すとテストが失敗する** | 9.4 |
-| 既存の `poc/` | 18 ディレクトリ（49 ファイル、`result.md` は全ディレクトリにあり計約 1,000 行） | スクリプトのみで結果の文書が無いものは**無い** | 8 |
+| 既存の `poc/` | 17 ディレクトリ（49 ファイル、`result.md` は全ディレクトリにあり計約 1,000 行） | スクリプトのみで結果の文書が無いものは**無い** | 8 |
 
 ### 1.2 参照の量（移行で付け替えが要る箇所）
 
@@ -40,7 +40,7 @@
 | subagent-defs・subagent-effort・subagent-permission | subagent-delegation | subagent-delegation |
 | work-branch-flow | work-branch-flow・feasibility-review | work-branch-flow |
 
-`feasibility.md` が挙げていない `poc/` はない（17 項目がどれかの spec に対応する）。ただし `roadmap.md` が挙げる `poc/subagent-model-policy`・`poc/codex-delegation-live` は、このブランチには存在しない（`dev/codex-support` 側）。
+`feasibility.md` が挙げていない `poc/` はない（17 ディレクトリすべてがどれかの spec に対応する）。ただし `roadmap.md` が挙げる `poc/subagent-model-policy`・`poc/codex-delegation-live` は、このブランチには存在しない（`dev/codex-support` 側）。
 
 ### 1.4 規約と制約
 
