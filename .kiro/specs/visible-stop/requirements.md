@@ -1,4 +1,4 @@
-# Requirements Document
+# 要件文書
 
 ## Project Description (Input)
 `/kiro-spec-quick <spec 名>` のような入力を送ったのに、画面に何も出ず入力待ちに戻る。利用者は、止められたのか・作業中なのか・失敗したのかが分からず、別の指示を送るまで状況を知れない。
@@ -9,5 +9,126 @@
 
 詳細は `.kiro/specs/visible-stop/brief.md`（discovery の結果）を参照。
 
+## Introduction
+
+visible-stop は、cc-sdd-bootstrap のフックが利用者の入力を「止める」場面で、利用者が必ず応答の文章として「止めたこと・理由・次にやること」を読めるようにする。入力を止める出力の形を、「モデルを動かさずに止める」形から、「モデルに理由を伝えさせ、他の作業をさせずに終える」形へ変える。
+
+どの入力を止めるか（止める条件）は変えない。変えるのは、止めたことが利用者に届く方法だけである。
+
+以下では、フックが入力を受けて作業を始めさせない扱いを「入力の停止」、停止のとき利用者に読ませる「止めたこと・理由・次にやること」を「停止の案内」、止められた元の入力を「止めた入力」と呼ぶ。受け入れ基準の主語はすべて visible-stop とする。
+
+## Boundary Context
+
+- **In scope**:
+  - 実現性の関門の入力の停止（実現性の記録が無い・読めない・設計やタスク計画の確認が未通過。`/kiro-spec-quick`・`/kiro-spec-batch` の入力の時点の停止を含む）。
+  - 導入の停止（cc-sdd の導入が未完了・導入中・導入の印が残っている・運用の区画の書き直しに失敗・停止の要否を判定できない）。
+  - 停止の案内を応答の文章で必ず届けること、止めた入力の間は作業を始めさせないこと。
+  - 運用の区画の文章・追加の指示・既存の仕様の記述のうち、「停止の理由は利用者に示される」とする前提の見直し。
+  - リモートセッション・コマンドライン・Codex での実機の確認と、その記録。
+- **Out of scope**:
+  - どの入力を止めるかの条件の変更（feasibility-review・session-install が持つ）。
+  - kiro-gate の手順書の先読みの拒否・終了の停止、work-branch-gate の拒否と終了の停止の仕組みの変更（これらはモデルが理由を受け取るので無応答にならない）。
+  - フック以外の原因（モデルが思考だけで終わるなど）による無応答の検出。
+  - 実現性の記録の形・判定の語・関門の判定の仕組みの変更。
+- **Adjacent expectations**:
+  - feasibility-review の要件 5（記録に基づく入力の停止）と 8（両ツールへの適用と併存）、session-install の要件 5（導入未完了の間の停止）を前提とし、それらが「利用者に示す」としている部分の届け方を、この spec が置き換える。
+  - kiro-gate・work-branch-gate が同じ入力に追加の文脈を出すことがある。それらの文脈は並んで届くが、止めた入力では、この spec の停止の案内が優先される。
+
 ## Requirements
-<!-- Will be generated in /kiro-spec-requirements phase -->
+
+### Requirement 1: 停止の案内を応答の文章で届ける
+
+**Objective:** As a 利用者, I want 入力を止められたときに、止められたことと理由と次にやることを応答の文章で読みたい, so that 無応答で入力待ちに戻って状況が分からない事態を避けられる。
+
+#### Acceptance Criteria
+1. When フックが入力を止める, the visible-stop shall 止めた入力に対して、停止の案内を含む応答の文章が必ず作られるようにする。
+2. The visible-stop shall 停止の案内に、入力を止めたこと、止めた理由、利用者が次にやること（通すための手順）を含める。
+3. The visible-stop shall 停止の案内に、止めた入力（どの入力を止めたか）を示す。
+4. The visible-stop shall 停止の案内を、止める前から変わらない理由と手順の内容で作る（実現性の記録の確認の手順、導入の再試行の方法など）。
+5. When 停止の案内が作られる, the visible-stop shall 応答を、止めた入力に使われた言語（日本語）で読める文章にする。
+6. The visible-stop shall 入力を止めたときに、応答が 1 件も作られない状態（モデルが一度も動かない状態）を作らない。
+
+### Requirement 2: 止めた入力の間は作業を始めさせない
+
+**Objective:** As a 利用者, I want 止められた入力のために、止めた作業が裏で進まないようにしたい, so that 実現性の確認や導入が済んでいない状態で作業が進むことを避けられる。
+
+#### Acceptance Criteria
+1. While 入力が止められている, the visible-stop shall その入力のために、手順書の読み込み・ファイルの作成と編集・コマンドの実行・子のエージェントの起動を行わせない。
+2. When 入力が止められる, the visible-stop shall エージェントが受け取る指示に、停止の案内を利用者に伝えること、およびほかの作業をしないことを含める。
+3. While 入力が止められている, the visible-stop shall 同じ入力に並んで届く他の仕組みの追加の文脈（手順書を先に読む案内、作業ブランチへの切り替えの案内）に従った作業を始めさせない。
+4. If エージェントが 2.2 の指示に従わず作業を始めようとする, then the visible-stop shall その作業が行われないようにするか、行われたことを利用者に伝える（どちらにするかは設計で決める）。
+5. When 利用者が、止められた理由を解消して同じ入力をもう一度送る, the visible-stop shall 入力を止めず、通常どおり処理する。
+
+### Requirement 3: 実現性の関門の停止への適用
+
+**Objective:** As a 利用者, I want 実現性の確認が通っていない spec の入力が止められたとき、理由を読みたい, so that 何を確認すれば進められるかが分かる。
+
+#### Acceptance Criteria
+1. When 実現性の関門が、記録が無い・読めない・設計の確認が未通過の spec の `/kiro-spec-tasks` の入力を止める, the visible-stop shall 停止の案内を応答の文章で届ける。
+2. When 実現性の関門が、タスク計画の確認が未通過の spec の `/kiro-impl` の入力を止める, the visible-stop shall 停止の案内を応答の文章で届ける。
+3. When 実現性の関門が、設計の確認が通っていない spec の `/kiro-spec-quick`・`/kiro-spec-batch` の入力を止める, the visible-stop shall 停止の案内を応答の文章で届ける。
+4. The visible-stop shall 実現性の関門の停止の案内に、どの段階の確認が通っていないか、通すための手順（確認の実施と記録、または不要と判定する場合の判定と理由の記録）、個別の段階のコマンドで確認を済ませてから再び送る手順（`/kiro-spec-quick`・`/kiro-spec-batch` の場合）を含める。
+5. The visible-stop shall 実現性の関門が止める条件（どの入力を、どの記録の状態で止めるか）を変えない。
+
+### Requirement 4: 導入の停止への適用
+
+**Objective:** As a 利用者, I want cc-sdd の導入が済んでいないために入力が止められたとき、理由と復旧の方法を読みたい, so that 導入を直して作業を再開できる。
+
+#### Acceptance Criteria
+1. When 導入のフックが、導入の失敗・中断・導入の印の残りによって入力を止める, the visible-stop shall 停止の案内を応答の文章で届ける。
+2. When 導入のフックが、別のセッションが導入中であることによって入力を止める, the visible-stop shall 停止の案内を応答の文章で届ける。
+3. When 導入のフックが、運用の区画の書き直しの失敗によって入力を止める, the visible-stop shall 停止の案内を応答の文章で届ける。
+4. When 導入のフックが、入力を止めるべきか判定できない誤りのために入力を止める, the visible-stop shall 確認できなかった理由と復旧の方法を含む停止の案内を応答の文章で届ける。
+5. The visible-stop shall 導入の停止の案内に、再試行の方法（通常の端末で実行するコマンド。Claude の外で実行すること）を含める。
+6. The visible-stop shall 導入のフックが止める条件を変えない。
+
+### Requirement 5: 止めない入力は変えない
+
+**Objective:** As a 利用者, I want 止められない入力の動きが変わらないようにしたい, so that この変更で通常の作業の応答が増えたり変わったりしない。
+
+#### Acceptance Criteria
+1. While フックが入力を止めない, the visible-stop shall その入力に停止の案内や止める指示を出さない。
+2. If 入力から対象の spec を特定できない, then the visible-stop shall 実現性の関門を、従来どおり入力を止めずに通す。
+3. If 実現性の関門のフック自体が入力を解釈できない、または内部で失敗する, then the visible-stop shall 従来どおり入力を止めずに通す。
+4. The visible-stop shall 導入が完了している入力に、導入のフックが追加する案内の内容を、停止の変更のために変えない。
+
+### Requirement 6: どの画面でも読めること
+
+**Objective:** As a 利用者, I want リモートセッション・コマンドライン・Codex のどれで作業していても停止の案内を読みたい, so that 使っている画面によって無応答になる状況をなくせる。
+
+#### Acceptance Criteria
+1. When 入力が止められる, the visible-stop shall リモートセッションの画面で、停止の案内が応答の文章として表示されるようにする。
+2. When 入力が止められる, the visible-stop shall コマンドライン（Claude Code）の画面で、停止の案内が応答の文章として表示されるようにする。
+3. When 入力が止められる, the visible-stop shall Codex の画面で、停止の案内が応答の文章として表示されるようにする。
+4. The visible-stop shall 6.1〜6.3 を、実際の画面または実際の実行の結果で確かめた記録を残す。
+
+### Requirement 7: 他の仕組みとの併存
+
+**Objective:** As a 利用者, I want 既存のフックの案内と競合しないようにしたい, so that 停止の案内が他の案内に埋もれたり、矛盾した指示で作業が進んだりしない。
+
+#### Acceptance Criteria
+1. When 停止の案内が、同じ入力に対する kiro-gate の追加の文脈（手順書を先に読む案内）と並んで届く, the visible-stop shall 停止の案内を優先し、手順書を読まずに停止の案内を伝えるようにする。
+2. When 停止の案内が、同じ入力に対する work-branch-gate の追加の文脈（作業ブランチへの切り替えの案内）と並んで届く, the visible-stop shall 停止の案内を優先し、ブランチを切り替えずに停止の案内を伝えるようにする。
+3. The visible-stop shall 停止の案内を、他のフックの出力と並んでも、エージェントが停止の案内と他の文脈を区別できる形にする。
+
+### Requirement 8: 文章と既存の仕様の更新
+
+**Objective:** As a 導入先の開発者とこのリポジトリの開発者, I want 案内文と仕様が新しい停止の届け方と合うようにしたい, so that 「理由は画面に示される」という誤った前提が残らない。
+
+#### Acceptance Criteria
+1. The visible-stop shall 運用の区画の文章の、入力が止まる条件の説明を、停止の案内が応答の文章で届くことに合わせて直す。
+2. The visible-stop shall feasibility-review の要件のうち、入力の停止の理由を利用者に示すとする記述（5.5・5.11・8.2 など）と、session-install の要件 5 の同様の記述を、この spec の届け方と矛盾しない形に見直す。
+3. The visible-stop shall 停止の案内の文面と、止める指示の文面を、既存の文章の内容を確かめる自動の確認で確かめられるようにする。
+4. When 配置物の変更で、このリポジトリ自身への配置の内容が更新される, the visible-stop shall 更新のコマンドを実行して結果を反映する。
+5. When 導入・更新のコマンドが導入先にフックを配置する, the visible-stop shall 新しい停止の出力を配置し、配置するファイルの一覧を変えない。
+
+### Requirement 9: 前提の実機での確認
+
+**Objective:** As a このリポジトリの開発者, I want 設計の前に、停止の案内が実際の画面で読めることを確かめたい, so that 今回と同じ無応答を、前提の確認不足のために繰り返さない。
+
+#### Acceptance Criteria
+1. The visible-stop shall 設計の承認の前に、追加の文脈だけで、止めた入力に応答の文章が作られること（応答が 1 件以上あること）を、リモートセッション・コマンドライン・Codex のそれぞれで実機で確かめる。
+2. The visible-stop shall 設計の承認の前に、止める指示を受けたモデルが、手順書を読まず・ファイルを変更せず・コマンドを実行せずに、停止の案内を伝えて終えることを、自動で許可を判定するモード（auto モード）を含めて実機で確かめる。
+3. The visible-stop shall 設計の承認の前に、並んだ他のフックの追加の文脈（kiro-gate・work-branch-gate）と、止める指示が両立することを実機で確かめる。
+4. If 実機の確認で、止める指示が守られない場合がある, then the visible-stop shall その発生の条件と、2.4 の補強の要否を設計に反映する。
+5. The visible-stop shall 実機の確認の結果（確かめたこと・実施日・環境と版・結果）を、spec の実現性の記録に残す。
