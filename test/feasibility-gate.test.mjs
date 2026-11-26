@@ -22,7 +22,7 @@ function fixture(t, { inGit = true } = {}) {
   const root = path.join(base, "repo");
   const hooks = path.join(root, ".agent-hooks/cc-sdd-bootstrap");
   mkdirSync(hooks, { recursive: true });
-  for (const name of ["feasibility-gate.mjs", "feasibility-gate-rules.mjs", "kiro-gate-rules.mjs"]) {
+  for (const name of ["feasibility-gate.mjs", "feasibility-gate-rules.mjs", "kiro-gate-rules.mjs", "stop-notice-rules.mjs"]) {
     copyFileSync(path.join(deployDir, name), path.join(hooks, name));
   }
   mkdirSync(path.join(root, ".kiro/specs"), { recursive: true });
@@ -72,12 +72,22 @@ function submit(f, prompt, { tool = "claude", cwd = f.root } = {}) {
   return run(f.entry, { tool, cwd, input: { session_id: "s1", prompt, cwd } });
 }
 
-/** 止められたことを確かめ、理由を返す */
-function assertBlocked(result) {
+/**
+ * 止められたことを確かめ、理由を返す。
+ * 止める判定は `decision: "block"` ではなく、停止の案内を載せた追加の文脈で届く（応答の文章を必ず作らせるため）。
+ * 返す文字列は、停止の案内の全文（止めた入力・止めたこと・理由を含む）。
+ */
+function assertBlocked(result, prompt) {
   assert.equal(result.status, 0);
   const value = JSON.parse(result.stdout);
-  assert.equal(value.decision, "block");
-  return value.reason;
+  assert.equal("decision" in value, false, "decision を含んではならない");
+  assert.equal(value.hookSpecificOutput.hookEventName, "UserPromptSubmit");
+  const text = value.hookSpecificOutput.additionalContext;
+  assert.match(text, /【入力の停止】/);
+  assert.match(text, /--- 停止の案内 ---/);
+  assert.match(text, /止めたこと: この入力を止めました。/);
+  if (prompt !== undefined) assert.ok(text.includes(`止めた入力: ${prompt}`), "止めた入力が案内に入る");
+  return text;
 }
 
 /** 通されたことを確かめる（出力なし・終了 0） */
@@ -409,7 +419,8 @@ test("kiro-spec-tasks は設計が通過なら追加の指示、記録が無け�
   spec(f, "foo");
   const reason = assertBlocked(submit(f, "/kiro-spec-tasks foo"));
   assert.match(reason, /記録がありません/);
-  assert.equal(JSON.parse(submit(f, "/kiro-spec-tasks foo").stdout).hookSpecificOutput, undefined);
+  // 止めるときは、停止の案内だけを出す（段階ごとの追加の指示【実現性の確認】は出さない）
+  assert.ok(!JSON.parse(submit(f, "/kiro-spec-tasks foo").stdout).hookSpecificOutput.additionalContext.includes("【実現性の確認】"));
   spec(f, "foo", recordText({ design: "通過" }));
   assert.match(assertContext(submit(f, "/kiro-spec-tasks foo")), /タスク計画の確認/);
 });
@@ -449,4 +460,33 @@ test("名前なしの /kiro-spec-batch・説明文が先頭の /kiro-spec-quick�
   assert.match(assertContext(submit(f, "/kiro-spec-batch")), /名前なしの一括作成は入力を止められない/);
   assert.match(assertContext(submit(f, "/kiro-spec-quick 新しい機能を作る")), /設計とタスクを続けて作る/);
   assert.match(assertContext(submit(f, "/kiro-spec-quick newfeature")), /個別の段階のコマンド/);
+});
+
+test("複数の spec 名と -y を含む入力でも、先頭の spec の記録が無ければ停止の案内の出力になる（3.6）", (t) => {
+  const f = fixture(t);
+  spec(f, "alpha");
+  spec(f, "beta");
+  const prompt = "/kiro-spec-tasks alpha beta -y";
+  const text = assertBlocked(submit(f, prompt), prompt);
+  assert.match(text, /spec `alpha`/);
+  assert.match(text, /記録がありません/);
+});
+
+test("記録が無い導入前の spec の停止の案内に、記録を作る手順と不要判定の手順が含まれる（3.7）", (t) => {
+  const f = fixture(t);
+  spec(f, "legacy");
+  const text = assertBlocked(submit(f, "/kiro-spec-quick legacy"), "/kiro-spec-quick legacy");
+  assert.match(text, /## 設計の確認/);
+  assert.match(text, /実機検証が不要なら/);
+  assert.match(text, /- 判定: 不要/);
+});
+
+test("停止の案内の出力は decision を含まず、止める指示と止めた入力を含む（1.1・1.6）", (t) => {
+  const f = fixture(t);
+  spec(f, "foo");
+  const result = submit(f, "/kiro-spec-tasks foo -y");
+  const value = JSON.parse(result.stdout);
+  assert.equal(Object.hasOwn(value, "decision"), false);
+  assert.match(value.hookSpecificOutput.additionalContext, /ほかの作業はしないでください/);
+  assert.match(value.hookSpecificOutput.additionalContext, /止めた入力: \/kiro-spec-tasks foo -y/);
 });
