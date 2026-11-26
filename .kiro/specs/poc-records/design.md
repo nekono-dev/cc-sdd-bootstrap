@@ -131,7 +131,7 @@ sequenceDiagram
 ```
 
 - 一時ディレクトリは `mktemp -d` で作る。リポジトリの中にファイルを作った場合は、確認の後に取り除く（3.3）。
-- 実機での確認結果（`poc/design_01.md`・`design_02.md`）: 両ツールで、この流れが成り立つ。
+- 実機での確認結果（`poc/design_01.md`・`design_02.md`・`design_03.md`）: 両ツールで、この流れが成り立つ。必須の項目をすべて指示した場合の書かれ方は `design_03.md`。
 
 ## Requirements Traceability
 
@@ -200,7 +200,7 @@ sequenceDiagram
 
 **変更の内容（要点）**
 - 要件の段階の文: 「PoC（実機で再実行できる試作）」を「PoC（実機で前提を確かめる試作。結果は PoC 文書に残す）」に直す。
-- 設計・タスク計画の文: 認める根拠を「一次資料」か「PoC 文書（`.kiro/specs/<spec 名>/poc/<段階>_<通し番号>.md`。冒頭に `- 対象:`・`- 段階:`、続けて実施内容の要点・実施日・環境と版・結果）」にする。
+- 設計・タスク計画の文: 認める根拠を「一次資料」か「PoC 文書（`.kiro/specs/<spec 名>/poc/<段階>_<通し番号>.md`）」にする。文書の冒頭に `- 対象: <確かめた前提と、関係する要件・設計の番号>` と `- 段階: <段階>` を置き、続けて実施内容の要点・実施日・環境と版・結果と仕様への反映・確かめられなかったこと（あれば）を書く、と必須の項目をすべて挙げる（要件 2.1〜2.6）。
 - 新しい項: PoC のスクリプト・入力・出力はリポジトリの外の一時ディレクトリで使い、リポジトリの管理対象に残さない（PoC の前後で、PoC 文書の追加を除き管理対象を変えない）。
 - レビュー役への観点: 「前提ごとの根拠が一次資料か、PoC 文書で位置付けと結果が追える PoC で確かめられているか」。
 - Claude Code 向けと Codex 向けは、呼び方（`/`・`$`）以外を同じ内容にする。
@@ -248,14 +248,16 @@ function pocDocumentRefs(recordText: string): string[];
 | Requirements | 8.1〜8.8 |
 
 **手順**（スクリプトは一時ディレクトリに置き、リポジトリには残さない。差分は人が確認する）
-1. `poc/*/result.md` の先頭にある実行日・環境と版を、一時ディレクトリの対応表に抜き出す。書かれていない項目は「記録なし」とする（推測で補わない）。
+1. 8 つの `feasibility.md` の根拠の各行（前提）について、その行が指す `poc/…` のファイルと該当する実行・節を、一時ディレクトリの対応表に書き出す。実行日・環境と版は、その実行・節の記載から取る（ディレクトリの先頭の記載で代用しない。例: `codex-hook-trust` の根拠 `cloud-result.md` は `result.md` と版が異なる）。書かれていない項目は「記録なし」とする（推測で補わない）。
 2. 8 つの spec の `feasibility.md` の根拠の表を、前提ごとの一文に書き換える。書式: 「〜が〜であることは、〈段階〉の前の実機検証（〈実行日〉、〈環境と版〉）で確認済み」。リンクは付けない。表の列は `前提 | 根拠の種別 | 出典・確認の記録` のまま、出典・確認の記録の欄に一文の後半（実機検証の実行日・環境と版）を書く。
-3. 同じ spec の `design.md`・`research.md`・`tasks.md`・`requirements.md`・`brief.md`、`installer-core/handoff-self-apply.md` から、`poc/…` の場所の部分だけを取り除く（文の意味は残す。例: 「（`poc/kiro-gate/`）」を取る）。
+3. 同じ spec の `design.md`・`research.md`・`tasks.md`・`requirements.md`・`brief.md`、`installer-core/handoff-self-apply.md` の `poc/…` の記述を、次の 2 種類に分けて直す。(i) 括弧書きや出典の注記のように、場所を取り除いても文が成り立つもの: 場所の部分だけ取り除く（例: 「（`poc/kiro-gate/`）」）。(ii) 場所を取り除くと意味が通らないもの、または削除する `poc/` の再実行を指示しているもの（例: `codex-hook-trust/design.md` の再実行の指示、`feasibility-review/requirements.md` の「実機で確かめた前提は `poc/…` を参照」）: 意味（何を実機で確かめたか、再確認が要るか）を保つ文に書き換える。分類は、`grep` で全件を一覧にして人が 1 件ずつ決める。
 4. steering の記述を直す（7）。
 5. `git rm -r poc/` で削除する。
 6. 確認: リポジトリのどこにも、リポジトリ直下の `poc/<名前>` の形の参照が無いこと（`poc-records` の定義の説明と、spec の中の `poc/<段階>_<番号>.md` を除く）。
 
-**繰り返す確認手順の扱い（8.7）**: `poc/self-install/run.mjs`・`poc/install-freshness/e2e.mjs` は、実際の `npx`・認証・ネットワークを使う実機の確認で、既存のテスト（偽の `npx` を使う `test/install-cc-sdd.test.mjs` など）は代わりにならない。自動のテストには移さない（外部の環境に依存し、安定して回せないため）。steering の `project-rules.md` に、「cc-sdd の版を上げるときは、一時ディレクトリの使い捨てリポジトリで `node bin/cc-sdd-bootstrap.mjs init` を実行して導入と停止を確かめ、結果を `session-install` の `poc/impl_<通し番号>.md` に残す」と書く。
+**繰り返す確認手順の扱い（8.7）**: 手順ごとに、既存のテストで足りるかを分けて決める。
+- `poc/self-install/run.mjs`（cc-sdd の版を上げるとき、実際の `npx`・認証・両ツールを使って導入と停止を確かめる）: 既存のテスト（`test/install-cc-sdd.test.mjs`・`test/cli.e2e.test.mjs` など）は偽の `npx` を使い、実際の cc-sdd の導入と両ツールの起動は確かめないため、**足りない**。実際のネットワーク・認証・外部ツールに依存して安定して回せないため、**自動のテストには移さない**（要件 8.7 (c)）。代わりに steering の `project-rules.md` に次の手順を書く: 「cc-sdd の版を上げるときは `.cc-sdd-bootstrap.json` の `ccSdd.version` を変更し、リポジトリの外の使い捨てリポジトリで `node bin/cc-sdd-bootstrap.mjs init` を実行する。続けて Claude Code と Codex をそれぞれ 1 回起動して、導入物（スキル・運用の区画）が使えることを確かめ、存在しない版を指定した別の使い捨てリポジトリで入力が止まることを確かめる。結果は `session-install` の `poc/impl_<通し番号>.md` に追記する」。
+- `poc/install-freshness/e2e.mjs`: 配布元のブランチの先頭と `npx` のキャッシュの記録の突き合わせなど、設計の前提を確かめる 1 回限りの確認で、繰り返し使う手順ではない（`project-rules.md` も参照していない）。繰り返す部分の判定の処理は、既存のテスト（`test/freshness*.test.mjs`）が偽の入力で確かめている。**足りるとして、手順は残さない**（要件 8.7 (a)）。`npx` の版が上がって配布物のキャッシュの形が変わりそうなときは、`install-freshness` の設計の前提の見直しとして、その場で実機の確認と PoC 文書を作る（`tech.md` に一文を足す）。
 
 ## Error Handling
 
@@ -273,7 +275,7 @@ function pocDocumentRefs(recordText: string): string[];
 - `pocDocumentRefs`: 正しい形の参照を取り出し、`poc/<名前>/`（リポジトリ直下の形）や段階以外の名前を取り出さない（5.1）。
 
 ### Integration Tests
-- 完了済み 5 spec と、work-branch-flow・feasibility-review・install-freshness の記録が、3 つの判定を読め、挙げた PoC 文書（あれば）が実在する（5.2）。
+- `.kiro/specs/*/feasibility.md` をすべて列挙して（固定の一覧にしない。新しい spec も対象になる）、挙げた PoC 文書が実在する。存在しない文書を挙げた記録の文面を使った否定の確認（失敗すること）も置く（5.2・5.3）。判定の通過の確認（完了済み 5 spec と work-branch-flow・feasibility-review・install-freshness の記録が 3 つの判定を読め通過と読める）は、列挙とは別に既存のまま保つ。
 - `poc/` の場所を根拠に挙げたままの記録（導入先の古い記録を模す）で、判定が `通過` なら、`/kiro-spec-tasks`・`/kiro-impl` の入力が止まらない（10.2）。
 - `npm pack`（または同梱ファイルの一覧）に、`poc/`・PoC 文書が含まれない（9.3。既存の `.kiro/` の確認で足りる）。
 
@@ -284,12 +286,12 @@ function pocDocumentRefs(recordText: string): string[];
 
 ```mermaid
 flowchart LR
-  A[文章とテストを直す] --> B[8 spec の記録を一文に]
-  B --> C[ほかの文書の poc の場所を取り除く]
+  A[文章・追加の指示・テスト・update の再生成を 1 単位で更新] --> B[8 spec の記録を一文に]
+  B --> C[ほかの文書の poc の記述を直す]
   C --> D[steering を直す]
   D --> E[poc を削除]
-  E --> F[update で配置を反映・全テスト]
+  E --> F[全テスト・grep で参照が残らないこと]
 ```
 
-- 各段階の終わりに全テストを実行する。途中で失敗したら、その段階の変更だけを戻す。
-- `poc/` の削除は、記録の書き換えと全テストの成功の後に行う（根拠の対応表を先に抜き出しておく）。
+- A は、互いに依存する運用の区画の文章（`catalog.mjs`）・追加の指示・テストの必須の語・`update` による配置の再生成（`agent-section-*.md`）を 1 つの変更として行い、その終わりで全テストを成功させる（途中の不整合を作らない）。B 以降は、各段階の終わりに全テストを実行し、失敗したらその段階の変更だけを戻す。
+- `poc/` の削除は、記録の書き換えと対応表の確認（差分の人の確認）の後に行う。対応表は一時ディレクトリに残し、リポジトリには残さない。
