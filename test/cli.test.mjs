@@ -190,13 +190,13 @@ test("途中失敗は失敗・済み・未処理・再実行する操作を表�
 /** config.toml の承認の記録の数（trusted_hash の行の数） */
 const recordCount = (text) => (text.match(/trusted_hash/g) ?? []).length;
 
-test("init は自分のフック 8 件の承認の記録を書き、信頼の案内を出さない", async (t) => {
+test("init は自分のフック 12 件の承認の記録を書き、信頼の案内を出さない", async (t) => {
   const root = temporary(t);
   const iso = codexIsolation(t);
   const streams = io(root, iso);
   assert.equal(await runCli(["init"], streams.value), 0);
   const config = fs.readFileSync(path.join(iso.codexHome, "config.toml"), "utf8");
-  assert.equal(recordCount(config), 8);
+  assert.equal(recordCount(config), 12);
   const output = streams.output().stdout;
   assert.ok(output.includes(TRUST_WRITTEN), output);
   assert.ok(!output.includes(TRUST_NOTE), output);
@@ -316,7 +316,7 @@ async function primeRecords(root, iso) {
   assert.equal(await runCli(["init"], io(root, iso).value), 0);
   assert.equal(await runCli(["update"], io(root, iso).value), 0);
   const config = path.join(iso.codexHome, "config.toml");
-  assert.equal(recordCount(fs.readFileSync(config, "utf8")), 8);
+  assert.equal(recordCount(fs.readFileSync(config, "utf8")), 12);
   return config;
 }
 
@@ -339,10 +339,10 @@ test("worktree の uninstall は承認の記録を外さず理由を出し、本
   const iso = codexIsolation(t);
   const config = path.join(iso.codexHome, "config.toml");
 
-  // 本体で init（記録 8 件）し、commit してから worktree を作る
+  // 本体で init（記録 12 件）し、commit してから worktree を作る
   const initialized = io(main, iso);
   assert.equal(await runCli(["init"], initialized.value), 0, initialized.output().stderr);
-  assert.equal(recordCount(fs.readFileSync(config, "utf8")), 8);
+  assert.equal(recordCount(fs.readFileSync(config, "utf8")), 12);
   gitRun(main, ["add", "-A"]);
   gitRun(main, ["commit", "-q", "-m", "導入"]);
   const wt = path.join(base, "wt");
@@ -416,5 +416,49 @@ test("適用の途中で失敗した update は終了コード 1 で、既存の
     assert.ok(!streams.output().stdout.includes("承認の記録"), streams.output().stdout);
   } finally {
     fs.chmodSync(blocked, 0o755);
+  }
+});
+
+test("init の区画を導入側の置き換えに通すと、CLAUDE.md と AGENTS.md に work-branch-flow の区画が入る（6.1・6.4・6.5）", async (t) => {
+  const root = temporary(t);
+  const iso = codexIsolation(t);
+  assert.equal(await runCli(["init"], io(root, iso).value), 0);
+  const rules = await import("../.agent-hooks/cc-sdd-bootstrap/install-rules.mjs");
+  // 区画の目印だけがある文書（導入の前の空の区画）を、配置物の区画で置き換える
+  const doc = `利用者の文書\n\n${rules.SECTION_BEGIN_MARKER}\n${rules.SECTION_END_MARKER}\n`;
+  const sections = {
+    claude: fs.readFileSync(path.join(root, ".agent-hooks/cc-sdd-bootstrap/agent-section-claude.md"), "utf8"),
+    codex: fs.readFileSync(path.join(root, ".agent-hooks/cc-sdd-bootstrap/agent-section-codex.md"), "utf8"),
+  };
+  for (const tool of ["claude", "codex"]) {
+    assert.equal(rules.validateSectionText(sections[tool]), null, tool);
+    const written = rules.replaceSection(doc, sections[tool]);
+    assert.ok(written.startsWith("利用者の文書"), tool);
+    assert.ok(written.includes("新機能追加系の作業"), tool);
+    assert.ok(written.includes("workflow.prAfterValidate"), tool);
+    assert.ok(written.includes("別の仕組み"), tool);
+    assert.doesNotMatch(written, /brw|branch-release-workflow/, tool);
+  }
+});
+
+test("init の区画を導入側の置き換えに通すと、CLAUDE.md と AGENTS.md に feasibility-review の区画が入る（2.6・3.5・7・8.3）", async (t) => {
+  const root = temporary(t);
+  const iso = codexIsolation(t);
+  assert.equal(await runCli(["init"], io(root, iso).value), 0);
+  const rules = await import("../.agent-hooks/cc-sdd-bootstrap/install-rules.mjs");
+  // 区画の目印だけがある文書（導入の前の空の区画）を、配置物の区画で置き換える
+  const doc = `利用者の文書\n\n${rules.SECTION_BEGIN_MARKER}\n${rules.SECTION_END_MARKER}\n`;
+  const sections = {
+    claude: fs.readFileSync(path.join(root, ".agent-hooks/cc-sdd-bootstrap/agent-section-claude.md"), "utf8"),
+    codex: fs.readFileSync(path.join(root, ".agent-hooks/cc-sdd-bootstrap/agent-section-codex.md"), "utf8"),
+  };
+  for (const tool of ["claude", "codex"]) {
+    assert.equal(rules.validateSectionText(sections[tool]), null, tool);
+    const written = rules.replaceSection(doc, sections[tool]);
+    assert.ok(written.startsWith("利用者の文書"), tool);
+    assert.ok(written.includes("要件の段階"), tool);
+    assert.ok(written.includes("## タスク計画の確認"), tool);
+    assert.ok(written.includes("文章で守って"), tool);
+    assert.doesNotMatch(written, /brw|branch-release-workflow/, tool);
   }
 });

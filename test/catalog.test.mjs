@@ -325,3 +325,106 @@ test("subagent-delegation の承認を省く指定の項目は各要素を同じ
   assert.equal(pieceContaining(section.codex, "--dangerously-bypass-hook-trust", "\n"), "", "Codex 向けに指定の案内が入らない");
   assert.equal(section.codex.includes("codex.trustHooks"), false, "Codex 向けに trustHooks の案内が入らない");
 });
+
+test("work-branch-flow の区画は両ツール向けに同じ項目を持ち、5 つの内容を含む（6.1〜6.4・7.4）", () => {
+  const section = catalog.agentSections.find((item) => item.id === "work-branch-flow");
+  assert.ok(section, "work-branch-flow の区画が無い");
+  for (const tool of ["claude", "codex"]) {
+    const body = section[tool];
+    const sigil = tool === "claude" ? "/" : "$";
+    for (const phrase of [
+      "作業用ブランチ", "基底ブランチ", "新機能追加系", `${sigil}kiro-discovery`, `${sigil}kiro-impl`,
+      "NO-GO", "push", "PR", "既定の運用", "タイトルと本文",
+      ".cc-sdd-bootstrap.json", "workflow.branchGate", "workflow.prAfterValidate", "workflow.baseBranches", "main,master,develop",
+      "別の仕組み", "案内に従",
+      "承認されていない", "機械的",
+      ".kiro/steering/",
+    ]) {
+      assert.ok(body.includes(phrase), `${tool}: ${phrase}`);
+    }
+  }
+  assert.ok(section.codex.includes("$kiro-impl"));
+  assert.ok(section.claude.includes("/kiro-impl"));
+  assert.ok(!section.codex.includes("/kiro-impl"));
+});
+
+test("work-branch-flow の区画は特定の別の仕組みの名前と宣言ファイル名を含まない（6.5）", () => {
+  const section = catalog.agentSections.find((item) => item.id === "work-branch-flow");
+  for (const tool of ["claude", "codex"]) {
+    assert.doesNotMatch(section[tool], /brw|branch-release-workflow|release-workflow|宣言/i, tool);
+  }
+});
+
+test("work-branch-gate の登録・配置物・package.json の配布範囲が一致する（7.1）", () => {
+  for (const tool of ["claude", "codex"]) {
+    const gate = catalog.hooks.filter((hook) => hook.script === "work-branch-gate.mjs" && hook.tools.includes(tool));
+    assert.deepEqual(gate.map((hook) => hook.event), ["UserPromptSubmit", "PreToolUse", "Stop"], tool);
+  }
+  for (const name of ["work-branch-gate.mjs", "work-branch-gate-rules.mjs"]) {
+    const file = `${DEPLOY_DIR}/${name}`;
+    assert.ok(catalog.files.some((entry) => entry.path === file), file);
+    assert.ok(pkg.files.includes(file), file);
+  }
+});
+
+test("work-branch-flow の区画は、拒否と停止の実際の条件を断定せずに示す（6.1・6.2）", () => {
+  const section = catalog.agentSections.find((item) => item.id === "work-branch-flow");
+  for (const tool of ["claude", "codex"]) {
+    const body = section[tool];
+    for (const phrase of ["入力ごとに最大 2 回", "判定できないときは拒否しません", "PR が無いと判定できたときだけ止まります", "PR が既にある"]) {
+      assert.ok(body.includes(phrase), `${tool}: ${phrase}`);
+    }
+  }
+});
+
+test("feasibility-review の区画は両ツール向けに同じ項目を持ち、8 つの内容を含む（2.6・3.5・7）", () => {
+  const section = catalog.agentSections.find((item) => item.id === "feasibility-review");
+  assert.ok(section, "feasibility-review の区画が無い");
+  for (const tool of ["claude", "codex"]) {
+    const body = section[tool];
+    for (const phrase of [
+      // 1. 要件の段階: 実機検証の要否（必要でも不要でも判定と理由を残す）
+      "実機検証", "外部の動作", "PoC", "必要でも不要でも", "判定と理由",
+      // 2. 設計・タスク計画の前の根拠の確認
+      "前提ごとに根拠", "一次資料", "出典", "再実行", "未確認", "承認の前",
+      // 3. 最初の実装タスクに実機の確認・未解決
+      "最初の実装タスク", "未解決",
+      // 4. 記録の置き場所と書式
+      ".kiro/specs/<spec 名>/feasibility.md", "## 実機検証の要否", "## 設計の確認", "## タスク計画の確認",
+      "- 判定:", "必要", "不要", "通過", "未通過", "水平線", "まず `未通過` に戻してから", "cc-sdd のファイル",
+      // 5. レビュー役の依頼文
+      "レビュー役", "前提ごとの根拠が一次資料か PoC で確かめられているか",
+      // 6. 実装中の食い違い（Blocked で戻す）
+      "requirements.md", "design.md", "Blocked", "書き換え",
+      // 7. フックの入力の停止と、通す手順
+      "止まります", "spec を特定できない", "名前なし", "個別",
+      // 8. フックが動かない環境でも文章で守る
+      "文章で守って",
+    ]) {
+      assert.ok(body.includes(phrase), `${tool}: ${phrase}`);
+    }
+  }
+  assert.ok(section.codex.includes("$kiro-spec-requirements"));
+  assert.ok(section.claude.includes("/kiro-spec-requirements"));
+  assert.ok(!section.codex.includes("/kiro-"), "Codex の区画に Claude Code の呼び方が混ざっている");
+});
+
+test("feasibility-review の区画は特定の別の仕組みの名前と宣言ファイル名を含まない", () => {
+  const section = catalog.agentSections.find((item) => item.id === "feasibility-review");
+  for (const tool of ["claude", "codex"]) {
+    assert.doesNotMatch(section[tool], /brw|branch-release-workflow|release-workflow|宣言/i, tool);
+  }
+});
+
+test("feasibility-gate の登録（両ツールの UserPromptSubmit）・配るファイル・package.json の配布範囲が一致する", () => {
+  for (const tool of ["claude", "codex"]) {
+    const gate = catalog.hooks.filter((hook) => hook.script === "feasibility-gate.mjs" && hook.tools.includes(tool));
+    assert.deepEqual(gate.map((hook) => hook.event), ["UserPromptSubmit"], tool);
+    assert.deepEqual(gate[0].args, ["user-prompt-submit", "--tool", tool], tool);
+  }
+  for (const name of ["feasibility-gate.mjs", "feasibility-gate-rules.mjs"]) {
+    const file = `${DEPLOY_DIR}/${name}`;
+    assert.ok(catalog.files.some((entry) => entry.path === file), file);
+    assert.ok(pkg.files.includes(file), file);
+  }
+});

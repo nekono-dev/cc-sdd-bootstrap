@@ -1,0 +1,456 @@
+import { test } from "node:test";
+import assert from "node:assert/strict";
+import {
+  classifyPrompt,
+  classifyToolCall,
+  decidePreToolUse,
+  decideStop,
+  isBaseBranch,
+  messagePrContext,
+  messageStop,
+  messageDeny,
+  messageGuidance,
+  parseBaseBranches,
+  resetDenials,
+  workDirOf,
+} from "../.agent-hooks/cc-sdd-bootstrap/work-branch-gate-rules.mjs";
+
+const BASES = ["main", "master", "develop"];
+
+test("対象の 5 つの入力を、先頭のコマンドとして分類する", () => {
+  assert.deepEqual(classifyPrompt("/kiro-discovery 新機能"), { kind: "target", skill: "kiro-discovery" });
+  assert.deepEqual(classifyPrompt("$kiro-spec-init 説明"), { kind: "target", skill: "kiro-spec-init" });
+  assert.deepEqual(classifyPrompt("/kiro-spec-quick foo --auto"), { kind: "target", skill: "kiro-spec-quick" });
+  assert.deepEqual(classifyPrompt("/kiro-spec-batch"), { kind: "target", skill: "kiro-spec-batch" });
+  assert.deepEqual(classifyPrompt("  /kiro-impl foo 1.2"), { kind: "target", skill: "kiro-impl" });
+});
+
+test("対象外の kiro コマンドは other-kiro、kiro-validate-impl は validate-impl に分類する（2.4）", () => {
+  assert.deepEqual(classifyPrompt("/kiro-spec-requirements foo"), { kind: "other-kiro", skill: "kiro-spec-requirements" });
+  assert.deepEqual(classifyPrompt("/kiro-validate-design foo"), { kind: "other-kiro", skill: "kiro-validate-design" });
+  assert.deepEqual(classifyPrompt("/kiro-spec-status foo"), { kind: "other-kiro", skill: "kiro-spec-status" });
+  assert.deepEqual(classifyPrompt("/kiro-steering"), { kind: "other-kiro", skill: "kiro-steering" });
+  assert.deepEqual(classifyPrompt("$kiro-validate-impl foo"), { kind: "validate-impl" });
+  assert.deepEqual(classifyPrompt("/kiro-validate-impl"), { kind: "validate-impl" });
+  assert.equal(classifyPrompt("文中の /kiro-impl は対象外"), null);
+  assert.equal(classifyPrompt("/kiro-impl:"), null);
+  assert.equal(classifyPrompt("通常の依頼"), null);
+});
+
+test("基底ブランチの判定: 一覧に含まれる名前、ブランチなし、origin の既定を基底とする", () => {
+  assert.equal(isBaseBranch("main", BASES, null), true);
+  assert.equal(isBaseBranch("develop", BASES, null), true);
+  assert.equal(isBaseBranch("", BASES, null), true);
+  assert.equal(isBaseBranch("feature/x", BASES, null), false);
+  assert.equal(isBaseBranch("trunk", ["trunk"], null), true);
+  assert.equal(isBaseBranch("main", ["trunk"], null), false);
+  assert.equal(isBaseBranch("release", BASES, "release"), true);
+});
+
+test("設定の基底ブランチの値を一覧にする（前後の空白と空の要素を除く）", () => {
+  assert.deepEqual(parseBaseBranches("main,master,develop"), ["main", "master", "develop"]);
+  assert.deepEqual(parseBaseBranches(" trunk , release "), ["trunk", "release"]);
+});
+
+test("操作を読み取り・ブランチの作成や切り替え・作業に分類する", () => {
+  for (const [name, input] of [
+    ["Read", { file_path: "/a" }], ["Glob", {}], ["Grep", {}], ["LS", {}], ["ToolSearch", {}],
+    ["WebFetch", {}], ["WebSearch", {}], ["TodoWrite", {}],
+    ["Bash", { command: "git status" }], ["Bash", { command: "ls -la" }], ["Bash", { command: "cat a.md" }],
+    ["Bash", { command: "git remote -v" }], ["Bash", { command: "find . -name x" }],
+    ["shell", { command: ["bash", "-lc", "git status"] }], ["exec_command", { command: "git log -1" }],
+  ]) {
+    assert.equal(classifyToolCall(name, input), "read", `${name} ${JSON.stringify(input)}`);
+  }
+  for (const command of ["git switch -c feature/x", "git checkout -b x", "git branch x", "git worktree add ../w x"]) {
+    assert.equal(classifyToolCall("Bash", { command }), "branch", command);
+  }
+  assert.equal(classifyToolCall("exec_command", { command: "git switch -c x" }), "branch");
+  for (const [name, input] of [
+    ["Write", { file_path: "/a" }], ["Edit", { file_path: "/a" }], ["NotebookEdit", {}], ["apply_patch", { command: "*** Begin Patch" }],
+    ["Bash", { command: "touch a" }], ["Bash", { command: "echo a > b" }], ["Bash", { command: "git switch -c a && echo" }],
+    ["Bash", { command: "cat a | tee b" }], ["Bash", { command: "echo $(git status)" }], ["Bash", { command: "find . -delete" }],
+    ["Bash", { command: "git remote add o url" }], ["Bash", {}], ["Foo", {}],
+    ["shell", { command: ["bash", "-lc", "echo a > b"] }],
+  ]) {
+    assert.equal(classifyToolCall(name, input), "work", `${name} ${JSON.stringify(input)}`);
+  }
+});
+
+test("作業場所が null の状態（対象の入力の前）は判断しない", () => {
+  const decision = decidePreToolUse(null, { toolName: "Write", toolInput: {} }, { branch: "main", bases: BASES, originDefault: null });
+  assert.deepEqual(decision, { allow: true, turn: null });
+});
+
+test("基底ブランチで作業を拒否し、拒否の回数を 1 増やす", () => {
+  const turn = { skill: "kiro-impl", denials: 0, switchTried: false };
+  const decision = decidePreToolUse(turn, { toolName: "Write", toolInput: { file_path: "/a" } }, { branch: "main", bases: BASES, originDefault: null });
+  assert.equal(decision.allow, false);
+  assert.equal(decision.turn.denials, 1);
+  assert.equal(decision.turn.skill, "kiro-impl");
+  assert.match(decision.reason, /main/);
+});
+
+test("拒否は 2 回まで。3 回目以降は通す", () => {
+  const turn = { skill: "kiro-discovery", denials: 2, switchTried: false };
+  const decision = decidePreToolUse(turn, { toolName: "Edit", toolInput: {} }, { branch: "main", bases: BASES, originDefault: null });
+  assert.equal(decision.allow, true);
+  assert.equal(decision.turn.denials, 2);
+});
+
+test("ブランチの作成・切り替えを試みたら切り替え済みにし、以後の作業は拒否しない", () => {
+  const facts = { branch: "main", bases: BASES, originDefault: null };
+  const tried = decidePreToolUse({ skill: "kiro-impl", denials: 0, switchTried: false },
+    { toolName: "Bash", toolInput: { command: "git switch -c feature/x" } }, facts);
+  assert.deepEqual(tried, { allow: true, turn: { skill: "kiro-impl", denials: 0, switchTried: true } });
+  const after = decidePreToolUse(tried.turn, { toolName: "Write", toolInput: { file_path: "/a" } }, facts);
+  assert.equal(after.allow, true);
+  assert.equal(after.turn.denials, 0);
+});
+
+test("読み取りは基底ブランチでも通し、回数を変えない", () => {
+  const turn = { skill: "kiro-impl", denials: 1, switchTried: false };
+  const decision = decidePreToolUse(turn, { toolName: "Read", toolInput: { file_path: "/a" } }, { branch: "main", bases: BASES, originDefault: null });
+  assert.deepEqual(decision, { allow: true, turn });
+});
+
+test("現在のブランチを判定できない（null）・作業ブランチ・基底以外では作業を通す", () => {
+  const turn = { skill: "kiro-impl", denials: 0, switchTried: false };
+  const call = { toolName: "Write", toolInput: { file_path: "/a" } };
+  assert.equal(decidePreToolUse(turn, call, { branch: null, bases: BASES, originDefault: null }).allow, true);
+  assert.equal(decidePreToolUse(turn, call, { branch: "feature/x", bases: BASES, originDefault: null }).allow, true);
+});
+
+test("detached HEAD（空のブランチ名）は基底として拒否する", () => {
+  const turn = { skill: "kiro-impl", denials: 0, switchTried: false };
+  const decision = decidePreToolUse(turn, { toolName: "Bash", toolInput: { command: "touch a" } }, { branch: "", bases: BASES, originDefault: null });
+  assert.equal(decision.allow, false);
+});
+
+test("案内と拒否の理由に、現在のブランチ・作業用ブランチへの切り替え・尋ねること・作れない場合を含む", () => {
+  for (const text of [messageGuidance("kiro-discovery", "main"), messageDeny("kiro-discovery", "main")]) {
+    assert.match(text, /main/);
+    assert.match(text, /作業用ブランチ/);
+    assert.match(text, /切り替え/);
+    assert.match(text, /新しく|新規/);
+    assert.match(text, /利用者に尋ね/);
+    assert.match(text, /作れない/);
+    assert.doesNotMatch(text, /リモート/);
+  }
+});
+
+test("kiro-impl の案内は、リモートの作業用ブランチへの切り替えと、ローカルに spec が無い可能性を含む", () => {
+  for (const text of [messageGuidance("kiro-impl", "main"), messageDeny("kiro-impl", "main")]) {
+    assert.match(text, /リモート/);
+    assert.match(text, /spec/);
+    assert.match(text, /ローカル/);
+  }
+});
+
+test("読み取りに見えても、外部の実行や書き込みを伴うオプションつきは作業に分類する", () => {
+  for (const command of [
+    "rg --pre=touch foo", "rg --pre touch foo", "rg --pre-glob '*.gz' --pre cat foo",
+    "git diff --output=out", "git diff --output out", "git log --output=out", "git show --output out",
+    "git diff --ext-diff", "git log --textconv", "git show --textconv",
+    "sort -o out in", "sort --output=out in", "sort -ro out in", "sort --compress-program=gzip in",
+  ]) {
+    assert.equal(classifyToolCall("Bash", { command }), "work", command);
+  }
+});
+
+test("書き込みや実行を伴わない通常の読み取りは読み取りのまま", () => {
+  for (const command of ["rg foo", "rg -n foo src", "git diff", "git log -1", "git show HEAD", "sort -n in", "sort -r in"]) {
+    assert.equal(classifyToolCall("Bash", { command }), "read", command);
+  }
+});
+
+test("一覧表示だけの git branch は読み取り、名前の作成・変更・削除は branch に分類する", () => {
+  for (const command of [
+    "git branch", "git branch -a", "git branch -r", "git branch -l", "git branch --list", "git branch -v", "git branch -vv",
+    "git branch --show-current", "git branch --contains HEAD", "git branch --contains=HEAD", "git branch -avv",
+    "git branch -l 'feat*'", "git branch --list feat*",
+  ]) {
+    assert.equal(classifyToolCall("Bash", { command }), "read", command);
+  }
+  for (const command of [
+    "git branch x", "git branch -c a b", "git branch -C a b", "git branch -m a b", "git branch -M a b",
+    "git branch -d x", "git branch -D x", "git branch --delete x", "git branch -f x HEAD",
+    "git branch --set-upstream-to=origin/x", "git branch -u origin/x", "git branch -t x origin/x",
+    "git branch --copy a b", "git branch --move a b",
+  ]) {
+    assert.equal(classifyToolCall("Bash", { command }), "branch", command);
+  }
+});
+
+test("git worktree の一覧は読み取り、追加・削除・整理・移動は branch、それ以外は作業に分類する", () => {
+  for (const command of ["git worktree list", "git worktree list --porcelain"]) {
+    assert.equal(classifyToolCall("Bash", { command }), "read", command);
+  }
+  for (const command of ["git worktree add ../w x", "git worktree remove w", "git worktree prune", "git worktree move a b"]) {
+    assert.equal(classifyToolCall("Bash", { command }), "branch", command);
+  }
+  for (const command of ["git worktree lock x", "git worktree"]) {
+    assert.equal(classifyToolCall("Bash", { command }), "work", command);
+  }
+});
+
+test("git checkout は -- を含む形やファイル指定をファイルの書き換え（作業）、ブランチの切り替えだけを branch に分類する", () => {
+  for (const command of ["git checkout -- a.md", "git checkout -- .", "git checkout .", "git checkout HEAD -- a.md"]) {
+    assert.equal(classifyToolCall("Bash", { command }), "work", command);
+  }
+  for (const command of ["git checkout main", "git checkout -b x", "git checkout -B x", "git checkout --track origin/x"]) {
+    assert.equal(classifyToolCall("Bash", { command }), "branch", command);
+  }
+});
+
+test("つないだ複合コマンドは、部分ごとの分類を合わせて判定する（実機で見つかった形）", () => {
+  for (const command of [
+    "git branch --list 'dev/demo' && git status --short && git rev-parse --abbrev-ref HEAD",
+    "git status && git branch --list && pwd",
+    "git status | cat",
+    "git status || true",
+    "git branch --list 'a&&b'",
+    "cd /x && git status",
+  ]) {
+    assert.equal(classifyToolCall("Bash", { command }), "read", command);
+  }
+  for (const command of [
+    "(git show-ref --verify --quiet refs/heads/dev/demo && git switch dev/demo || git switch -c dev/demo) && git rev-parse --abbrev-ref HEAD",
+    "cd /x && git switch -c a",
+    "(git switch -c a)",
+    "git status && git switch -c a",
+  ]) {
+    assert.equal(classifyToolCall("Bash", { command }), "branch", command);
+  }
+});
+
+test("つないだ複合コマンドでも、作業を含む部分や分類できない構造が 1 つでもあれば作業", () => {
+  for (const command of [
+    "git switch -c a && echo hi",
+    "git switch -c a; rm -rf x",
+    "git switch -c a > /tmp/o",
+    "git switch -c a >> /tmp/o",
+    "git switch -c a < /tmp/i",
+    "git switch -c a $(echo b)",
+    "git switch -c a `echo b`",
+    "git status | sh",
+    "git switch -c a & ",
+    "git switch -c a\nrm x",
+    "X=1 git status",
+    "eval git status",
+    "git status && git commit -m x",
+    "git branch --list 'abc",
+    "git status && echo \"$(whoami)\"",
+    "echo ${HOME}",
+  ]) {
+    assert.equal(classifyToolCall("Bash", { command }), "work", JSON.stringify(command));
+  }
+});
+
+test("作業ブランチの案内・拒否の理由に、ブランチ操作は単独のコマンドで実行することを 1 文含む", () => {
+  for (const text of [messageGuidance("kiro-impl", "main"), messageDeny("kiro-impl", "main")]) {
+    assert.match(text, /他のコマンドとつながず/);
+    assert.match(text, /単独のコマンド/);
+    assert.match(text, /git switch -c/);
+  }
+});
+
+test("引用符で囲んだ引数は、引用符を外した値で規則に照らす", () => {
+  for (const command of [
+    "git status && git checkout '--' file",
+    "git checkout \"--\" file",
+    "git status && find . \"-delete\"",
+    "git status && sort '-o' f",
+    "git status && sort -\"o\" f",
+  ]) {
+    assert.equal(classifyToolCall("Bash", { command }), "work", command);
+  }
+  for (const command of ["git branch --list 'a&&b'", "git branch --list \"feat\"", "git 'status'"]) {
+    assert.equal(classifyToolCall("Bash", { command }), "read", command);
+  }
+  assert.equal(classifyToolCall("Bash", { command: "git switch -c a" }), "branch");
+});
+
+test("区切りの前後が空の不正な構文は作業に分類し、改行や前後の空白による空の部分は許す", () => {
+  for (const command of [
+    "git status;;", "&& git status", "git status &&", "| git status", "git status |", "git status ||",
+    "()", "git status ( )",
+  ]) {
+    assert.equal(classifyToolCall("Bash", { command }), "work", JSON.stringify(command));
+  }
+  for (const command of ["git status\n", "\ngit status\n", "git status &&\n git status", "git status\n\ngit status", "git status; git status", "(git status)"]) {
+    assert.equal(classifyToolCall("Bash", { command }), "read", JSON.stringify(command));
+  }
+});
+
+test("二重引用符の中で、バックスラッシュと改行の行継続を除いてからコマンド置換を判定する", () => {
+  assert.equal(classifyToolCall("Bash", { command: "git branch --list \"$\\\n(touch f)\"" }), "work");
+  assert.equal(classifyToolCall("Bash", { command: "git branch --list \"$\\\n{HOME}\"" }), "work");
+  assert.equal(classifyToolCall("Bash", { command: "git branch --list \"feat\"\\\n" }), "read");
+});
+
+test("ブランチなしの案内は空の名前を見せず、特定の別の仕組みの名前を含まない", () => {
+  const text = messageGuidance("kiro-spec-init", "");
+  assert.match(text, /（ブランチなし）/);
+  for (const text of [messageGuidance("kiro-impl", "main"), messageDeny("kiro-impl", "main"), messageGuidance("kiro-discovery", "")]) {
+    assert.doesNotMatch(text, /brw|branch-release-workflow|release/i);
+  }
+});
+
+test("Claude Code の Write・Read は対象の絶対パスのディレクトリを作業場所とする", () => {
+  assert.equal(workDirOf("claude", "Write", { file_path: "/w/src/a.md" }, "/r"), "/w/src");
+  assert.equal(workDirOf("claude", "Read", { file_path: "/w/a.md" }, "/r"), "/w");
+  assert.equal(workDirOf("claude", "NotebookEdit", { notebook_path: "/w/n.ipynb" }, "/r"), "/w");
+  assert.equal(workDirOf("claude", "Edit", { file_path: "/w/a.md" }, "/r"), "/w");
+});
+
+test("Claude Code の相対パスは cwd からの相対を解く。cwd が無ければ null", () => {
+  assert.equal(workDirOf("claude", "Write", { file_path: "a/b.md" }, "/r"), "/r/a");
+  assert.equal(workDirOf("claude", "Write", { file_path: "a/b.md" }, ""), null);
+  assert.equal(workDirOf("claude", "Write", { file_path: "a/b.md" }, null), null);
+});
+
+test("Claude Code の Bash は先頭の引用符の外の cd <絶対パス> && （; も可）の絶対パスを作業場所とする", () => {
+  assert.equal(workDirOf("claude", "Bash", { command: "cd /x && npm test" }, "/r"), "/x");
+  assert.equal(workDirOf("claude", "Bash", { command: "cd /x; ls" }, "/r"), "/x");
+  assert.equal(workDirOf("claude", "Bash", { command: "cd \"/x y\" && ls" }, "/r"), "/x y");
+});
+
+test("相対の cd・パスの無い操作・cd の後ろに区切りが無い形は null", () => {
+  assert.equal(workDirOf("claude", "Bash", { command: "cd sub && ls" }, "/r"), null);
+  assert.equal(workDirOf("claude", "Bash", { command: "npm test" }, "/r"), null);
+  assert.equal(workDirOf("claude", "Bash", { command: "cd /x" }, "/r"), null);
+  assert.equal(workDirOf("claude", "Bash", { command: "echo 'cd /x && y'" }, "/r"), null);
+  assert.equal(workDirOf("claude", "Glob", { pattern: "*.md" }, "/r"), null);
+});
+
+test("Codex の apply_patch は最初の対象パスのディレクトリ（相対なら cwd からの相対）を作業場所とする", () => {
+  const patch = "*** Begin Patch\n*** Add File: a/b\n+x\n*** End Patch";
+  assert.equal(workDirOf("codex", "apply_patch", { command: patch }, "/r"), "/r/a");
+  const absolute = "*** Begin Patch\n*** Update File: /w/z/c.md\n@@\n-a\n+b\n*** End Patch";
+  assert.equal(workDirOf("codex", "apply_patch", { command: absolute }, "/r"), "/w/z");
+});
+
+test("Codex の apply_patch は複数ファイルのとき最初の対象を使い、Move to も対象に含め、パスの無い形は null", () => {
+  const many = "*** Begin Patch\n*** Delete File: /m/one.md\n*** Add File: /n/two.md\n+x\n*** End Patch";
+  assert.equal(workDirOf("codex", "apply_patch", { command: many }, "/r"), "/m");
+  const moved = "*** Begin Patch\n*** Update File: /p/q.md\n*** Move to: /t/u.md\n*** End Patch";
+  assert.equal(workDirOf("codex", "apply_patch", { command: moved }, "/r"), "/p");
+  assert.equal(workDirOf("codex", "apply_patch", { command: "*** Begin Patch\n*** End Patch" }, "/r"), null);
+});
+
+test("Codex の Bash 相当（shell・local_shell・exec_command）は入力の cwd（workdir）を作業場所とする", () => {
+  for (const name of ["shell", "local_shell", "exec_command", "Bash"]) {
+    assert.equal(workDirOf("codex", name, { command: ["bash", "-lc", "git status"] }, "/w/x"), "/w/x", name);
+  }
+  assert.equal(workDirOf("codex", "shell", { command: "ls" }, ""), null);
+});
+
+test("Claude Code の Bash の cd は、シェルが展開する形・移動先が確定しない形を作業場所にしない（null）", () => {
+  for (const command of [
+    "cd /tmp/* && touch x", "cd /x/? && ls", "cd /x/[ab] && ls", "cd /x/{a,b} && ls", "cd ~/x && ls",
+    "cd /x$HOME && ls", "cd \"$HOME/x\" && ls", "cd \"/x`pwd`\" && ls", "cd /x/`pwd` && ls", "cd /x!y && ls",
+    "cd /x\\ y && ls", "cd \"/x && ls", "cd - && ls", "cd -P /x && ls", "cd /x y && ls",
+    "cd && ls", "cd \"/x\\$y\" && ls", "cd /x/* && ls",
+  ]) {
+    assert.equal(workDirOf("claude", "Bash", { command }, "/r"), null, command);
+  }
+});
+
+test("確定できる cd の形（引用符・正規化を含む）は、移動先の絶対パスを返す", () => {
+  assert.equal(workDirOf("claude", "Bash", { command: "cd /x && ls" }, "/r"), "/x");
+  assert.equal(workDirOf("claude", "Bash", { command: "cd '/x y' && ls" }, "/r"), "/x y");
+  assert.equal(workDirOf("claude", "Bash", { command: "cd '/x$y' && ls" }, "/r"), "/x$y");
+  assert.equal(workDirOf("claude", "Bash", { command: "cd /x/../y && ls" }, "/r"), "/y");
+});
+
+test("cd の語の途中の # と ~ は文字どおりの値として確定する（語の先頭だけが特別）", () => {
+  assert.equal(workDirOf("claude", "Bash", { command: "cd /x#y && x" }, "/r"), "/x#y");
+  assert.equal(workDirOf("claude", "Bash", { command: "cd /x~y && x" }, "/r"), "/x~y");
+  assert.equal(workDirOf("claude", "Bash", { command: "cd '/x y#z' && x" }, "/r"), "/x y#z");
+  assert.equal(workDirOf("claude", "Bash", { command: "cd \"/x~y\" && x" }, "/r"), "/x~y");
+});
+
+test("cd の語の先頭の # と ~ は展開やコメントになるので null。引用符の中の ~ は展開されないが相対なので null", () => {
+  assert.equal(workDirOf("claude", "Bash", { command: "cd #x && y" }, "/r"), null);
+  assert.equal(workDirOf("claude", "Bash", { command: "cd ~ && x" }, "/r"), null);
+  assert.equal(workDirOf("claude", "Bash", { command: "cd ~/x && x" }, "/r"), null);
+  assert.equal(workDirOf("claude", "Bash", { command: "cd \"~/x\" && x" }, "/r"), null);
+  assert.equal(workDirOf("claude", "Bash", { command: "cd '~/x' && x" }, "/r"), null);
+});
+
+test("基底でないと判定できた操作は、turn を消して許可する（2.4）", () => {
+  const turn = { skill: "kiro-impl", denials: 2, switchTried: false };
+  const call = { toolName: "Write", toolInput: { file_path: "/a" } };
+  assert.deepEqual(decidePreToolUse(turn, call, { branch: "feature/x", bases: BASES, originDefault: null }), { allow: true, turn: null });
+});
+
+test("現在のブランチを判定できない（null）と基底では turn を残す（2.4・3.9）", () => {
+  const turn = { skill: "kiro-impl", denials: 0, switchTried: false };
+  const call = { toolName: "Write", toolInput: { file_path: "/a" } };
+  assert.equal(decidePreToolUse(turn, call, { branch: null, bases: BASES, originDefault: null }).turn, turn);
+  assert.equal(decidePreToolUse(turn, call, { branch: "main", bases: BASES, originDefault: null }).allow, false);
+});
+
+test("通常の入力で拒否の回数だけを 0 に戻す。切り替えを試みた記録は保つ（3.5）", () => {
+  assert.deepEqual(resetDenials({ skill: "kiro-impl", denials: 2, switchTried: true }), { skill: "kiro-impl", denials: 0, switchTried: true });
+  assert.deepEqual(resetDenials({ skill: "kiro-impl", denials: 1, switchTried: false }), { skill: "kiro-impl", denials: 0, switchTried: false });
+  assert.equal(resetDenials(null), null);
+});
+
+const STOP_BASE = { stopHookActive: false, branch: "feature/x", bases: BASES, originDefault: null, prExists: false };
+
+test("decideStop: 検証の案内を受けた・未停止・再開でない・作業ブランチの上・PR が無いときだけ止め、理由は messageStop と同じ", () => {
+  assert.deepEqual(decideStop({ stopped: false }, STOP_BASE), { block: true, reason: messageStop("feature/x") });
+});
+
+test("decideStop: 検証の案内が無い・停止済み・再開・ブランチなし・基底・PR あり・PR の判定不能のときは止めない", () => {
+  const validated = { stopped: false };
+  assert.deepEqual(decideStop(null, STOP_BASE), { block: false });
+  assert.deepEqual(decideStop({ stopped: true }, STOP_BASE), { block: false });
+  assert.deepEqual(decideStop(validated, { ...STOP_BASE, stopHookActive: true }), { block: false });
+  assert.deepEqual(decideStop(validated, { ...STOP_BASE, branch: null }), { block: false });
+  assert.deepEqual(decideStop(validated, { ...STOP_BASE, branch: "main" }), { block: false });
+  assert.deepEqual(decideStop(validated, { ...STOP_BASE, branch: "" }), { block: false });
+  assert.deepEqual(decideStop(validated, { ...STOP_BASE, branch: "release", originDefault: "release" }), { block: false });
+  assert.deepEqual(decideStop(validated, { ...STOP_BASE, prExists: true }), { block: false });
+  assert.deepEqual(decideStop(validated, { ...STOP_BASE, prExists: null }), { block: false });
+});
+
+test("decideStop: 基底は設定の一覧に従う（trunk は基底、feature/x は作業ブランチ）", () => {
+  const facts = { ...STOP_BASE, bases: ["main", "trunk"] };
+  assert.deepEqual(decideStop({ stopped: false }, { ...facts, branch: "trunk" }), { block: false });
+  assert.deepEqual(decideStop({ stopped: false }, { ...facts, branch: "feature/x" }).block, true);
+});
+
+test("messagePrContext: 既定の運用・事前の指示・通常の操作・別の仕組みの案内に従う・作業の内容からの作成・NO-GO・基底なら求めないを含む", () => {
+  const text = messagePrContext();
+  for (const pattern of [/既定の運用/, /事前/, /push/, /PR/, /通常の操作/, /別の仕組み/, /案内に従/, /作業の内容/, /NO-GO/, /MANUAL_VERIFY_REQUIRED/, /基底ブランチの上[^\n]*求めない/, /確認を求めない/]) {
+    assert.match(text, pattern);
+  }
+  assert.doesNotMatch(text, /brw|branch-release-workflow|release|宣言/i);
+});
+
+test("messageStop: ブランチ名・PR が無いこと・作らない理由を示すこと・2 回目は止めないことを含み、特定の仕組みの名前を含まない", () => {
+  const text = messageStop("feature/x");
+  for (const pattern of [/feature\/x/, /PR/, /理由/, /2 回目/, /通常の操作/, /別の仕組み/]) assert.match(text, pattern);
+  assert.doesNotMatch(text, /brw|branch-release-workflow|release/i);
+});
+
+test("decideStop: stopHookActive・validated.stopped・prExists・branch の型が想定外なら、止めずに通す", () => {
+  const validated = { stopped: false };
+  for (const value of [null, undefined, 0, "", "false"]) {
+    assert.deepEqual(decideStop(validated, { ...STOP_BASE, stopHookActive: value }), { block: false }, `stopHookActive=${JSON.stringify(value)}`);
+  }
+  for (const value of [undefined, null, 0]) {
+    assert.deepEqual(decideStop({ stopped: value }, STOP_BASE), { block: false }, `validated.stopped=${JSON.stringify(value)}`);
+  }
+  for (const value of [undefined, 0, ""]) {
+    assert.deepEqual(decideStop(validated, { ...STOP_BASE, prExists: value }), { block: false }, `prExists=${JSON.stringify(value)}`);
+  }
+  for (const value of [undefined, 1]) {
+    assert.deepEqual(decideStop(validated, { ...STOP_BASE, branch: value }), { block: false }, `branch=${JSON.stringify(value)}`);
+  }
+  assert.deepEqual(decideStop({ stopped: false, extra: 1 }, { ...STOP_BASE, bases: "main" }), { block: false }, "bases が文字列");
+  assert.deepEqual(decideStop(validated, { ...STOP_BASE, bases: undefined }), { block: false }, "bases が undefined");
+});

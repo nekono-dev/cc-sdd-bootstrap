@@ -58,6 +58,24 @@
             "timeout": 10
           }
         ]
+      },
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node '/home/ubuntu/.claude/plugins/cache/nekono-dev/branch-release-workflow/1.2.0/scripts/agent-hooks.mjs' codex PreToolUse"
+          }
+        ]
+      },
+      {
+        "matcher": "mcp__.*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node '/home/ubuntu/.claude/plugins/cache/nekono-dev/branch-release-workflow/1.2.0/scripts/agent-hooks.mjs' codex PreToolUse"
+          }
+        ]
       }
     ],
     "PostToolUse": [
@@ -69,6 +87,15 @@
             "timeout": 10
           }
         ]
+      },
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node '/home/ubuntu/.claude/plugins/cache/nekono-dev/branch-release-workflow/1.2.0/scripts/agent-hooks.mjs' codex PostToolUse"
+          }
+        ]
       }
     ],
     "Stop": [
@@ -78,6 +105,34 @@
             "type": "command",
             "command": "node \"$(git rev-parse --show-toplevel)/.agent-hooks/cc-sdd-bootstrap/kiro-gate.mjs\" stop --tool codex",
             "timeout": 10
+          }
+        ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node '/home/ubuntu/.claude/plugins/cache/nekono-dev/branch-release-workflow/1.2.0/scripts/agent-hooks.mjs' codex Stop"
+          }
+        ]
+      }
+    ],
+    "PermissionRequest": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node '/home/ubuntu/.claude/plugins/cache/nekono-dev/branch-release-workflow/1.2.0/scripts/agent-hooks.mjs' codex PermissionRequest"
+          }
+        ]
+      },
+      {
+        "matcher": "mcp__.*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node '/home/ubuntu/.claude/plugins/cache/nekono-dev/branch-release-workflow/1.2.0/scripts/agent-hooks.mjs' codex PermissionRequest"
           }
         ]
       }
