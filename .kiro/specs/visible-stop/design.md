@@ -45,7 +45,7 @@
 ## Architecture
 
 ### Existing Architecture Analysis
-- `feasibility-gate.mjs` は `decideInput` の結果が `block` のとき `{decision:"block", reason}` を出力する（1 か所）。`install-cc-sdd.mjs` の `runUserPromptSubmit` は `{decision:"block", reason}` を出力する経路を 9 か所（導入の失敗・導入中・区画の書き直しの失敗・判定不能。書き直し後の再判定を含む）で持つ。
+- `feasibility-gate.mjs` は `decideInput` の結果が `block` のとき `{decision:"block", reason}` を出力する（1 か所）。`install-cc-sdd.mjs` の `runUserPromptSubmit` は `{decision:"block", reason}` を出力する経路を 8 か所で持つ（実コードの確認。`install-cc-sdd.mjs` の 286・291・313・318・334・336・338・341 行付近）: 導入の失敗（判定、書き直し後の再判定）、導入中（判定、書き直し後の再判定）、導入中の例外（`BusyInstallError`）、区画の書き直しの失敗、導入の失敗の例外、判定不能の例外。
 - Claude Code・Codex ともに、`UserPromptSubmit` のフックの `additionalContext` を追加の文脈として受け取る（既存の関門が使用）。`decision: "block"` は、モデルを動かさず、理由を画面（またはシステムの通知）に出すだけの停止で、リモートセッションの画面には出ない（実機の確認。`poc/design_01.md`）。
 - 同じ入力に複数のフックが文脈を出す（kiro-gate・work-branch-gate・関門）。kiro-gate は一覧に載らないスキルで、手順書を読むまで他のツールを拒否し、終了を 1 回止める。
 
@@ -90,7 +90,7 @@ graph TB
 
 ### Modified Files
 - `.agent-hooks/cc-sdd-bootstrap/feasibility-gate.mjs` — 止める判定のとき、`{decision:"block", reason}` の代わりに `stopOutput` の結果を出す（3.1〜3.5・6）。
-- `.agent-hooks/cc-sdd-bootstrap/install-cc-sdd.mjs` — `{decision:"block", reason}` を出す 9 か所を、1 つの補助（`writeStop(prompt, reason)`）に置き換える。入力の `prompt` を関数の外の変数に保持する（4.1〜4.6）。
+- `.agent-hooks/cc-sdd-bootstrap/install-cc-sdd.mjs` — `{decision:"block", reason}` を出す 8 か所を、1 つの補助（`writeStop(prompt, reason)`）に置き換える。入力の `prompt` を関数の外の変数に保持する（4.1〜4.6）。
 - `lib/catalog.mjs` — 配布する `stop-notice-rules.mjs` を配置の一覧に足す（8.5）。運用の区画の文章の「入力が止まります」の説明に、止めた理由は応答の文章で示されることを足す（8.1）。
 - `package.json` — `files` に `stop-notice-rules.mjs` を足す。
 - `.agent-hooks/cc-sdd-bootstrap/agent-section-claude.md`・`agent-section-codex.md` — `update` コマンドで再生成する（8.4）。
@@ -199,7 +199,7 @@ function stopOutput(notice: StopNotice): {
 
 ### Error Strategy
 - 止める判定が出たとき: 停止の案内を追加の文脈で出す。出力の組み立て自体は失敗しない（純粋な文字列の処理）。標準出力への書き込みの失敗は、従来と同じく例外として扱う（関門は通す側、導入は止める側）。
-- モデルが止める指示に従わず、作業を進めた場合: 現時点の補強は無い（実機で 0 回）。観測した場合は、`PreToolUse` で止めた入力のターンの作業ツールを拒否する補強を設計に足す（見直しの条件）。
+- モデルが止める指示に従わず、作業を進めた場合: 現時点の補強は無い（実機 18 回で作業が進んだ観測が 0 回のため。要件 2.4 は、観測が無い間は補強を含めなくてよいとしている）。観測した場合は、`PreToolUse` で止めた入力のターンの作業ツールを拒否する補強を設計に足す（見直しの条件）。
 
 ### Error Categories and Responses
 - **止める条件に合う入力**: 停止の案内（応答の文章）。
@@ -217,9 +217,15 @@ function stopOutput(notice: StopNotice): {
 - `install-cc-sdd`（フックの標準入出力）: 導入の失敗・導入中（新しい印・古い印）・区画の書き直しの失敗・判定不能の各経路で、同じ形の出力になる（4.1〜4.5）。導入済みの入力の出力は変わらない（5.4）。
 - 配布物の一覧: `stop-notice-rules.mjs` が `package.json` の `files` と配置の一覧に入っている（8.5）。運用の区画の文章に、停止の理由が応答の文章で示されることが含まれる（8.1）。
 
+### 既存テストの更新（出力の形の変更に伴う）
+- `test/feasibility-gate.test.mjs`: 配置物を明示的にコピーする試験の土台に `stop-notice-rules.mjs` を足す（足さないとフックが起動できない）。`assertBlocked` など `decision`・`reason` を直接見ている確認を、`hookSpecificOutput.additionalContext` に停止の案内（止めた入力・理由）が含まれ、`decision` が無いことの確認に置き換える。
+- `test/install-cc-sdd.test.mjs`: `decision === 'block'` を確かめている箇所（失敗・導入中・古い印・並行導入・判定不能・フック経由の再試行）を同じ形に置き換える。並行導入の試験（1 つだけ導入し、もう一方を止める）は、止めた側の出力が停止の案内であることで数える。
+- `prompt` の保持: 入力の解析に成功した後の失敗（導入の失敗・区画の書き直しの失敗）では元の入力が停止の案内に入ること、入力の解析自体に失敗した場合は「取得できませんでした」になることを、それぞれ確かめる。
+- `test/package.test.mjs`・`test/catalog.test.mjs`: 配置の一覧とパッケージの内容が、新しいファイルを含めて一致すること。
+
 ### E2E（実機）
 - 設計の段階の確認: `poc/design_01.md`・`design_02.md`（試作のフックで、Claude Code・Codex）。
-- 実装後: 実際の配置物で、`/kiro-spec-quick <記録が無い spec>` を、(1) コマンドライン（Claude Code）、(2) Codex、(3) リモートセッションの画面、のそれぞれに送り、停止の案内が応答の文章として表示されることを確かめる。結果は `poc/impl_01.md` に残す（要件 6.4）。
+- 実装後: 実際の配置物で、(i) `/kiro-spec-quick <記録が無い spec>`（実現性の関門）と、(ii) 導入が未完了の状態での最初の入力（導入の停止）を、それぞれ (1) コマンドライン（Claude Code）、(2) Codex、(3) リモートセッションの画面、に送り、停止の案内が応答の文章として表示されることを確かめる。複数の spec 名と `-y` を含む入力（`/kiro-spec-tasks A B -y`、A の記録が無い）も含める。結果は `poc/impl_01.md` に残す（要件 6.4）。
 
 ## Migration Strategy
 

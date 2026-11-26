@@ -8,7 +8,7 @@
 - 別のセッションで `kiro-spec-tasks brw-enforcement brw-pr-handoff -y` を実行して無応答になった。入力の解析では、先頭の spec 名 `brw-enforcement` だけが判定される（`classifyPrompt`: `{skill: "kiro-spec-tasks", spec: "brw-enforcement"}`）。`brw-enforcement` は実現性の記録の導入前に作られた spec で、記録が無いために止められたと考えられる。同じ型の停止（`decision: "block"`）。セッションの記録は特定できず、確認していない。
 
 ## 同じ型の停止の起点
-- `feasibility-gate.mjs`（1 か所）と `install-cc-sdd.mjs`（9 か所）の `decision: "block"`。kiro-gate・work-branch-gate の拒否と終了の停止は、モデルが理由を受け取るので無応答にならない。
+- `feasibility-gate.mjs`（1 か所）と `install-cc-sdd.mjs`（8 か所）の `decision: "block"`。kiro-gate・work-branch-gate の拒否と終了の停止は、モデルが理由を受け取るので無応答にならない。
 
 ## 設計の決定
 - 止める出力を追加の文脈（停止の案内 + 止める指示）に変え、モデルに話させる（利用者の選択）。
@@ -18,5 +18,5 @@
 - 採らなかった案: `decision: "block"` に `systemMessage` などを足して画面に出す案（リモートセッションの画面で見えない可能性が高く、見える保証が無い）。両方を重ねる案（フックの状態管理が増える）。
 
 ## リスク
-- モデルが止める指示に従わない可能性（実機 13 回で 0 回。回数が少ない）。
+- モデルが止める指示に従わない可能性（実機 18 回で 0 回。回数が少ない）。
 - 古い配置物の導入先は従来の停止のまま（`update` で解消）。
