@@ -585,3 +585,11 @@ test("messageBlock: kiro-spec-quick・kiro-spec-batch の理由は、続けて�
     ]);
   }
 });
+
+test("messageContext（要件 4・6.5）: タスク計画の段階も、根拠として認める PoC 文書の条件（位置付けと結果が文書で追える）と一次資料の出典を含み、再実行を含まない", () => {
+  const text = messageContext("kiro-spec-tasks", "foo");
+  for (const phrase of ["一次資料の出典", "位置付けと結果が文書で追える", "PoC 文書の場所"]) {
+    assert.ok(text.includes(phrase), `タスク計画の段階に ${phrase} が無い`);
+  }
+  assert.ok(!text.includes("再実行"));
+});

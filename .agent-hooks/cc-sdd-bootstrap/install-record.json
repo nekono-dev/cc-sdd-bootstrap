@@ -6,7 +6,7 @@
     ".agent-hooks/cc-sdd-bootstrap/codex-trust.mjs": "e2a2d918ea245e2b6bf92bfb97a31f874c9ac6cd70ddc09beb1cf70d7ba0f590",
     ".agent-hooks/cc-sdd-bootstrap/config-schema.mjs": "832dfd4a069f7ed03a628767d0f4a4f905978f3e0292e1b45b1d7993ab8d835a",
     ".agent-hooks/cc-sdd-bootstrap/delegate.mjs": "1363604740a02b3a68fbfa8d9c617a45357c3bdddf82d892341d064c7e649434",
-    ".agent-hooks/cc-sdd-bootstrap/feasibility-gate-rules.mjs": "b858013a5a4e178baf3e09da3edd321b7707cfd45d80058cc570ed9597042385",
+    ".agent-hooks/cc-sdd-bootstrap/feasibility-gate-rules.mjs": "2a260640cd7ba4595c6e87755e8a18be38585c6aee6dd3b8b474b3fd0ce9b2a3",
     ".agent-hooks/cc-sdd-bootstrap/feasibility-gate.mjs": "0d1683f85a329eac1e50ccbf3b9570ba04922d5de3f80bf1015f825cccd71eeb",
     ".agent-hooks/cc-sdd-bootstrap/freshness-rules.mjs": "2f2062a3b922746396d7bb8837f308e2962f9871814a241686686220520afb8c",
     ".agent-hooks/cc-sdd-bootstrap/freshness.mjs": "b24a15fb89179f5f963ac25701056c205a2ac137e8acfe494365abb5fcc951d1",
