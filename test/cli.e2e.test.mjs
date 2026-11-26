@@ -70,7 +70,7 @@ test("一時の git リポジトリで init・利用者設定を保つ update・
   const deploy = path.join(root, ".agent-hooks/cc-sdd-bootstrap");
   for (const file of [config, claudeSettings, codexHooks, ignore,
     path.join(deploy, "install-cc-sdd.mjs"), path.join(deploy, "install-rules.mjs"),
-    path.join(deploy, "config-schema.mjs"), path.join(deploy, "subagent-roles.mjs"),
+    path.join(deploy, "config-schema.mjs"), path.join(deploy, "stop-notice-rules.mjs"), path.join(deploy, "subagent-roles.mjs"),
     path.join(deploy, "agent-section-claude.md"), path.join(deploy, "agent-section-codex.md")]) {
     assert.ok(fs.existsSync(file), `${path.relative(root, file)} がありません`);
   }
