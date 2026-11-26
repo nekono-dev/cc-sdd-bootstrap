@@ -73,3 +73,20 @@
 未確認（残り）:
 - Codex で停止の理由が利用者に見えるか（場面 C）。
 - 停止した入力の後の kiro-gate の状態（上の 4）。
+
+## 追記: 取り込み後の普通の checkout と worktree での確認（2026-11-26、feasibility-review タスク 5.3）
+
+- 実行: `node poc/work-branch-flow/post-merge-check.mjs`（work-branch-flow の 5.3 と同じ実行。新しく clone した develop `b2a489e` の普通の checkout と worktree で `update` を実行。Codex は `update` が書いた承認の記録だけでフックを動かした）。結果: **OK 26 件、NG 0 件**。
+- 場面 F1: spec `feas`（本体の checkout にだけある。worktree には無い）への `kiro-spec-tasks` を、worktree から入力した。
+
+| 記録（feasibility.md） | Claude Code | Codex |
+|---|---|---|
+| なし | 入力が止まった（理由に spec 名が出た） | 入力が止まった（モデルの応答も作業も無い） |
+| 設計・タスク計画とも通過 | 通った | 通った |
+
+事実:
+1. worktree からでも、本体の checkout にある spec と記録の場所を見つけられた（要件 8.2）。
+2. 記録が無い spec は止まり、通過の記録があれば通る。Codex も承認の手動の操作なしで同じ結果だった。
+3. 試験の作り方の注意: 同名の spec が worktree 側にもあると、入力の作業場所の側が優先される（2.1 の決まり）。最初の実行は、W2 が worktree に作った `demo` と同名にして止まったため、別名（`feas`）にして確かめ直した。
+
+未確認として残す: Codex の追加の文脈の確認（5.1 で確認済み）以外では、Codex で停止の理由が利用者に見えるか。
