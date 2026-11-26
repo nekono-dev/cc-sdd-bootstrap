@@ -243,7 +243,7 @@ test("定義のファイルに差分が無く設定の変更で新しい知ら�
   assert.match(changed.stdout, novel);
 });
 
-test("一時の git リポジトリで init すると承認の記録が 12 件書かれ、uninstall で取り除かれる", (t) => {
+test("一時の git リポジトリで init すると承認の記録が 13 件書かれ、uninstall で取り除かれる", (t) => {
   const root = temporary(t);
   const initialized = runOrSkip(t, root, ["init"]);
   if (!initialized) return;
@@ -253,7 +253,7 @@ test("一時の git リポジトリで init すると承認の記録が 12 件�
 
   const config = path.join(isolationOf(root).codexHome, "config.toml");
   const written = fs.readFileSync(config, "utf8");
-  assert.equal((written.match(/trusted_hash/g) ?? []).length, 12);
+  assert.equal((written.match(/trusted_hash/g) ?? []).length, 13);
   for (const name of ["codex-trust.mjs", "codex-trust-rules.mjs"]) {
     assert.ok(fs.existsSync(path.join(root, ".agent-hooks/cc-sdd-bootstrap", name)), `${name} が導入先に写されていません`);
   }

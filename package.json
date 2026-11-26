@@ -25,7 +25,9 @@
     ".agent-hooks/cc-sdd-bootstrap/work-branch-gate.mjs",
     ".agent-hooks/cc-sdd-bootstrap/work-branch-gate-rules.mjs",
     ".agent-hooks/cc-sdd-bootstrap/feasibility-gate.mjs",
-    ".agent-hooks/cc-sdd-bootstrap/feasibility-gate-rules.mjs"
+    ".agent-hooks/cc-sdd-bootstrap/feasibility-gate-rules.mjs",
+    ".agent-hooks/cc-sdd-bootstrap/freshness.mjs",
+    ".agent-hooks/cc-sdd-bootstrap/freshness-rules.mjs"
   ],
   "scripts": {
     "test": "node --test \"test/**/*.test.mjs\""

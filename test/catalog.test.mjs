@@ -428,3 +428,21 @@ test("feasibility-gate の登録（両ツールの UserPromptSubmit）・配る�
     assert.ok(pkg.files.includes(file), file);
   }
 });
+
+test("セッション開始の入口と純粋部品が配置物と配る範囲に入り、記録ファイルは入らない（1.6）", () => {
+  const paths = catalog.files.map((file) => file.path);
+  assert.ok(paths.includes(`${DEPLOY_DIR}/freshness.mjs`));
+  assert.ok(paths.includes(`${DEPLOY_DIR}/freshness-rules.mjs`));
+  assert.ok(!paths.some((file) => file.endsWith("install-record.json")));
+  assert.ok(pkg.files.includes(`${DEPLOY_DIR}/freshness.mjs`));
+  assert.ok(pkg.files.includes(`${DEPLOY_DIR}/freshness-rules.mjs`));
+  assert.ok(!pkg.files.some((file) => file.endsWith("install-record.json")));
+});
+
+test("freshness のフックは両ツールの SessionStart にだけ、timeout 10 で登録される（1.6）", () => {
+  const freshness = catalog.hooks.filter((hook) => hook.script === "freshness.mjs");
+  assert.deepEqual(freshness, ["claude", "codex"].map((tool) => ({
+    tools: [tool], event: "SessionStart", script: "freshness.mjs", args: ["session-start", "--tool", tool], timeout: 10,
+  })));
+  assert.ok(freshness.every((hook) => hook.event === "SessionStart"));
+});
