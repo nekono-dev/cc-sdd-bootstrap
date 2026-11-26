@@ -76,3 +76,22 @@
 3. モデルは、拒否の理由の「どれか分からなければ利用者に尋ねる」に従い、名前を決められないときは確認して止まる。対話の使い方では自然だが、`-p` のように確認できない場面では止まる。
 4. 追加の文脈（入力時の案内）が届いたかは、ストリームに出ないため確認できなかった（未確認）。拒否の理由は届いた。
 5. Codex の `workspace-write` では `.git` が書けないため、拒否 → 切り替え → 作業の全体は確認できない（制限なしの実行は、自動モードの判定が止めたため試していない）。
+
+## 追記: 別の仕組みを重ねた構成と終了の停止（場面 G・H、2026-11-25、タスク 5.1）
+
+- 実行: `node poc/work-branch-flow/run.mjs G H`（`cc-sdd-bootstrap init` で配置。kiro-gate も同時に動く。G は brw をプラグインとして重ね、`brw` を PATH に置く。H は偽の `gh`（`pr list` は `[]`、他は失敗）を PATH に置く）
+
+| 場面 | 結果 |
+|---|---|
+| G（Claude Code。brw を重ねる。`/kiro-discovery demo`、ブランチ名 `dev/demo` を許可） | 行き詰まらなかった。work-branch-gate が基底ブランチ上の作業を拒否 → モデルが `git switch -c` を試みる → brw が拒否して `brw create` を案内 → `brw create demo` で worktree（`.claude/worktrees/dev-demo`）を作成 → brief.md は worktree の中に作られ、本体（develop）には無い |
+| H（Claude Code・Codex。`dev/demo` の上で `/kiro-validate-impl demo`・`$kiro-validate-impl demo`。偽の `gh` が PR 無しを返す） | 両ツールとも、検証の入力で状態が作られ、終了を 1 回止めた（状態が停止済みになった）。モデルは止められた後、GO でないため PR を作らない理由を答えた |
+
+事実:
+1. brw を重ねても work-branch-gate は行き詰まらない。`git switch` の試行で拒否をやめる設計（3.7）と、複合コマンドの分類の修正（1.3 の結果）が効いた。
+2. 終了の停止は、Claude Code・Codex の両方で実際に働いた（停止したことは状態の `stopped` で確認。停止の理由が利用者へ見える形は、ストリームでは確認していない）。
+3. 手順書の先読み（kiro-gate）と同時に動いても、どちらの案内・拒否も機能した（G・H で kiro-gate の登録も有効）。
+
+未確認:
+- 同じセッションで `brw create` の worktree へ移った後に `kiro-validate-impl` を入力して Stop が worktree のブランチで判定される流れ（`-p` では 1 回の入力しか送れないため、実機では確かめていない。入口の統合試験で、`location` による判定を確かめた）。
+- 実際の `gh pr create`・`brw publish` による PR の作成（偽の `gh` のみ）。
+- Codex に brw を重ねた構成（brw の Codex 用の登録に信頼の承認が要る）。

@@ -4,9 +4,12 @@
 //   B: 試作の関門（基底ブランチの間、編集ツールを拒否）で、拒否→ブランチ作成→編集の流れが両ツールで成立するか
 //   C: B に branch-release-workflow（brw）のフックを重ねたとき、拒否が衝突せず brw の手順へ移るか（Claude Code）
 //   D: gh が無い・未認証のときの PR の有無の判定が、止めずに通せるか
+//   G: F に別の仕組み（brw）を重ねたとき、行き詰まらず作業ブランチ（worktree）で作業できるか（Claude Code）
+//   H: 配置した入口の終了の停止（PR が無ければ 1 回止める）が、両ツールで成立するか（偽の gh を使う）
 //   F: 配置した入口（cc-sdd-bootstrap init で入れた work-branch-gate）で、基底ブランチ上の対象の入力 → 案内 → 拒否 → 切り替え → 作業が両ツールで成立するか
 // 使い方: node poc/work-branch-flow/run.mjs [A] [B] [C] [D]   認証済みの claude・codex、git、Node.js 22 が要る。
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import {
   check, observe, summary, run, git, makeRepo, registerHooks, records, resetLog, invoke, succeeded, finalAnswer, brwRoot, scratch,
@@ -203,6 +206,80 @@ if (enabled('F')) {
     check(`F ${tool}: develop には brief.md が入っていない`, !git(dir, 'ls-tree', '-r', '--name-only', 'develop').stdout.includes('brief.md'));
     observe(`F ${tool}: 最終の答え`, finalAnswer(tool, result).slice(0, 200).replace(/\n/g, ' '));
     fs.writeFileSync(path.join(scratch, `f-${tool}.out.txt`), text);
+  }
+}
+
+// ---- G・H: 別の仕組みを重ねた構成と終了の停止（work-branch-flow タスク 5.1） ----
+const repoRootForGH = path.resolve(import.meta.dirname, '../..');
+const skillText = (name, body) => `---\nname: ${name}\ndescription: 確認用の手順書（${name}）\n---\n\n# ${name}\n\n${body}\n`;
+function deployedRepo(name, { brw = false } = {}) {
+  const dir = makeRepo(name);
+  if (brw) {
+    fs.writeFileSync(path.join(dir, '.branch-release-workflow.json'), `${JSON.stringify({
+      workBranches: ['develop', 'dev/*'], protectedBranches: ['main'], baseBranch: 'develop',
+      namePattern: '^dev/[a-z0-9]+(-[a-z0-9]+)*$', autoApprove: { push: true, pullRequest: true }, preview: { provider: 'none' },
+    }, null, 2)}\n`);
+    git(dir, 'add', '-A'); git(dir, 'commit', '-q', '-m', 'brw declaration'); git(dir, 'push', '-q', 'origin', 'develop');
+  }
+  const init = run(process.execPath, [path.join(repoRootForGH, 'bin/cc-sdd-bootstrap.mjs'), 'init'], { cwd: dir });
+  if (init.status !== 0) throw new Error(`init に失敗: ${init.stderr}`);
+  return dir;
+}
+function fakeBin(name, scripts) {
+  const bin = path.join(scratch, name);
+  fs.rmSync(bin, { recursive: true, force: true });
+  fs.mkdirSync(bin, { recursive: true });
+  for (const [cmd, text] of Object.entries(scripts)) fs.writeFileSync(path.join(bin, cmd), text, { mode: 0o755 });
+  return bin;
+}
+function workBranchStates(since) {
+  const dir = path.join(os.tmpdir(), 'cc-sdd-bootstrap-work-branch');
+  if (!fs.existsSync(dir)) return [];
+  return fs.readdirSync(dir).map((f) => path.join(dir, f)).filter((f) => fs.statSync(f).mtimeMs >= since)
+    .map((f) => { try { return JSON.parse(fs.readFileSync(f, 'utf8')); } catch { return null; } }).filter(Boolean);
+}
+
+if (enabled('G')) {
+  console.log('\n## G: 別の仕組み（brw）を重ねる（Claude Code）');
+  const dir = deployedRepo('g-claude', { brw: true });
+  for (const base of ['.claude/skills']) {
+    fs.mkdirSync(path.join(dir, base, 'kiro-discovery'), { recursive: true });
+    fs.writeFileSync(path.join(dir, base, 'kiro-discovery/SKILL.md'), skillText('kiro-discovery', '手順: `.kiro/specs/demo/brief.md` というファイルを作り、内容を `# Brief: demo` の 1 行にして、「完了」と答える。'));
+  }
+  const bin = fakeBin('bin-g', { brw: `#!/bin/sh\nexec node ${JSON.stringify(path.join(brwRoot, 'scripts/brw.mjs'))} "$@"\n` });
+  const result = invoke('claude', dir, '/kiro-discovery demo 作業用ブランチは dev/demo にしてよい。', { pluginDir: brwRoot, extraPath: bin, tools: 'Bash,Read,Write,Edit,Agent,Skill' });
+  check('G: 実行が成功した', succeeded(result));
+  const text = `${result.stdout}\n${result.stderr}`;
+  fs.writeFileSync(path.join(scratch, 'g-claude.out.txt'), text);
+  const wts = git(dir, 'worktree', 'list', '--porcelain').stdout.split('\n').filter((l) => l.startsWith('worktree ')).map((l) => l.slice(9)).filter((p) => p !== dir);
+  observe('G: worktree', wts.join(', ') || 'なし');
+  observe('G: brw の案内（brw create / brw resume）が会話に現れた', String(/brw (create|resume)/.test(text)));
+  check('G: 別の仕組みが worktree を作り、行き詰まらなかった', wts.length > 0);
+  const where = wts.find((w) => fs.existsSync(path.join(w, '.kiro/specs/demo/brief.md')));
+  check('G: brief.md は worktree（作業ブランチ）の中に作られた', Boolean(where));
+  check('G: 本体の checkout（develop）には brief.md が無い', !fs.existsSync(path.join(dir, '.kiro/specs/demo/brief.md')));
+  observe('G: 最終の答え', finalAnswer('claude', result).slice(0, 200).replace(/\n/g, ' '));
+}
+
+if (enabled('H')) {
+  console.log('\n## H: 終了の停止（PR が無ければ 1 回止める。偽の gh を使う）');
+  const bin = fakeBin('bin-h', { gh: `#!/bin/sh\nif [ "$1 $2" = "pr list" ]; then echo '[]'; exit 0; fi\necho "gh: poc では未対応" >&2\nexit 1\n` });
+  for (const tool of tools) {
+    const dir = deployedRepo(`h-${tool}`);
+    git(dir, 'switch', '-q', '-c', 'dev/demo');
+    for (const base of ['.claude/skills', '.agents/skills']) {
+      fs.mkdirSync(path.join(dir, base, 'kiro-validate-impl'), { recursive: true });
+      fs.writeFileSync(path.join(dir, base, 'kiro-validate-impl/SKILL.md'), skillText('kiro-validate-impl', '手順: 検証の結果を「GO」と 1 行で報告する。ファイルは作らない。'));
+    }
+    const since = Date.now() - 1000;
+    const prompt = tool === 'claude' ? '/kiro-validate-impl demo' : '$kiro-validate-impl demo';
+    const result = invoke(tool, dir, prompt, { extraPath: bin, tools: 'Bash,Read,Write,Edit,Agent,Skill' });
+    check(`H ${tool}: 実行が成功した`, succeeded(result));
+    fs.writeFileSync(path.join(scratch, `h-${tool}.out.txt`), `${result.stdout}\n${result.stderr}`);
+    const states = workBranchStates(since).filter((st) => st.validated);
+    observe(`H ${tool}: 検証後の状態`, JSON.stringify(states.map((st) => st.validated)));
+    check(`H ${tool}: 検証の入力で状態が作られ、終了を 1 回止めた（停止済みになった）`, states.some((st) => st.validated.stopped === true));
+    observe(`H ${tool}: 最終の答え`, finalAnswer(tool, result).slice(0, 220).replace(/\n/g, ' '));
   }
 }
 

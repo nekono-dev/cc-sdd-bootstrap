@@ -66,7 +66,7 @@
   - _Requirements: 6.1, 6.2, 6.3, 6.4, 6.5, 7.1, 7.4_
 
 - [ ] 5. 実機で全体を確かめる
-- [ ] 5.1 別の仕組みを重ねた構成と PR の停止を実機で確かめる
+- [x] 5.1 別の仕組みを重ねた構成と PR の停止を実機で確かめる
   - 前提: 1.3 と同じ。別の仕組み（ブランチと PR の作成を別の手順に集約する仕組み）を重ねた構成は Claude Code で確かめる（Codex は登録に信頼の承認が要るため、確かめられなければ未確認として残す）
   - 別の仕組みがブランチの作成を拒否して別の手順を案内しても行き詰まらず、案内に従って作業ブランチで作業できること、同じセッションで worktree へ移った後の検証で PR が無ければ 1 回止まって 2 回目は通ること、手順書の先読みの拒否と重なっても案内が最終的に届くことを確かめ、結果を `result.md` に追記する
   - _Depends: 4.1_
@@ -85,3 +85,4 @@
 - 3.1: `decideStop` は、型が想定外（`stopHookActive` が真偽値でない、`validated.stopped` が偽でない、`prExists` が偽でない、`branch` が文字列でない、`bases` が配列でない）のときは必ず通す。止めるのは全部が明示的に満たされたときだけ。`messagePrContext` は GO・NO-GO・MANUAL_VERIFY_REQUIRED の 3 つの結果（`kiro-validate-impl` の定義）を扱う。
 - 3.2: 2 つのフローの設定は独立。作業前のブランチ確保（対象の入力・通常の入力・他の kiro コマンド・PreToolUse）は `workflow.branchGate`、検証後の PR（`kiro-validate-impl` の入力・Stop）は `workflow.prAfterValidate` だけに従う。Stop は入口で `prAfterValidate` を再確認する（検証入力の後に無効にされても止めない）。停止は、状態の保存に成功してから出力する。Codex の承認の記録の件数は 10 → 11（Stop は両ツールに足すが、Codex の設定に書かれるのは Codex 分の 1 件）。
 - 4.1: 運用の区画の文章は、拒否と停止を断定せず実挙動の条件で書く（拒否は入力ごとに最大 2 回で、作成・切り替えを試みた後と判定できないときは拒否しない。停止は PR が無いと判定できたときだけ）。区画の CLAUDE.md・AGENTS.md への書き込みは導入側の `install-rules.mjs` の `replaceSection` が行う。このリポジトリ自身の CLAUDE.md・AGENTS.md への反映は、導入コマンドの更新（自己適用）で行う（この spec の範囲外）。
+- 5.1: 実機で、別の仕組みを重ねた構成（Claude Code）が行き詰まらず worktree で作業でき、終了の停止が両ツールで働くことを確かめた（`poc/work-branch-flow/result.md` の場面 G・H）。未確認として残す: 同じセッションで worktree へ移った後の検証での Stop（統合試験で確認）、実際の PR の作成、Codex に別の仕組みを重ねた構成。
