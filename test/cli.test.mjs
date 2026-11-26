@@ -190,13 +190,13 @@ test("途中失敗は失敗・済み・未処理・再実行する操作を表�
 /** config.toml の承認の記録の数（trusted_hash の行の数） */
 const recordCount = (text) => (text.match(/trusted_hash/g) ?? []).length;
 
-test("init は自分のフック 10 件の承認の記録を書き、信頼の案内を出さない", async (t) => {
+test("init は自分のフック 11 件の承認の記録を書き、信頼の案内を出さない", async (t) => {
   const root = temporary(t);
   const iso = codexIsolation(t);
   const streams = io(root, iso);
   assert.equal(await runCli(["init"], streams.value), 0);
   const config = fs.readFileSync(path.join(iso.codexHome, "config.toml"), "utf8");
-  assert.equal(recordCount(config), 10);
+  assert.equal(recordCount(config), 11);
   const output = streams.output().stdout;
   assert.ok(output.includes(TRUST_WRITTEN), output);
   assert.ok(!output.includes(TRUST_NOTE), output);
@@ -316,7 +316,7 @@ async function primeRecords(root, iso) {
   assert.equal(await runCli(["init"], io(root, iso).value), 0);
   assert.equal(await runCli(["update"], io(root, iso).value), 0);
   const config = path.join(iso.codexHome, "config.toml");
-  assert.equal(recordCount(fs.readFileSync(config, "utf8")), 10);
+  assert.equal(recordCount(fs.readFileSync(config, "utf8")), 11);
   return config;
 }
 
@@ -339,10 +339,10 @@ test("worktree の uninstall は承認の記録を外さず理由を出し、本
   const iso = codexIsolation(t);
   const config = path.join(iso.codexHome, "config.toml");
 
-  // 本体で init（記録 10 件）し、commit してから worktree を作る
+  // 本体で init（記録 11 件）し、commit してから worktree を作る
   const initialized = io(main, iso);
   assert.equal(await runCli(["init"], initialized.value), 0, initialized.output().stderr);
-  assert.equal(recordCount(fs.readFileSync(config, "utf8")), 10);
+  assert.equal(recordCount(fs.readFileSync(config, "utf8")), 11);
   gitRun(main, ["add", "-A"]);
   gitRun(main, ["commit", "-q", "-m", "導入"]);
   const wt = path.join(base, "wt");

@@ -11,8 +11,10 @@ import {
   classifyPrompt,
   classifyToolCall,
   decidePreToolUse,
+  decideStop,
   isBaseBranch,
   messageGuidance,
+  messagePrContext,
   parseBaseBranches,
   resetDenials,
   workDirOf,
@@ -22,13 +24,14 @@ import {
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 const CONFIG_FILE = path.join(root, ".cc-sdd-bootstrap.json");
 const GIT_TIMEOUT_MS = 3000;
+const GH_TIMEOUT_MS = 8000;
 
 /** 引数（イベントと作業ツール）を検査する */
 function argumentsOf(argv) {
   const event = argv[0];
   const toolIndex = argv.indexOf("--tool");
   const tool = toolIndex >= 0 ? argv[toolIndex + 1] : null;
-  if (!new Set(["user-prompt-submit", "pre-tool-use"]).has(event)) {
+  if (!new Set(["user-prompt-submit", "pre-tool-use", "stop"]).has(event)) {
     throw new Error("フックの種類を判定できません。");
   }
   if (tool !== "claude" && tool !== "codex") throw new Error("作業ツールを判定できません。");
@@ -99,6 +102,7 @@ async function readSettings() {
   return {
     branchGate: settingOf(workflow, "branchGate"),
     bases: parseBaseBranches(settingOf(workflow, "baseBranches")),
+    prAfterValidate: settingOf(workflow, "prAfterValidate"),
   };
 }
 
@@ -121,7 +125,14 @@ function isState(value) {
     && typeof turn.skill === "string" && turn.skill !== ""
     && Number.isInteger(turn.denials) && turn.denials >= 0
     && typeof turn.switchTried === "boolean"
-    && (value.location === undefined || value.location === null || typeof value.location === "string");
+    && (value.location === undefined || value.location === null || typeof value.location === "string")
+    && isValidated(value.validated);
+}
+
+/** 検証後の状態の形を確かめる。無い（null・undefined）か、stopped が真偽値の対象 */
+function isValidated(value) {
+  if (value === undefined || value === null) return true;
+  return typeof value === "object" && !Array.isArray(value) && typeof value.stopped === "boolean";
 }
 
 async function loadState(file) {
@@ -133,8 +144,8 @@ async function loadState(file) {
     throw new Error("状態ファイルを読めません。");
   }
   if (!isState(value)) throw new Error("状態ファイルの形が正しくありません。");
-  // 作業場所を持たない古い形の状態は、場所なしとして扱う
-  return { ...value, location: value.location ?? null };
+  // 作業場所・検証後の状態を持たない古い形の状態は、無しとして扱う
+  return { ...value, location: value.location ?? null, validated: value.validated ?? null };
 }
 
 /** 一時ファイルに書いてから置き換える（途中で壊れた状態を残さない） */
@@ -201,6 +212,13 @@ function output(value) {
 async function userPromptSubmit(input, settings) {
   const target = classifyPrompt(input.prompt);
   const file = stateFile(input.session_id);
+  // 検証の入力（4.1）は検証後の PR の設定（prAfterValidate）に従う。作業前のブランチ確保の設定とは別
+  if (target !== null && target.kind === "validate-impl") {
+    await validateInput(file, settings);
+    return;
+  }
+  // 以降は作業前のブランチ確保（branchGate）に従う
+  if (!settings.branchGate) return;
   const state = await loadState(file);
   // コマンドを含まない通常の入力: 解除せず、拒否の回数だけ 0 に戻す（案内は出さない。2.4・3.5）
   if (target === null) {
@@ -210,7 +228,7 @@ async function userPromptSubmit(input, settings) {
     }
     return;
   }
-  // 対象以外の kiro コマンド（検証を含む）: 作業前のブランチ確保を解除する（2.4）
+  // 対象以外の kiro コマンド: 作業前のブランチ確保を解除する（2.4）。検証後の状態は消さない
   if (target.kind !== "target") {
     if (state.turn !== null) {
       state.turn = null;
@@ -221,11 +239,30 @@ async function userPromptSubmit(input, settings) {
   // 対象の入力: 以前の記録を引き継がず、改めて作る（2.5）
   state.turn = { skill: target.skill, denials: 0, switchTried: false };
   await saveState(file, state);
-
-  // 操作の入力が無いので、直近の作業場所（location）→ 入力の cwd の順に判定する
+  // 作業場所の候補: 直近の作業場所 → 入力の cwd（操作の入力が無い）
   const found = branchAt([state.location, cwdOf(input)]);
   if (found === null || !isBaseBranch(found.branch, settings.bases, originDefaultOf(found.cwd))) return;
   output({ hookSpecificOutput: { hookEventName: "UserPromptSubmit", additionalContext: messageGuidance(target.skill, found.branch) } });
+}
+
+/**
+ * 検証の入力（4.1・4.4・1.5）。prAfterValidate が無効なら、案内も検証後の状態も作らない。
+ * 有効なら、ブランチによらず検証後の状態（未停止）を作り、PR の案内を追加の文脈で出す。
+ * 作業前のブランチ確保が有効なときは、その記録（turn）も消す（2.2）。
+ */
+async function validateInput(file, settings) {
+  const state = await loadState(file);
+  if (!settings.prAfterValidate) {
+    if (settings.branchGate && state.turn !== null) {
+      state.turn = null;
+      await saveState(file, state);
+    }
+    return;
+  }
+  if (settings.branchGate) state.turn = null;
+  state.validated = { stopped: false };
+  await saveState(file, state);
+  output({ hookSpecificOutput: { hookEventName: "UserPromptSubmit", additionalContext: messagePrContext() } });
 }
 
 /**
@@ -274,14 +311,69 @@ async function preToolUse(input, settings, tool) {
   if (changed) await saveState(file, state);
 }
 
+/**
+ * ブランチの PR の有無を gh で求める（5.3）。引数の配列で起動し、ブランチ名が `-` で始まる形は渡さない。
+ * PR があれば真、無ければ偽（JSON 配列が空）。判定できなければ null（gh が無い・失敗・timeout・未認証・JSON 不正・配列でない）。
+ * @returns {boolean | null}
+ */
+function prExistsOf(cwd, branch) {
+  if (branch.startsWith("-")) return null;
+  const result = spawnSync("gh", ["pr", "list", `--head=${branch}`, "--state", "all", "--json", "number", "--limit", "1"], {
+    cwd, encoding: "utf8", timeout: GH_TIMEOUT_MS,
+  });
+  if (result.error || result.status !== 0) return null;
+  let value;
+  try {
+    value = JSON.parse(result.stdout);
+  } catch {
+    return null;
+  }
+  if (!Array.isArray(value)) return null;
+  return value.length > 0;
+}
+
+/**
+ * 終了の判断（5.1〜5.5）。検証後の状態が未停止で、作業ブランチに PR が無いときだけ 1 回止める。
+ * 止めるときは、停止済みを保存してから出力する（保存できないまま止めると、止まり続けるため）。
+ */
+async function stop(input, settings) {
+  // 検証後の PR の設定が無効なら、保存済みの検証後の状態があっても止めない（1.5）
+  if (!settings.prAfterValidate) return;
+  const file = stateFile(input.session_id);
+  const state = await loadState(file);
+  // 検証の案内が無い・停止済み・再開（stop_hook_active が真）では、git と gh を動かさずに通す
+  if (state.validated === null || state.validated.stopped || input.stop_hook_active === true) return;
+  // 作業場所の候補: 直近の作業場所 → 入力の cwd
+  const found = branchAt([state.location, cwdOf(input)]);
+  const branch = found === null ? null : found.branch;
+  const originDefault = found === null ? null : originDefaultOf(found.cwd);
+  // PR の確認は作業ブランチの上でだけ行う（基底・ブランチなしは止めないので確認しない）
+  const prExists = found !== null && !isBaseBranch(found.branch, settings.bases, originDefault)
+    ? prExistsOf(found.cwd, found.branch)
+    : null;
+  const decision = decideStop(state.validated, {
+    stopHookActive: typeof input.stop_hook_active === "boolean" ? input.stop_hook_active : null,
+    branch,
+    bases: settings.bases,
+    originDefault,
+    prExists,
+  });
+  if (!decision.block) return;
+  state.validated = { ...state.validated, stopped: true };
+  await saveState(file, state);
+  output({ decision: "block", reason: decision.reason });
+}
+
 async function run() {
   const { event, tool } = argumentsOf(process.argv.slice(2));
   const input = await readInput();
   const settings = await readSettings();
-  if (!settings.branchGate) return;
   if (event === "user-prompt-submit") {
     await userPromptSubmit(input, settings);
-  } else {
+  } else if (event === "stop") {
+    await stop(input, settings);
+  } else if (settings.branchGate) {
+    // 作業の拒否は作業前のブランチ確保（branchGate）にだけ従う
     await preToolUse(input, settings, tool);
   }
 }

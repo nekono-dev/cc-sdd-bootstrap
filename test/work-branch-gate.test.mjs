@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -261,7 +261,7 @@ test("Codex の対象の入力も、基底ブランチで追加の文脈を出�
 
 test("不明な引数（イベントや作業ツール）は出力せず終了 0 で通す", (t) => {
   const f = fixture(t);
-  const result = spawnSync(process.execPath, [f.entry, "stop", "--tool", "claude"], {
+  const result = spawnSync(process.execPath, [f.entry, "post-tool-use", "--tool", "claude"], {
     cwd: f.root, encoding: "utf8", input: JSON.stringify({ session_id: SESSION }), env: { ...process.env, TMPDIR: f.tmp },
   });
   assert.equal(result.status, 0);
@@ -388,12 +388,17 @@ test("通常の入力を挟むと拒否の回数が 0 に戻り、次の入力�
 });
 
 test("別の kiro コマンドの入力で作業前のブランチ確保を解除する（2.4）", (t) => {
-  for (const other of ["/kiro-spec-requirements x", "$kiro-validate-impl"]) {
-    const f = fixture(t);
-    prompt(f, "/kiro-discovery 新機能");
-    assert.equal(prompt(f, other).stdout, "", other);
-    assert.equal(pre(f, "Write", { file_path: path.join(f.root, "a.md") }).stdout, "", other);
-  }
+  const f = fixture(t);
+  prompt(f, "/kiro-discovery 新機能");
+  assert.equal(prompt(f, "/kiro-spec-requirements x").stdout, "");
+  assert.equal(pre(f, "Write", { file_path: path.join(f.root, "a.md") }).stdout, "");
+});
+
+test("検証の入力（kiro-validate-impl）も、作業前のブランチ確保を解除する（2.4・4.1）", (t) => {
+  const f = fixture(t);
+  prompt(f, "/kiro-discovery 新機能");
+  prompt(f, "$kiro-validate-impl");
+  assert.equal(pre(f, "Write", { file_path: path.join(f.root, "a.md") }).stdout, "");
 });
 
 test("解除の後の対象の入力は、以前の拒否の記録を引き継がず改めて判定する（2.5）", (t) => {
@@ -447,4 +452,226 @@ test("設定で branchGate が無効なら、対象の入力でも操作でも�
   const f = fixture(t, { config: '{"workflow":{"branchGate":false}}' });
   assert.equal(prompt(f, "/kiro-impl foo").stdout, "");
   assert.equal(pre(f, "Write", { file_path: path.join(f.root, "a.md") }).stdout, "");
+});
+
+/** 偽の gh を置いたディレクトリ。呼ばれた引数と場所を記録してから body を実行する */
+function fakeGh(t, body) {
+  const dir = mkdtempSync(path.join(os.tmpdir(), "fake-gh-"));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const file = path.join(dir, "gh");
+  writeFileSync(file, `#!/bin/sh\nprintf '%s\\n' "$@" > "${dir}/args.txt"\npwd -P > "${dir}/cwd.txt"\n${body}\n`);
+  chmodSync(file, 0o755);
+  return dir;
+}
+
+/** gh を含まず git だけを置いた PATH のディレクトリ（gh が無い環境の再現） */
+function gitOnlyDir(t) {
+  const dir = mkdtempSync(path.join(os.tmpdir(), "git-only-"));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const git = spawnSync("sh", ["-c", "command -v git"], { encoding: "utf8" }).stdout.trim();
+  symlinkSync(git, path.join(dir, "git"));
+  return dir;
+}
+
+/** 偽の gh を先頭に置いた PATH */
+function ghPath(dir) {
+  return `${dir}${path.delimiter}${process.env.PATH}`;
+}
+
+/** 任意の PATH（pathDir）と入力で、フックを 1 回動かす */
+function hookWith(f, event, tool, input, { cwd = f.root, pathDir } = {}) {
+  const env = { ...process.env, TMPDIR: f.tmp };
+  if (pathDir !== undefined) env.PATH = pathDir;
+  return spawnSync(process.execPath, [f.entry, event, "--tool", tool], {
+    cwd, encoding: "utf8", input: JSON.stringify(input), env,
+  });
+}
+
+function stopHook(f, input = {}, options = {}) {
+  return hookWith(f, "stop", "claude", { session_id: SESSION, cwd: f.root, stop_hook_active: false, ...input }, options);
+}
+
+/** 状態ファイルの中身。無ければ null */
+function stateOf(f, session = SESSION) {
+  try {
+    return JSON.parse(readFileSync(stateFile(f, session), "utf8"));
+  } catch {
+    return null;
+  }
+}
+
+function blockOf(result) {
+  assert.equal(result.status, 0, result.stderr);
+  return result.stdout === "" ? null : JSON.parse(result.stdout);
+}
+
+test("検証の入力は、基底ブランチの上でも案内を出し、検証後の状態を作る（4.1・4.4）", (t) => {
+  const f = fixture(t);
+  const output = JSON.parse(prompt(f, "/kiro-validate-impl foo").stdout).hookSpecificOutput;
+  assert.equal(output.hookEventName, "UserPromptSubmit");
+  assert.match(output.additionalContext, /PR/);
+  assert.deepEqual(stateOf(f).validated, { stopped: false });
+});
+
+test("prAfterValidate が無効なら、検証の入力で何も出さず、検証後の状態も作らない（1.5）", (t) => {
+  const f = fixture(t, { config: '{"workflow":{"prAfterValidate":false}}' });
+  assert.equal(prompt(f, "/kiro-validate-impl foo").stdout, "");
+  assert.equal(stateOf(f)?.validated ?? null, null);
+});
+
+test("通常の入力と他の kiro コマンドは、検証後の状態を消さず、案内も出さない", (t) => {
+  const f = fixture(t);
+  prompt(f, "/kiro-validate-impl foo");
+  assert.equal(prompt(f, "通常の依頼").stdout, "");
+  assert.equal(prompt(f, "/kiro-spec-status").stdout, "");
+  assert.deepEqual(stateOf(f).validated, { stopped: false });
+});
+
+test("作業ブランチで PR が無ければ終了を 1 回止め、2 回目は止めない（5.1・5.2）", (t) => {
+  const f = fixture(t);
+  git(f.root, ["switch", "-q", "-c", "feature/x"]);
+  const gh = fakeGh(t, "echo '[]'");
+  prompt(f, "/kiro-validate-impl foo");
+  const first = blockOf(stopHook(f, {}, { pathDir: ghPath(gh) }));
+  assert.equal(first.decision, "block");
+  assert.match(first.reason, /feature\/x/);
+  assert.match(first.reason, /PR/);
+  assert.match(readFileSync(path.join(gh, "args.txt"), "utf8"), /--head=feature\/x/);
+  assert.equal(stateOf(f).validated.stopped, true);
+  assert.equal(blockOf(stopHook(f, {}, { pathDir: ghPath(gh) })), null);
+  // 止めた後の作業ツリーには何も作られない（5.6）
+  assert.equal(git(f.root, ["status", "--porcelain"]), "");
+});
+
+test("stop_hook_active が真、または真偽値でなければ止めない（5.2）", (t) => {
+  const f = fixture(t);
+  git(f.root, ["switch", "-q", "-c", "feature/x"]);
+  const gh = fakeGh(t, "echo '[]'");
+  prompt(f, "/kiro-validate-impl foo");
+  assert.equal(blockOf(stopHook(f, { stop_hook_active: true }, { pathDir: ghPath(gh) })), null);
+  assert.equal(blockOf(stopHook(f, { stop_hook_active: "true" }, { pathDir: ghPath(gh) })), null);
+  assert.equal(stateOf(f).validated.stopped, false);
+});
+
+test("PR が既にあれば止めない（5.4）", (t) => {
+  const f = fixture(t);
+  git(f.root, ["switch", "-q", "-c", "feature/x"]);
+  const gh = fakeGh(t, "echo '[{\"number\":1}]'");
+  prompt(f, "/kiro-validate-impl foo");
+  assert.equal(blockOf(stopHook(f, {}, { pathDir: ghPath(gh) })), null);
+});
+
+test("PR の有無が判定できなければ（gh が無い・失敗・不正な JSON・配列でない）止めない（5.3）", (t) => {
+  const cases = [
+    ["gh が無い", gitOnlyDir(t)],
+    ["gh の失敗", fakeGh(t, "exit 1")],
+    ["不正な JSON", fakeGh(t, "echo 'not json'")],
+    ["配列でない", fakeGh(t, "echo '{}'")],
+  ];
+  for (const [name, pathDir] of cases) {
+    const f = fixture(t);
+    git(f.root, ["switch", "-q", "-c", "feature/x"]);
+    prompt(f, "/kiro-validate-impl foo");
+    const pathValue = pathDir.endsWith("git-only") || pathDir.includes("git-only-") ? pathDir : ghPath(pathDir);
+    assert.equal(blockOf(stopHook(f, {}, { pathDir: pathValue })), null, name);
+  }
+});
+
+test("基底ブランチの上では PR を確かめず、止めない（3.13・5.1）", (t) => {
+  const f = fixture(t);
+  const gh = fakeGh(t, "echo '[]'");
+  prompt(f, "/kiro-validate-impl foo");
+  assert.equal(blockOf(stopHook(f, {}, { pathDir: ghPath(gh) })), null);
+  assert.equal(existsSync(path.join(gh, "args.txt")), false);
+});
+
+test("検証の入力が無ければ止めない（5.5）", (t) => {
+  const f = fixture(t);
+  git(f.root, ["switch", "-q", "-c", "feature/x"]);
+  const gh = fakeGh(t, "echo '[]'");
+  assert.equal(blockOf(stopHook(f, {}, { pathDir: ghPath(gh) })), null);
+});
+
+test("cwd が git の外で作業場所も無ければ、止めない（3.9）", (t) => {
+  const f = fixture(t);
+  const gh = fakeGh(t, "echo '[]'");
+  prompt(f, "/kiro-validate-impl foo");
+  assert.equal(blockOf(hookWith(f, "stop", "claude", { session_id: SESSION, cwd: f.base, stop_hook_active: false }, { cwd: f.base, pathDir: ghPath(gh) })), null);
+});
+
+test("作業場所: worktree への Write の後の終了は、記録した worktree のブランチで判定し、gh も worktree で動かす（5.1・3.13）", (t) => {
+  const f = worktreeFixture(t);
+  const gh = fakeGh(t, "echo '[]'");
+  prompt(f, "/kiro-validate-impl foo");
+  assert.equal(pre(f, "Write", { file_path: path.join(f.wt, "a.md") }).stdout, "");
+  assert.equal(pre(f, "Read", { file_path: path.join(f.root, "a.md") }).stdout, "");
+  const block = blockOf(stopHook(f, {}, { pathDir: ghPath(gh) }));
+  assert.equal(block.decision, "block");
+  assert.match(block.reason, /feature\/x/);
+  assert.equal(readFileSync(path.join(gh, "cwd.txt"), "utf8").trim(), realpathSync(f.wt));
+});
+
+test("(a) branchGate が無効・prAfterValidate が有効なら、検証の案内と終了の停止は働く（1.1）", (t) => {
+  const f = fixture(t, { config: '{"workflow":{"branchGate":false,"prAfterValidate":true}}' });
+  git(f.root, ["switch", "-q", "-c", "feature/x"]);
+  const gh = fakeGh(t, "echo '[]'");
+  const output = JSON.parse(prompt(f, "/kiro-validate-impl foo").stdout).hookSpecificOutput;
+  assert.match(output.additionalContext, /PR/);
+  assert.deepEqual(stateOf(f).validated, { stopped: false });
+  const block = blockOf(stopHook(f, {}, { pathDir: ghPath(gh) }));
+  assert.equal(block.decision, "block");
+  assert.equal(blockOf(stopHook(f, {}, { pathDir: ghPath(gh) })), null);
+});
+
+test("(b) prAfterValidate が無効・branchGate が有効なら、検証の入力は何も出さず検証後の状態も作らず、作業前のブランチ確保は従来どおり拒否する（1.1・1.5）", (t) => {
+  const f = fixture(t, { config: '{"workflow":{"prAfterValidate":false}}' });
+  prompt(f, "/kiro-impl foo");
+  assert.equal(denial(pre(f, "Write", { file_path: path.join(f.root, "a.md") })).permissionDecision, "deny");
+  assert.equal(prompt(f, "/kiro-validate-impl foo").stdout, "");
+  assert.equal(stateOf(f)?.validated ?? null, null);
+});
+
+test("(c) 検証の入力の後に prAfterValidate を無効に書き換えると、保存済みの検証後の状態があっても終了は止めない（1.5）", (t) => {
+  const f = fixture(t);
+  git(f.root, ["switch", "-q", "-c", "feature/x"]);
+  const gh = fakeGh(t, "echo '[]'");
+  prompt(f, "/kiro-validate-impl foo");
+  assert.deepEqual(stateOf(f).validated, { stopped: false });
+  writeFileSync(path.join(f.root, ".cc-sdd-bootstrap.json"), '{"workflow":{"prAfterValidate":false}}');
+  assert.equal(blockOf(stopHook(f, {}, { pathDir: ghPath(gh) })), null);
+});
+
+test("(d) 両方が有効なら、検証の案内と終了の停止は従来どおり働く（1.1）", (t) => {
+  const f = fixture(t, { config: '{"workflow":{"branchGate":true,"prAfterValidate":true}}' });
+  git(f.root, ["switch", "-q", "-c", "feature/x"]);
+  const gh = fakeGh(t, "echo '[]'");
+  assert.match(JSON.parse(prompt(f, "/kiro-validate-impl foo").stdout).hookSpecificOutput.additionalContext, /PR/);
+  assert.equal(blockOf(stopHook(f, {}, { pathDir: ghPath(gh) })).decision, "block");
+});
+
+test("状態を保存できないときは、止める出力を出さず、標準エラーに書いて通す", { skip: process.getuid?.() === 0 && "root では権限で保存を失敗させられない" }, (t) => {
+  const f = fixture(t);
+  git(f.root, ["switch", "-q", "-c", "feature/x"]);
+  const gh = fakeGh(t, "echo '[]'");
+  prompt(f, "/kiro-validate-impl foo");
+  const dir = path.dirname(stateFile(f));
+  chmodSync(dir, 0o500);
+  let result;
+  try {
+    result = stopHook(f, {}, { pathDir: ghPath(gh) });
+  } finally {
+    chmodSync(dir, 0o700);
+  }
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.stdout, "");
+  assert.match(result.stderr, /状態ファイルを保存できません/);
+});
+
+test("状態ファイルの形が壊れていれば、止めずに通す（1.6 と同じ扱い）", (t) => {
+  const f = fixture(t);
+  git(f.root, ["switch", "-q", "-c", "feature/x"]);
+  const gh = fakeGh(t, "echo '[]'");
+  prompt(f, "/kiro-validate-impl foo");
+  writeFileSync(stateFile(f), JSON.stringify({ turn: null, validated: 7 }));
+  assert.equal(blockOf(stopHook(f, {}, { pathDir: ghPath(gh) })), null);
 });
