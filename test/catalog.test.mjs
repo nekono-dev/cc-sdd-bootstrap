@@ -397,7 +397,7 @@ test("feasibility-review の区画は両ツール向けに同じ項目を持ち�
       // 6. 実装中の食い違い（Blocked で戻す）
       "requirements.md", "design.md", "Blocked", "書き換え",
       // 7. フックの入力の停止と、通す手順
-      "止まります", "spec を特定できない", "名前なし", "個別",
+      "止まります", "止めた入力・止めた理由・次にやること", "応答の文章で示されます", "spec を特定できない", "名前なし", "個別",
       // 8. フックが動かない環境でも文章で守る
       "文章で守って",
     ]) {
@@ -445,4 +445,14 @@ test("freshness のフックは両ツールの SessionStart にだけ、timeout 
     tools: [tool], event: "SessionStart", script: "freshness.mjs", args: ["session-start", "--tool", tool], timeout: 10,
   })));
   assert.ok(freshness.every((hook) => hook.event === "SessionStart"));
+});
+
+test("session-install の区画は、導入が未完了のときの停止の理由が応答の文章で示されることを両ツールで含む（8.1）", () => {
+  const section = catalog.agentSections.find((item) => item.id === "session-install");
+  assert.ok(section, "session-install の区画が無い");
+  for (const tool of ["claude", "codex"]) {
+    for (const phrase of ["導入が未完了なら入力は止まります", "止めた理由と次にやることは応答の文章で示されます", "install-cc-sdd.mjs"]) {
+      assert.ok(section[tool].includes(phrase), `${tool}: ${phrase}`);
+    }
+  }
 });
