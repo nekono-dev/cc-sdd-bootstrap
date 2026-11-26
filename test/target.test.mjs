@@ -327,3 +327,32 @@ test("導入と取り外しの適用順に両フックと文書を含める", (t
     ".claude/settings.json", ".codex/hooks.json", "CLAUDE.md", "AGENTS.md",
   ]);
 });
+
+test("導入の読み取りは配布元の版を snapshot.source に入れ、node_modules の外では null を入れる（1.6）", (t) => {
+  const root = temporary(t);
+  const commit = "b".repeat(40);
+  // 配布物: <base>/node_modules/cc-sdd-bootstrap/（取り出し元の .package-lock.json と package-lock.json を 1・2 つ上に置く）
+  const base = temporary(t);
+  const packageRoot = path.join(base, "node_modules", "cc-sdd-bootstrap");
+  for (const file of catalog.files) {
+    fs.mkdirSync(path.dirname(path.join(packageRoot, file.path)), { recursive: true });
+    fs.writeFileSync(path.join(packageRoot, file.path), `同梱:${file.path}`);
+  }
+  fs.writeFileSync(path.join(base, "node_modules", ".package-lock.json"), JSON.stringify({
+    packages: { "node_modules/cc-sdd-bootstrap": { resolved: `git+https://example.invalid/r.git#${commit}` } },
+  }));
+  fs.writeFileSync(path.join(base, "package-lock.json"), JSON.stringify({
+    packages: { "": { dependencies: { "cc-sdd-bootstrap": "github:example/r#main" } } },
+  }));
+  const installed = readSnapshot(root, packageRoot, catalog, "init");
+  assert.deepEqual(installed.source, { commit, ref: "main" });
+
+  // 手元の checkout 相当（node_modules の下ではない）
+  const checkout = temporary(t);
+  for (const file of catalog.files) {
+    fs.mkdirSync(path.dirname(path.join(checkout, file.path)), { recursive: true });
+    fs.writeFileSync(path.join(checkout, file.path), `同梱:${file.path}`);
+  }
+  const local = readSnapshot(root, checkout, catalog, "init");
+  assert.deepEqual(local.source, { commit: null, ref: null });
+});

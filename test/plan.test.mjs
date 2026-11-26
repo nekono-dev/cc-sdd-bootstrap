@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { computePlan, assertAllowedPath } from "../lib/plan.mjs";
 import { catalog } from "../lib/catalog.mjs";
+import { RECORD_PATH } from "../.agent-hooks/cc-sdd-bootstrap/freshness-rules.mjs";
 
 const fields = [{ path: "sample.enabled", kind: "boolean", defaultValue: true, validate: (v) => typeof v === "boolean" ? null : "真偽値で指定してください" }];
 const sources = Object.fromEntries(catalog.files.map(({ path }) => [path, readFileSync(new URL(`../${path}`, import.meta.url))]));
@@ -161,6 +162,8 @@ test("両ツールの運用区画を配置し、同じ内容なら再配置し�
     if (change.path === ".codex/hooks.json") current.codexHooks = change.content;
     if (change.path === ".gitignore") current.gitignore = change.content;
     if (sectionPaths.includes(change.path)) current.deployDirFiles[change.path] = Buffer.from(change.content);
+    // 記録（1.6）も同じ状態として配置済みにする
+    if (change.path === RECORD_PATH) current.deployDirFiles[RECORD_PATH] = Buffer.from(change.content);
   }
   assert.deepEqual(run("update", current).changes, []);
 });
