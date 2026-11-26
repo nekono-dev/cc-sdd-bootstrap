@@ -71,6 +71,17 @@
   - 別の仕組みがブランチの作成を拒否して別の手順を案内しても行き詰まらず、案内に従って作業ブランチで作業できること、同じセッションで worktree へ移った後の検証で PR が無ければ 1 回止まって 2 回目は通ること、手順書の先読みの拒否と重なっても案内が最終的に届くことを確かめ、結果を `result.md` に追記する
   - _Depends: 4.1_
   - _Requirements: 3.5, 3.7, 3.13, 5.1, 5.2, 7.2_
+- [x] 5.2 自己適用する
+  - `node bin/cc-sdd-bootstrap.mjs update` で配置物・設定ファイル・フックの登録を反映し、結果をコミットする（`dev/self-apply-work-branch-feasibility`）
+  - `.cc-sdd-bootstrap.json` に `workflow.branchGate`・`workflow.prAfterValidate`・`workflow.baseBranches` が入り、`.claude/settings.json` と `.codex/hooks.json` に work-branch-gate の登録が入る。試験一式（`npm test`）が通る
+  - _Depends: 5.1_
+  - _Requirements: 1.1, 7.2_
+- [ ] 5.3 取り込み後の普通の checkout と worktree での確認
+  - 利用者が自己適用の PR を `develop` へ取り込んだ後、普通の checkout と worktree の両方で `update` を実行し、Claude Code で次を確かめる: 基底ブランチ上の `/kiro-discovery` などが拒否・案内され、brw の `brw create` で作った作業ブランチ（worktree）では通ること、worktree へ移った後の `/kiro-validate-impl` で PR が無ければ 1 回止まって 2 回目は通ること
+  - Codex では、フックの承認（`/hooks`）の後に同じ拒否・案内が届くかを確かめ、確かめられなかった項目（拒否→切り替え→作業の全体、停止理由の見え方、brw と重ねた構成）は未確認として結果に残す
+  - 確認の結果が `poc/work-branch-flow/result.md` に追記され、`spec.json` の phase とロードマップのチェックが更新される
+  - _Depends: 5.2_
+  - _Requirements: 3.5, 3.7, 5.1, 5.2, 7.2_
 
 ## Implementation Notes
 - 1.2: 操作の分類は設計の粗い分類から次のとおり細かくした。一覧表示だけの `git branch`・`git worktree list` は `read`（切り替えの試行にしない）、名前を取る `git branch`・`git worktree add|remove|prune|move`・`git switch`・`git checkout <ブランチ>` は `branch`、`git checkout -- <file>`・`git checkout .` は `work`。`rg --pre`・`git diff|log|show --output|--ext-diff|--textconv`・`sort -o`・`find -delete|-exec` などの書き込み・実行を伴うオプションは `work`（迷う形は `work` に倒す）。`git checkout <ファイル>`（`--` なし）はブランチと区別できず `branch` に分類する（残る限界）。

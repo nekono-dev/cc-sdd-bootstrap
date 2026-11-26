@@ -66,6 +66,17 @@
   - 確かめられない項目（Codex の追加の文脈の確認など）は、未確認として結果に残す
   - _Depends: 3.1_
   - _Requirements: 8.1, 8.2_
+- [x] 5.2 自己適用する
+  - `node bin/cc-sdd-bootstrap update` で配置物・フックの登録を反映し、結果をコミットする（`dev/self-apply-work-branch-feasibility`）
+  - `.claude/settings.json` と `.codex/hooks.json` に feasibility-gate の登録が入る。試験一式（`npm test`）が通る
+  - _Depends: 5.1_
+  - _Requirements: 8.1_
+- [ ] 5.3 取り込み後の普通の checkout と worktree での確認
+  - 利用者が自己適用の PR を `develop` へ取り込んだ後、普通の checkout と worktree の両方で `update` を実行し、Claude Code で次を確かめる: 実現性の記録（`feasibility.md`）が無い spec への `/kiro-impl` などが止まり、記録がある spec は通ること、worktree からでも記録の場所を見つけられること
+  - Codex では、フックの承認（`/hooks`）の後に同じ停止が届くかを確かめ、確かめられなかった項目（追加の文脈の確認、停止理由の見え方）は未確認として結果に残す
+  - 確認の結果が `poc/feasibility-review/result.md` に追記され、`spec.json` の phase とロードマップのチェックが更新される
+  - _Depends: 5.2_
+  - _Requirements: 8.1, 8.2_
 
 ## Implementation Notes
 - 1.1: 記録の解析は保守的。判定の行は行頭（空白なし）の `- 判定: <語>`（半角コロン）だけを数え、コードフェンス（CommonMark の規則）・HTML コメント・4 個以上の空白のインデント・引用・表の中は読まない。レベル 1・2 の見出しと、`=`・`---`・`***`・`___` の行（setext 見出し・水平線）は節の境界。節の中に水平線を書くと、その後の判定は読まれず null（止める側）になる。記録の書式（3 節・`- 判定:` の行）を人が書くときは、判定の行より前に水平線を置かない。記録は協力的なエージェントの確認漏れを防ぐ注意の関門で、悪意のある偽装を防ぐ安全境界ではない。

@@ -1,5 +1,120 @@
 {
   "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node '/home/ubuntu/.claude/plugins/cache/nekono-dev/branch-release-workflow/1.2.0/scripts/agent-hooks.mjs' codex PreToolUse"
+          }
+        ]
+      },
+      {
+        "matcher": "mcp__.*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node '/home/ubuntu/.claude/plugins/cache/nekono-dev/branch-release-workflow/1.2.0/scripts/agent-hooks.mjs' codex PreToolUse"
+          }
+        ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"$(git rev-parse --show-toplevel)/.agent-hooks/cc-sdd-bootstrap/kiro-gate.mjs\" pre-tool-use --tool codex",
+            "timeout": 10
+          }
+        ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"$(git rev-parse --show-toplevel)/.agent-hooks/cc-sdd-bootstrap/work-branch-gate.mjs\" pre-tool-use --tool codex",
+            "timeout": 10
+          }
+        ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"$(git rev-parse --show-toplevel)/.agent-hooks/cc-sdd-bootstrap/subagent-check.mjs\" pre-tool-use --tool codex",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node '/home/ubuntu/.claude/plugins/cache/nekono-dev/branch-release-workflow/1.2.0/scripts/agent-hooks.mjs' codex PostToolUse"
+          }
+        ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"$(git rev-parse --show-toplevel)/.agent-hooks/cc-sdd-bootstrap/kiro-gate.mjs\" post-tool-use --tool codex",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node '/home/ubuntu/.claude/plugins/cache/nekono-dev/branch-release-workflow/1.2.0/scripts/agent-hooks.mjs' codex Stop"
+          }
+        ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"$(git rev-parse --show-toplevel)/.agent-hooks/cc-sdd-bootstrap/kiro-gate.mjs\" stop --tool codex",
+            "timeout": 10
+          }
+        ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"$(git rev-parse --show-toplevel)/.agent-hooks/cc-sdd-bootstrap/work-branch-gate.mjs\" stop --tool codex",
+            "timeout": 15
+          }
+        ]
+      }
+    ],
+    "PermissionRequest": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node '/home/ubuntu/.claude/plugins/cache/nekono-dev/branch-release-workflow/1.2.0/scripts/agent-hooks.mjs' codex PermissionRequest"
+          }
+        ]
+      },
+      {
+        "matcher": "mcp__.*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node '/home/ubuntu/.claude/plugins/cache/nekono-dev/branch-release-workflow/1.2.0/scripts/agent-hooks.mjs' codex PermissionRequest"
+          }
+        ]
+      }
+    ],
     "SessionStart": [
       {
         "hooks": [
@@ -38,14 +153,12 @@
             "timeout": 10
           }
         ]
-      }
-    ],
-    "PreToolUse": [
+      },
       {
         "hooks": [
           {
             "type": "command",
-            "command": "node \"$(git rev-parse --show-toplevel)/.agent-hooks/cc-sdd-bootstrap/kiro-gate.mjs\" pre-tool-use --tool codex",
+            "command": "node \"$(git rev-parse --show-toplevel)/.agent-hooks/cc-sdd-bootstrap/work-branch-gate.mjs\" user-prompt-submit --tool codex",
             "timeout": 10
           }
         ]
@@ -54,85 +167,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node \"$(git rev-parse --show-toplevel)/.agent-hooks/cc-sdd-bootstrap/subagent-check.mjs\" pre-tool-use --tool codex",
+            "command": "node \"$(git rev-parse --show-toplevel)/.agent-hooks/cc-sdd-bootstrap/feasibility-gate.mjs\" user-prompt-submit --tool codex",
             "timeout": 10
-          }
-        ]
-      },
-      {
-        "matcher": "Bash",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "node '/home/ubuntu/.claude/plugins/cache/nekono-dev/branch-release-workflow/1.2.0/scripts/agent-hooks.mjs' codex PreToolUse"
-          }
-        ]
-      },
-      {
-        "matcher": "mcp__.*",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "node '/home/ubuntu/.claude/plugins/cache/nekono-dev/branch-release-workflow/1.2.0/scripts/agent-hooks.mjs' codex PreToolUse"
-          }
-        ]
-      }
-    ],
-    "PostToolUse": [
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "node \"$(git rev-parse --show-toplevel)/.agent-hooks/cc-sdd-bootstrap/kiro-gate.mjs\" post-tool-use --tool codex",
-            "timeout": 10
-          }
-        ]
-      },
-      {
-        "matcher": "Bash",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "node '/home/ubuntu/.claude/plugins/cache/nekono-dev/branch-release-workflow/1.2.0/scripts/agent-hooks.mjs' codex PostToolUse"
-          }
-        ]
-      }
-    ],
-    "Stop": [
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "node \"$(git rev-parse --show-toplevel)/.agent-hooks/cc-sdd-bootstrap/kiro-gate.mjs\" stop --tool codex",
-            "timeout": 10
-          }
-        ]
-      },
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "node '/home/ubuntu/.claude/plugins/cache/nekono-dev/branch-release-workflow/1.2.0/scripts/agent-hooks.mjs' codex Stop"
-          }
-        ]
-      }
-    ],
-    "PermissionRequest": [
-      {
-        "matcher": "Bash",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "node '/home/ubuntu/.claude/plugins/cache/nekono-dev/branch-release-workflow/1.2.0/scripts/agent-hooks.mjs' codex PermissionRequest"
-          }
-        ]
-      },
-      {
-        "matcher": "mcp__.*",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "node '/home/ubuntu/.claude/plugins/cache/nekono-dev/branch-release-workflow/1.2.0/scripts/agent-hooks.mjs' codex PermissionRequest"
           }
         ]
       }

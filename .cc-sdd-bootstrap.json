@@ -7,5 +7,10 @@
   "subagents": {},
   "codex": {
     "trustHooks": true
+  },
+  "workflow": {
+    "branchGate": true,
+    "prAfterValidate": true,
+    "baseBranches": "main,master,develop"
   }
 }
