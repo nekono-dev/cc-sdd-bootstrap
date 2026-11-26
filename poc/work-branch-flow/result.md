@@ -100,3 +100,23 @@
 
 - 場面 F・G・H ではストリームに出ず確認できなかった「入力時の案内（追加の文脈）が届いたか」を、`poc/feasibility-review/run.mjs D`（答えさせる手順書。片方のフックを外した対照つき）で確認した。基底ブランチ（`develop`）の上の `/kiro-impl demo`（Codex は `$kiro-impl demo`）で、work-branch-gate の案内（本文の「現在のブランチ 「develop」 は基底ブランチです」）が、feasibility-gate の案内と並んで、Claude Code・Codex の両方でモデルに届いた（要件 3.12・7.2）。作業前のブランチ確保を設定で無効にした対照では、同じ答えが「なし」になった。
 - 確認した範囲は、案内の本文の基底ブランチの文まで。案内の他の内容（切り替えの手順など）は単体試験で確かめている。
+
+## 追記: 取り込み後の普通の checkout と worktree での確認（2026-11-26、work-branch-flow タスク 5.3）
+
+- 実行: `node poc/work-branch-flow/post-merge-check.mjs`（新しく clone した develop `b2a489e` の普通の checkout と、そこから作った作業ブランチ `dev/demo` の worktree の両方で `update` を実行。Codex は一時の `CODEX_HOME`・`HOME` を使い、`update` が書いた承認の記録だけでフックを動かした（承認を省く指定は使っていない）。手順書は確認用の同名の手順書）。結果: **OK 26 件、NG 0 件**。
+
+| 場面 | Claude Code | Codex |
+|---|---|---|
+| W1 基底ブランチ（develop）上の `kiro-discovery` | 拒否・案内が届き、モデルが `dev/demo2` へ切り替えてから作業した。develop には brief.md が入らなかった | 案内が届き、`.git` が読み取り専用で作業ブランチを作れない理由を伝えて止まった。develop には brief.md が入らなかった |
+| W2 作業ブランチの worktree の `kiro-discovery` | 通り、brief.md が worktree に作られた（本体の checkout には無い） | 同左 |
+| W3 worktree で `kiro-validate-impl`（偽の `gh` が PR 無しを返す） | 終了が 1 回止まった（状態が停止済み） | 同左 |
+
+事実:
+1. 普通の checkout と worktree の両方で `update` が成功し、設定の `workflow`（`branchGate`・`prAfterValidate`）とフックの登録が入った。
+2. Codex は、`update` が書いた承認の記録だけで 3 つの場面のフックが動いた（`/hooks` の手動の承認は不要）。
+
+未確認として残す（`brw create` が実行環境の PATH に無く、実機では使っていない。作業ブランチの worktree は `git worktree add` で作った）:
+- `brw create` で作った worktree での拒否→切り替え→作業（brw を重ねた構成。Claude Code は場面 G で確認済み。Codex は未確認）。
+- Codex の拒否→切り替え→作業の全体（`.git` が読み取り専用のため、作業ブランチを作れず理由を伝えて止まる）。
+- Codex の停止理由の見え方（停止したことは状態で確認した）。
+- 同じセッションで worktree へ移った後の検証での Stop の実機、実際の PR の作成。
