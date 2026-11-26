@@ -11,7 +11,7 @@
   |---|---|---|
   | 追加の文脈はレビューには届くが、手順書が決めた出力の形には反映されない（観点が使われた証拠は記録に求める） | 実機の PoC | `poc/feasibility-review/result.md` の A（2026-11-25） |
   | Codex は子の依頼文が暗号化されフックから読めない。Claude Code は読める。文章での指示は両ツールで効く | 実機の PoC | 同 B1〜B3 |
-  | 入力の停止（`decision: block`）と Stop が両ツールで働く。Claude Code では停止の理由が利用者に示され、モデルには届かない（Codex では停止の理由が出力に出ない。利用者に見えるかは未確認） | 実機の PoC | `poc/req-feasibility/result.md`、`poc/work-branch-flow/result.md` の追記（`coexist.mjs`） |
+  | 入力の停止（`decision: block`）と Stop が両ツールで働く。停止の理由は、手元の `claude -p` では利用者に示され、モデルには届かない。リモートセッションの画面では示されず、Codex では出力に出なかったため、停止の届け方を visible-stop で変更した（2026-11-27。停止の案内を追加の文脈で渡し、応答の文章で示す） | 実機の PoC | `poc/req-feasibility/result.md`、`poc/work-branch-flow/result.md` の追記（`coexist.mjs`） |
   | 同じイベントの複数のフックの追加の文脈は Claude Code で両方届く | 実機の PoC | `poc/work-branch-flow/result.md` の追記（`coexist.mjs`） |
   | 配置した入口で、記録なし・未通過の入力が止まり、通過の記録を書くと通る（両ツール） | 実機の PoC | 同 `poc/feasibility-review/result.md` の C（2026-11-26） |
   | 同じ入力に並んだ複数のフックの追加の文脈（feasibility-gate・work-branch-gate）が、両ツールで両方届く（片方を外した対照つき） | 実機の PoC | 同 `poc/feasibility-review/result.md` の D（2026-11-26） |
