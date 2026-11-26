@@ -69,7 +69,10 @@ cc-sdd（Kiro 方式の仕様駆動開発のスキル集）の運用一式を、
 
 ## Direct Implementation Candidates
 
-- （なし）
+- （2026-11-26 の時点で次の 3 件。詳細は「基底ブランチ・導入コピーの同期（2026-11-26）」を参照）
+- [ ] main-sync -- リモートの既定ブランチ `main` が空（LICENSE のみ）で README の `npx` 手順が失敗する。`develop` を `main` へ取り込む PR を作る（コードの変更なし）。マージは利用者の許可を得て行う
+- [ ] worktree-install-guide -- worktree で `update` したときの案内（`lib/cli.mjs`）を、どこで何を実行すればよいかが分かる文面に直し、README に同じ手順を書く
+- [ ] codex-readonly-notice -- 更新時の「Codex の組み込みの子では読み取り専用を適用できない」表示（`subagent-roles.mjs`）を、既知の制約と分かる文面に直す
 
 ## Specs (dependency order)
 
@@ -91,3 +94,17 @@ cc-sdd（Kiro 方式の仕様駆動開発のスキル集）の運用一式を、
 - 2026-11-25: codex-hook-trust を実装し、develop に取り込んだ（PR #6）。取り込み後の worktree と普通の checkout での確認（5.3）も PASS。Codex のクラウドセッションとプロジェクトの信頼の付与は範囲外。
 - 2026-11-25: 利用者の指示で work-branch-flow を足した（作業前のブランチ作成と検証後の PR 作成の運用フロー。設定で on/off、既定 on。brw は知らない前提）。brief を書いた。
 - 2026-11-26: work-branch-flow・feasibility-review を実装し、develop に取り込んだ（PR #8・#9）。取り込み後の普通の checkout と worktree での確認（5.3）も、両ツールで OK 26 / NG 0。`brw create` を重ねた Codex の構成などは未確認として結果に残した。
+- [ ] install-freshness -- 導入時に配布元の版（コミット）と配置物の内容の指紋を記録し、セッション開始時に配置物が古い・欠けていることを検知して更新コマンドを案内する（自動更新はしない）。Dependencies: installer-core, session-install
+
+## 基底ブランチ・導入コピーの同期（2026-11-26）
+
+branch-release-workflow のリポジトリで `/kiro-discovery` を実行しても作業ブランチが切られず、`main` の上で仕様書が編集された。導入されていた `.agent-hooks/cc-sdd-bootstrap/` が、work-branch-flow を足す前の古いコピーだったため。引き継ぎメモの 4 件を次のように分けた（利用者の確認済み）。
+
+| メモの項目 | 扱い | 理由 |
+|---|---|---|
+| 既定ブランチ `main` が空 | 直接実装 main-sync | 運用どおり `dev/*` → `develop` → `main` の PR で足りる。コードの変更が無い |
+| 導入コピーが古いことを検知できない | 新しい spec install-freshness | 今回の直接の原因。導入時の記録とセッション開始時の判定という新しい境界になる |
+| worktree での導入の警告 | 直接実装 worktree-install-guide | 実害は「本体の checkout を更新し忘れると worktree の Codex でフックが動かない」こと。install-freshness で古さは検知できるので、文面と README の修正で足りる |
+| Codex の読み取り専用の子の表示 | 直接実装 codex-readonly-notice | 既知の制約の表示で実害は無い。失敗に見える文面だけを直す |
+
+- 2026-11-26: 上の分け方を決めた（利用者の指示）。install-freshness は版の記録とずれの案内までで、自動更新はしない。
