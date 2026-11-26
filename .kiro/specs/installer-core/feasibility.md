@@ -9,13 +9,13 @@
 ## 設計の確認
 - 判定: 通過
 - 根拠:
-  | 前提 | 根拠の種別 | 出典・PoC（場所と版／実行日・環境・結果） |
+  | 前提 | 根拠の種別 | 出典・確認の記録 |
   |---|---|---|
-  | `npx` で入口のコマンドが動く | 実機の PoC | `poc/npx-bin/`（`result.md`・`run.sh`） |
-  | 既存の設定ファイルへフックの登録を統合できる | 実機の PoC | `poc/settings-merge/` |
-  | Codex のフックのコマンドの形 | 実機の PoC | `poc/codex-hook-path/` |
-  | git の worktree での Codex のフックの読まれ方 | 実機の PoC | `poc/codex-worktree-hooks/` |
-  | 自己適用（このリポジトリへの導入）が動く | 実機の PoC | `poc/self-apply/` |
+  | `npx` で入口のコマンドが動く | 実機の PoC | 実機検証で確認済み（2026-11-19、Node.js v22.16.0・npm 10.9.2） |
+  | 既存の設定ファイルへフックの登録を統合できる | 実機の PoC | 実機検証で確認済み（2026-11-19、Claude Code 2.1.325） |
+  | Codex のフックのコマンドの形 | 実機の PoC | 実機検証で確認済み（2026-11-23、Codex CLI 0.167.0・Node.js v22.16.0） |
+  | git の worktree での Codex のフックの読まれ方 | 実機の PoC | 実機検証で確認済み（2026-11-24、Codex CLI 0.167.0・Node.js v22.16.0） |
+  | 自己適用（このリポジトリへの導入）が動く | 実機の PoC | 実装中の実機検証で確認済み（2026-11-24、Claude Code 2.1.329・Codex CLI 0.167.0。git の worktree の中で実行） |
 - 未確認: なし（実装・検証済み。`spec.json` の phase は `implementation-complete`）
 
 ## タスク計画の確認

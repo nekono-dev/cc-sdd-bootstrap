@@ -49,7 +49,7 @@
 
 - [ ] 3. 既存の記録の書き換え
 
-- [ ] 3.1 (P) installer-core・session-install・codex-hook-trust の `feasibility.md` の根拠を一文にする
+- [x] 3.1 (P) installer-core・session-install・codex-hook-trust の `feasibility.md` の根拠を一文にする
   - 3 つの spec の根拠の各行について、指している `poc/…` のファイルと該当する実行・節を、一時ディレクトリの対応表に書き出す。実行日・環境と版は、その実行・節の記載から取り、書かれていない項目は「記録なし」とする（ディレクトリの先頭の記載で代用しない）
   - 各行を「〜が〜であることは、〈段階〉の前の実機検証（〈実行日〉、〈環境と版〉）で確認済み」の一文にし、リンクは付けない。表の列は `前提 | 根拠の種別 | 出典・確認の記録` のままにする
   - 対応表は一時ディレクトリに残し、リポジトリには置かない。差分を人が確認する
@@ -57,13 +57,13 @@
   - _Boundary: 既存記録の書き換え_
   - _Requirements: 8.2, 8.3, 8.4_
 
-- [ ] 3.2 (P) kiro-gate・subagent-delegation の `feasibility.md` の根拠を一文にする
+- [x] 3.2 (P) kiro-gate・subagent-delegation の `feasibility.md` の根拠を一文にする
   - 3.1 と同じ手順（対応表・一文・リンクなし・記載の無い項目は「記録なし」）で書き換える
   - 完了の状態: 2 つの記録に `poc/` の場所が無く、すべての根拠が一文で、判定の行は変わらない
   - _Boundary: 既存記録の書き換え_
   - _Requirements: 8.2, 8.3, 8.4_
 
-- [ ] 3.3 (P) work-branch-flow・feasibility-review・install-freshness の `feasibility.md` の根拠を一文にする
+- [x] 3.3 (P) work-branch-flow・feasibility-review・install-freshness の `feasibility.md` の根拠を一文にする
   - 3.1 と同じ手順で書き換える。複数の spec が同じ PoC を根拠にしていたもの（例: 実現性の確認の PoC）は、各記録で同じ一文の形にする
   - 完了の状態: 3 つの記録に `poc/` の場所が無く、すべての根拠が一文で、判定の行は変わらない
   - _Boundary: 既存記録の書き換え_

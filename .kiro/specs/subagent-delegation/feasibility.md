@@ -9,12 +9,12 @@
 ## 設計の確認
 - 判定: 通過
 - 根拠:
-  | 前提 | 根拠の種別 | 出典・PoC（場所と版／実行日・環境・結果） |
+  | 前提 | 根拠の種別 | 出典・確認の記録 |
   |---|---|---|
-  | 子の定義ファイル（`.claude/agents`・`.codex/agents`）で子を起動でき、モデルを指定できること | 実機の PoC | `poc/subagent-defs/`（a・b） |
-  | 推論量の指定と見え方 | 実機の PoC | `poc/subagent-effort/` |
-  | 子の定義ファイルの権限（読み取り専用の道具だけの子は書けないこと、Codex の定義の権限は効かないこと） | 実機の PoC | `poc/subagent-defs/`（a・b・c） |
-  | auto モードでの子（Claude Code の Agent）の起動と許可の決まり | 実機の PoC | `poc/subagent-permission/` |
+  | 子の定義ファイル（`.claude/agents`・`.codex/agents`）で子を起動でき、モデルを指定できること | 実機の PoC | 実機検証で確認済み（2026-11-23、Claude Code 2.1.329・Codex CLI 0.167.0） |
+  | 推論量の指定と見え方 | 実機の PoC | 実機検証で確認済み（2026-11-24、Claude Code 2.1.329・Codex CLI 0.167.0・Node.js v22.16.0） |
+  | 子の定義ファイルの権限（読み取り専用の道具だけの子は書けないこと、Codex の定義の権限は効かないこと） | 実機の PoC | 実機検証で確認済み（2026-11-23、Claude Code 2.1.329・Codex CLI 0.167.0） |
+  | auto モードでの子（Claude Code の Agent）の起動と許可の決まり | 実機の PoC | 実機検証で確認済み（2026-11-23、Claude Code 2.1.329） |
 - 未確認: なし（実装・検証済み。`spec.json` の phase は `implementation-complete`）
 
 ## タスク計画の確認
