@@ -43,7 +43,7 @@
 - 配置物（`.agent-hooks/cc-sdd-bootstrap/`）は `lib/` を import しない。`lib/` は配置物を使ってよい（既存の方向）。
 
 ### Revalidation Triggers
-- Codex の承認の識別情報（ハッシュの入力）の形、キーの形、`hooks.state` の書式の変更 → `poc/codex-hook-trust` を再実行し、`codex-trust-rules.mjs` を直す。
+- Codex の承認の識別情報（ハッシュの入力）の形、キーの形、`hooks.state` の書式の変更 → 実機で再確認し（結果は PoC 文書に残す）、`codex-trust-rules.mjs` を直す。
 - 導入のフックの登録形式（`OWNED_MARKER`、`hooks-merge` の書き出す項目）の変更。自分のフックの判定とハッシュの入力が変わる。
 - `buildCliCommand` の呼び出し側の変更（`delegate.mjs`）。
 - 設定ファイルの `format` を上げる変更（本機能の項目は `format: 1` のまま足す）。
@@ -79,7 +79,7 @@ graph TB
 |---|---|---|---|
 | CLI / 配置物 | Node.js 22+（ESM、外部パッケージなし） | ハッシュ計算、設定の部分編集、起動 | `node:crypto`・`node:fs`・`node:child_process` のみ |
 | 保存先 | `~/.codex/config.toml`（`CODEX_HOME` があればそちら） | 承認の記録 | TOML の該当の表だけを行単位で編集 |
-| 検証 | `node --test`、`poc/codex-hook-trust/` | 単体試験と実機の確認 | PoC は Codex の版を上げるたびに再実行 |
+| 検証 | `node --test`、実機検証（PoC） | 単体試験と実機の確認 | PoC は Codex の版を上げるたびに再確認（結果は PoC 文書に残す） |
 
 ## File Structure Plan
 
@@ -137,7 +137,7 @@ sequenceDiagram
 | 1.2 | 定義が変われば置き換える | `codex-trust-rules.mjs` | `planTrustEdit`（ハッシュを毎回再計算し、差があれば更新） |
 | 1.3 | 一致していれば変更しない | `codex-trust-rules.mjs` | `planTrustEdit` が同じ本文を返し、書き込みを省く |
 | 1.4 | 該当の記録だけを触る | `codex-trust-rules.mjs` | 表の `trusted_hash` の行だけを編集 |
-| 1.5 | 確認画面なしで動く | 実機の確認 | `poc/codex-hook-trust/run.mjs --e2e` |
+| 1.5 | 確認画面なしで動く | 実機の確認 | 実機検証（`--e2e` の場面） |
 | 1.6 | 読めない・書けない・想定外は変更せず案内 | `codex-trust.mjs` | `status: "failed"` と理由、手での承認の案内 |
 | 2.1 | 本体と worktree の両方で動く | `codex-trust.mjs` | 本体の checkout の `hooks.json` のキーで書く |
 | 2.2 | worktree から実行しても本体の記録 | `codex-trust.mjs` | `git rev-parse --git-common-dir` で本体を特定 |
@@ -157,7 +157,7 @@ sequenceDiagram
 | 6.1 | 本体の checkout の uninstall で一致する記録だけ外す | `lib/cli.mjs`、`codex-trust.mjs`、`codex-trust-rules.mjs` | `applyCodexTrust(remove)`（外す前の `hooks.json` から求め、現在のハッシュと一致する記録だけを外す。worktree からは外さない） |
 | 6.3 | 合わなくなっても壊れない | Codex の挙動 | 未承認になるだけ。設計での対応は不要 |
 | 6.4 | 手での承認の方法を文章で案内 | `lib/catalog.mjs` | Codex 向けの運用の区画の文章 |
-| 6.5 | 再実行できる確認手順 | `poc/codex-hook-trust/` | `run.mjs`・`probe.mjs`・`result.md` |
+| 6.5 | 再実行できる確認手順 | 実機検証（PoC、記録は削除済み） | `run.mjs`・`probe.mjs`・`result.md` |
 
 ## Components and Interfaces
 
@@ -203,7 +203,7 @@ export function planTrustEdit(configText, entries, mode) {}
 export function messageTrust(result) {}
 ```
 
-- 識別情報とハッシュ: `{ event_name, matcher?, hooks: [{ type: "command", command, timeout, async: false }] }` をキーの辞書順の JSON にして sha256（`poc/codex-hook-trust/result.md`）。`timeout` は未指定なら 600、1 未満は 1。`matcher` は指定があるときだけ含める。
+- 識別情報とハッシュ: `{ event_name, matcher?, hooks: [{ type: "command", command, timeout, async: false }] }` をキーの辞書順の JSON にして sha256（実機検証の記録）。`timeout` は未指定なら 600、1 未満は 1。`matcher` は指定があるときだけ含める。
 - イベント名は `SessionStart`→`session_start`、`UserPromptSubmit`→`user_prompt_submit`、`PreToolUse`→`pre_tool_use`、`PostToolUse`→`post_tool_use`、`Stop`→`stop`。表にないイベントは skipped。
 - 行単位の編集の規則: 見出し `[hooks.state."<キー>"]` を完全一致で探す。表の本体は次の見出しの前まで。`trusted_hash = "…"` の行だけを置き換える。無ければ見出しの直後へ足す。新しい表は本文の末尾に空行を挟んで足す。改行コード（LF・CRLF）と末尾の改行の有無を保つ。
 - 表に `enabled` など他の項目があるとき、`remove` は `trusted_hash` の行だけ外し表は残す。
@@ -280,13 +280,13 @@ Codex を起動する前に、`readTrustSetting(root)` が true なら `bypassFl
 | 記録が効かない（Codex の版の変更） | Codex は未承認として扱う。文章の補いに戻る | 6.3、6.4 |
 
 ## 既知の制約
-- **Codex のクラウドセッション**: 確認できた範囲（`poc/codex-hook-trust/cloud-result.md`、2 回）では、セッションの中の `~/.codex` は読み取り専用で `config.toml` は空、`codex exec` も初期化に失敗し、対象のリポジトリはセッション開始時には checkout されていなかった。セッションの中からは承認の記録を書けず、`failed`（要件 1.6）になる。クラウドでの承認の要否・準備スクリプトの時点での `~/.codex` の状態は未確認で、本機能の保証の範囲外とする（利用者の決定）。
+- **Codex のクラウドセッション**: 確認できた範囲（実機検証の記録、2 回）では、セッションの中の `~/.codex` は読み取り専用で `config.toml` は空、`codex exec` も初期化に失敗し、対象のリポジトリはセッション開始時には checkout されていなかった。セッションの中からは承認の記録を書けず、`failed`（要件 1.6）になる。クラウドでの承認の要否・準備スクリプトの時点での `~/.codex` の状態は未確認で、本機能の保証の範囲外とする（利用者の決定）。
 - **プロジェクトの信頼が前提**: Codex は、信頼していないプロジェクトでは `.codex/hooks.json` を読まない（承認を省く指定を付けても読まれない。`probe.mjs` の確認、信頼済みなら子のフックは約 4.5 秒で完了）。本機能はプロジェクトの信頼を与えず、検出もしない。結果の表示の末尾と運用の区画の文章で「プロジェクトが未信頼だとフックは読まれない。最初の確認画面か `codex exec --trust` で信頼する」と案内する。
-- **シンボリックリンク経由で開いたリポジトリ**: Codex は起動した道筋でキーを照合する（`poc/codex-hook-trust/probe.mjs` の A1・A2）。導入側は実体の道筋（`git` が返すもの）で書くので、リンク経由で開くと効かず、未承認として扱われる。手での承認か、実体の道筋で起動することで対処する。運用の区画の文章に 1 文で書く。
+- **シンボリックリンク経由で開いたリポジトリ**: Codex は起動した道筋でキーを照合する（実機検証の A1・A2）。導入側は実体の道筋（`git` が返すもの）で書くので、リンク経由で開くと効かず、未承認として扱われる。手での承認か、実体の道筋で起動することで対処する。運用の区画の文章に 1 文で書く。
 - **古い番号の記録**: 利用者がフックを足して番号がずれると、旧番号の記録が残る。無害だが溜まる。本機能は消さない（他の記録を変更しない、1.4）。
 - **`uninstall` で番号が詰まる**: 自分のフックを外すと、後ろにある利用者のフックの番号が変わり、その記録が効かなくなる場合がある。外す前の番号で、ハッシュが一致する自分の記録だけを外し、利用者のフックの記録には触れない。必要なら利用者が手で再承認する。
 - **「自分が書いた記録」の識別**: 状態ファイルを持たないので、書いたのが本機能か利用者の承認かは区別できない。`uninstall` では、外す定義と同じハッシュの記録は不要になる記録とみなして外し、一致しない記録は残す。
-- 計算式は Codex の内部実装に依存する。履歴の調査では導入以来ほぼ不変（`poc/codex-hook-trust/result.md`）。変わったら `run.mjs` が不一致を示し、案 B（子の承認の省略）が保険になる。
+- 計算式は Codex の内部実装に依存する。履歴の調査では導入以来ほぼ不変（実機検証の記録）。変わったら `run.mjs` が不一致を示し、案 B（子の承認の省略）が保険になる。
 
 ## Testing Strategy
 
@@ -307,7 +307,7 @@ Codex を起動する前に、`readTrustSetting(root)` が true なら `bypassFl
 - `test/config-schema.test.mjs`・`test/catalog.test.mjs`: 新しい項目と登録（4.1）、運用の区画の文章に手での承認の方法がある（6.4）。
 
 ### 実機（再実行できる確認）
-- `poc/codex-hook-trust/run.mjs --e2e`・`probe.mjs`: Codex の版を上げたときに再実行する（6.5）。
+- 実機検証（`run.mjs --e2e`・`probe.mjs`）: Codex の版を上げたときに再確認し、結果は PoC 文書に残す（6.5）。
 - 自己適用: `update` の後に、実際に書かれた記録で Codex が確認画面なしでフックを動かす（このリポジトリの普通の checkout と worktree）。
 
 ## Migration Strategy

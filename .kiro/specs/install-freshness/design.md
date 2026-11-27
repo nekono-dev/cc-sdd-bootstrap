@@ -100,9 +100,6 @@ test/
 ├── freshness.test.mjs         # 入口（entry-harness を使う）
 ├── source.test.mjs            # コミットの取り出し
 └── plan-record.test.mjs       # 計画に記録が入ること（または既存の plan 関連テストへ追加）
-poc/install-freshness/
-├── run.mjs              # 作成済み。外部の動作の前提の確認
-└── result.md            # 作成済み
 ```
 
 ### Modified Files
@@ -273,7 +270,7 @@ export function readSource(packageRoot: string): Source; // 失敗・形が違�
 - `freshness.test.mjs`（`entry-harness`）: 一致→出力なし、欠け・違い→追加の文脈、記録なし・壊れ→案内、`git` が失敗（擬似）でも照合は案内、想定外の失敗でも終了コード 0 で出力なし（2.x、3.3、3.4、5.x）。両ツールの `--tool` で同じ形になる（4.5）。
 
 ### E2E / 実機
-- 実際の `npx github:…#ref update` を一時のリポジトリで行い、記録のコミットが配布元のブランチの先頭に一致する（`poc/install-freshness/run.mjs` の場面 A の延長。1.1・1.4）。
+- 実際の `npx github:…#ref update` を一時のリポジトリで行い、記録のコミットが配布元のブランチの先頭に一致する（実機検証の場面 A の延長。1.1・1.4）。
 - 古い記録（コミットを書き換え）で、実際の `claude -p`・`codex exec` の文脈に案内が届く（場面 D の延長。4.5）。利用者への伝達そのものは保証しないため、合否には含めず、観測として記録する。
 - このリポジトリ自身に `update` を実行し、記録が作られ、次のセッションで案内が出ない（自己適用。2.6）。
 

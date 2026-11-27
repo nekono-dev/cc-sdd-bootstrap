@@ -8,15 +8,15 @@
 - **Feature**: `installer-core`
 - **Discovery Scope**: Extension（develop に取り込み済みの導入コマンド `bin/`・`lib/` を削り、Codex 向けを足す）
 - **Key Findings**:
-  - `.codex/hooks.json` は Claude Code の `hooks` と同じ形で、同じ統合の処理を使える。ただし Codex には `CLAUDE_PROJECT_DIR` 相当の環境変数が無く、フックの作業場所は起動した場所になる。コマンドはシェルの展開で根を求める形にする（`poc/codex-hook-path/`）。
-  - cc-sdd の導入（`--overwrite force`）は CLAUDE.md・AGENTS.md を丸ごと置き換える。運用の区画は導入の後に末尾へ足すだけでよく、区画の置き換えの処理は要らない（`poc/req-feasibility/doc-append.sh`）。導入コマンドが CLAUDE.md・AGENTS.md に触れるのは `uninstall` で区画を外すときだけになる。
+  - `.codex/hooks.json` は Claude Code の `hooks` と同じ形で、同じ統合の処理を使える。ただし Codex には `CLAUDE_PROJECT_DIR` 相当の環境変数が無く、フックの作業場所は起動した場所になる。コマンドはシェルの展開で根を求める形にする。
+  - cc-sdd の導入（`--overwrite force`）は CLAUDE.md・AGENTS.md を丸ごと置き換える。運用の区画は導入の後に末尾へ足すだけでよく、区画の置き換えの処理は要らない。導入コマンドが CLAUDE.md・AGENTS.md に触れるのは `uninstall` で区画を外すときだけになる。
   - 配置記録をやめても、配置先ディレクトリ（`.agent-hooks/cc-sdd-bootstrap/`）は一式だけの置き場なので、「中のカタログに無いファイルを消し、カタログのファイルを書く」で旧版の片付けができる（要件 3.4）。
 
 ## Research Log
 
 ### Codex のフックの設定の置き場所と書き方
 - **Context**: 要件 4.1 と対象と境界の「設定の置き場所・形式・承認の扱いは、設計前に実際の動作で確認する」。
-- **Sources Consulted**: `poc/codex-hook-path/run.mjs`（結果は `poc/codex-hook-path/result.md`）、`poc/req-feasibility/codex.sh`（`.codex/hooks.json` で SessionStart・UserPromptSubmit・PreToolUse・PostToolUse・Stop が動くこと）。Codex CLI 0.167.0。
+- **Sources Consulted**: 実機検証の記録（Codex のフックのコマンドの書き方）、実機検証の記録（`.codex/hooks.json` で SessionStart・UserPromptSubmit・PreToolUse・PostToolUse・Stop が動くこと）。Codex CLI 0.167.0。
 - **Findings**:
   - プロジェクトの `.codex/hooks.json` は、下のディレクトリで起動しても読まれる。
   - フックの作業場所はセッションの作業場所。相対の道筋は最上位で起動したときだけ解ける。
@@ -26,7 +26,7 @@
 
 ### git の worktree での Codex のフック（2026-11-24）
 - **Context**: タスク 7.2（自己適用の後の実機の確認）で、worktree の中で起動した Codex のフックが動かなかった。branch-release-workflow は作業ブランチを worktree で作るため、利用先でも同じことが起こる。
-- **Sources Consulted**: `poc/codex-worktree-hooks/run.sh`（結果は `poc/codex-worktree-hooks/result.md`）。Codex CLI 0.167.0。信頼の承認の記録の形は利用者の `~/.codex/config.toml`（`[hooks.state."<hooks.json の絶対の道筋>:<イベント>:…"]`）。
+- **Sources Consulted**: 実機検証の記録（git の worktree での Codex のフックの読まれ方）。Codex CLI 0.167.0。信頼の承認の記録の形は利用者の `~/.codex/config.toml`（`[hooks.state."<hooks.json の絶対の道筋>:<イベント>:…"]`）。
 - **Findings**:
   - worktree の中でも、読まれるのは本体の checkout の `.codex/hooks.json` だけ。worktree 側のファイルは、本体側に無くても読まれない。
   - フックの作業場所・入力の `cwd` はセッションの作業場所。`$(git rev-parse --show-toplevel)` は worktree の根になり、worktree 側のスクリプトが呼ばれる。
@@ -38,13 +38,13 @@
 
 ### CLAUDE.md・AGENTS.md と運用の区画
 - **Context**: 要件 5（2026-11-23 の利用者の指示による改訂）。
-- **Sources Consulted**: `poc/req-feasibility/doc-append.sh`、`poc/first-kiro-command/result.md`（CLAUDE.md が無くても最初の `/kiro-steering` が動く。クラウドでも確認）。
+- **Sources Consulted**: 実機検証の記録（CLAUDE.md が無くても最初の `/kiro-steering` が動く。クラウドでも確認）。
 - **Findings**: `--overwrite force` で両文書は標準の文書に置き換わり、末尾へ足した区画は入れ直しても 1 つになる。CLAUDE.md が無いことはセッションの実行を妨げない。
 - **Implications**: installer-core は区画の文章を「目印の行を含む完成した区画」のファイルとして配置し、session-install はそれをそのまま末尾に足す。目印の定義は installer-core だけが持つ（`uninstall` で外す側と同じ）。
 
 ### 引き継ぐ旧版の結論
-- `npx github:nekono-dev/cc-sdd-bootstrap` は認証なしで bin を動かし、カレントは実行した場所のまま、同梱のファイルは `import.meta.url` から読める。`package.json` の `files` で配る範囲を絞る（`poc/npx-bin/`）。
-- `.claude/settings.json` の同じイベントに利用者の組と一式の組を並べても両方が動く（`poc/settings-merge/`）。
+- `npx github:nekono-dev/cc-sdd-bootstrap` は認証なしで bin を動かし、カレントは実行した場所のまま、同梱のファイルは `import.meta.url` から読める。`package.json` の `files` で配る範囲を絞る。
+- `.claude/settings.json` の同じイベントに利用者の組と一式の組を並べても両方が動く。
 
 ## Architecture Pattern Evaluation
 
@@ -94,7 +94,7 @@
 - **Selected Approach**: 1。
 - **Rationale**: PoC で、今の形でも worktree 側のスクリプトが動くと分かった。ずれが起きても「フックが動かない・一部が動かない」だけでセッションは止まらず、AGENTS.md の指示で補える（信頼の承認が無いときと同じ扱い）。roadmap の「厳密さのためにコードを増やさない」に合う。
 - **Trade-offs**: 作業ブランチで登録を変えても、本体の checkout に取り込まれるまで worktree の Codex には効かない。7.2 の Codex の確認は、普通の checkout の写しで行う。
-- **Follow-up**: Codex の版を上げたら `poc/codex-worktree-hooks/run.sh` を再実行する（読む場所が worktree に変われば、案内を外せる）。
+- **Follow-up**: Codex の版を上げたら、実機で worktree での読まれ方を再確認する（結果は PoC 文書に残す。読む場所が worktree に変われば、案内を外せる）。
 
 ### Decision: フックの取り外しはコマンド単位（設計レビューの指摘）
 - 同じ組に利用者のコマンドが混ざることがあるので、組ごとではなく一式のコマンドだけを外し、空になった組を捨てる（今の `settings-hooks.mjs` の選別を引き継ぐ）。
@@ -106,10 +106,10 @@
 - 追跡中の CLAUDE.md は `.gitignore` に足しても除外されない — `init` で追跡を外す操作が要ることを示す（要件 5.5）。このリポジトリは `handoff-self-apply.md` の手順で行う。
 
 ## References
-- `poc/codex-hook-path/result.md` — Codex のフックのコマンドの書き方
-- `poc/codex-worktree-hooks/result.md` — git の worktree での Codex のフックの読まれ方
-- `poc/req-feasibility/result.md` — 両ベンダへの導入と、文書の置き換え・区画の書き足し
-- `poc/first-kiro-command/result.md` — CLAUDE.md が無い状態での最初の `/kiro-*`
+- 実機検証（記録は削除済み） — Codex のフックのコマンドの書き方
+- 実機検証（記録は削除済み） — git の worktree での Codex のフックの読まれ方
+- 実機検証（記録は削除済み） — 両ベンダへの導入と、文書の置き換え・区画の書き足し
+- 実機検証（記録は削除済み） — CLAUDE.md が無い状態での最初の `/kiro-*`
 - `.kiro/specs/installer-core/handoff-self-apply.md` — このリポジトリへの循環的な自己適用
 
 ## 参照したスキルと指針（2026-11-24 の改訂）

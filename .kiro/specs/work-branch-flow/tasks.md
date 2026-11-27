@@ -18,7 +18,7 @@
   - _Requirements: 1.4, 1.6, 2.1, 2.2, 2.3, 2.6, 3.1, 3.2, 3.3, 3.6, 3.9, 3.10, 3.11, 3.12, 7.5_
 - [x] 1.3 実機で配置した入口の拒否→案内→切り替え→作業を確かめる
   - 前提: 認証済みの `claude`・`codex`、一時の Codex の設定でのフックの信頼の承認（検証専用の承認の省略を使う）
-  - 一時のリポジトリに配置物とフックの登録を置き、基底ブランチで対象の入力を送って、Claude Code・Codex それぞれで、案内が届き、作業が拒否され、作業ブランチへ切り替えてから作業できることを確かめる。`poc/work-branch-flow/run.mjs` に場面を足し、結果を `result.md` に追記する
+  - 一時のリポジトリに配置物とフックの登録を置き、基底ブランチで対象の入力を送って、Claude Code・Codex それぞれで、案内が届き、作業が拒否され、作業ブランチへ切り替えてから作業できることを確かめる。実機の場面を足し、結果を PoC 文書に残す
   - Codex でブランチを作れない場合（`.git` が読み取り専用）に、作れない理由を伝えて止まることも確かめる。確かめられない項目は未確認として結果に残す
   - 前提が崩れたら以降に進まず、設計へ戻す
   - _Depends: 1.2_
@@ -79,7 +79,7 @@
 - [x] 5.3 取り込み後の普通の checkout と worktree での確認
   - 利用者が自己適用の PR を `develop` へ取り込んだ後、普通の checkout と worktree の両方で `update` を実行し、Claude Code で次を確かめる: 基底ブランチ上の `/kiro-discovery` などが拒否・案内され、brw の `brw create` で作った作業ブランチ（worktree）では通ること、worktree へ移った後の `/kiro-validate-impl` で PR が無ければ 1 回止まって 2 回目は通ること
   - Codex では、フックの承認（`/hooks`）の後に同じ拒否・案内が届くかを確かめ、確かめられなかった項目（拒否→切り替え→作業の全体、停止理由の見え方、brw と重ねた構成）は未確認として結果に残す
-  - 確認の結果が `poc/work-branch-flow/result.md` に追記され、`spec.json` の phase とロードマップのチェックが更新される
+  - 確認の結果が PoC 文書に残され、`spec.json` の phase とロードマップのチェックが更新される
   - _Depends: 5.2_
   - _Requirements: 3.5, 3.7, 5.1, 5.2, 7.2_
 
@@ -96,5 +96,5 @@
 - 3.1: `decideStop` は、型が想定外（`stopHookActive` が真偽値でない、`validated.stopped` が偽でない、`prExists` が偽でない、`branch` が文字列でない、`bases` が配列でない）のときは必ず通す。止めるのは全部が明示的に満たされたときだけ。`messagePrContext` は GO・NO-GO・MANUAL_VERIFY_REQUIRED の 3 つの結果（`kiro-validate-impl` の定義）を扱う。
 - 3.2: 2 つのフローの設定は独立。作業前のブランチ確保（対象の入力・通常の入力・他の kiro コマンド・PreToolUse）は `workflow.branchGate`、検証後の PR（`kiro-validate-impl` の入力・Stop）は `workflow.prAfterValidate` だけに従う。Stop は入口で `prAfterValidate` を再確認する（検証入力の後に無効にされても止めない）。停止は、状態の保存に成功してから出力する。Codex の承認の記録の件数は 10 → 11（Stop は両ツールに足すが、Codex の設定に書かれるのは Codex 分の 1 件）。
 - 4.1: 運用の区画の文章は、拒否と停止を断定せず実挙動の条件で書く（拒否は入力ごとに最大 2 回で、作成・切り替えを試みた後と判定できないときは拒否しない。停止は PR が無いと判定できたときだけ）。区画の CLAUDE.md・AGENTS.md への書き込みは導入側の `install-rules.mjs` の `replaceSection` が行う。このリポジトリ自身の CLAUDE.md・AGENTS.md への反映は、導入コマンドの更新（自己適用）で行う（この spec の範囲外）。
-- 5.1: 実機で、別の仕組みを重ねた構成（Claude Code）が行き詰まらず worktree で作業でき、終了の停止が両ツールで働くことを確かめた（`poc/work-branch-flow/result.md` の場面 G・H）。未確認として残す: 同じセッションで worktree へ移った後の検証での Stop（統合試験で確認）、実際の PR の作成、Codex に別の仕組みを重ねた構成。
-- 5.3: 取り込み後（develop `b2a489e`）の確認は `poc/work-branch-flow/post-merge-check.mjs`（新しく clone した普通の checkout と worktree。Codex は一時の `CODEX_HOME`・`HOME`、承認の記録は `update` が書いたものだけ）で OK 26 / NG 0。基底ブランチ上の拒否・案内、作業ブランチの worktree で通ること、検証後の終了の停止が両ツールで確かめられた。`brw create` は実行環境の PATH に無いため、worktree は `git worktree add` で作った（brw を重ねた構成は 5.1 の場面 G の確認のまま。Codex は未確認）。機能全体の完了。
+- 5.1: 実機で、別の仕組みを重ねた構成（Claude Code）が行き詰まらず worktree で作業でき、終了の停止が両ツールで働くことを確かめた（実機検証の場面 G・H）。未確認として残す: 同じセッションで worktree へ移った後の検証での Stop（統合試験で確認）、実際の PR の作成、Codex に別の仕組みを重ねた構成。
+- 5.3: 取り込み後（develop `b2a489e`）の確認は実機検証の確認（新しく clone した普通の checkout と worktree。Codex は一時の `CODEX_HOME`・`HOME`、承認の記録は `update` が書いたものだけ）で OK 26 / NG 0。基底ブランチ上の拒否・案内、作業ブランチの worktree で通ること、検証後の終了の停止が両ツールで確かめられた。`brw create` は実行環境の PATH に無いため、worktree は `git worktree add` で作った（brw を重ねた構成は 5.1 の場面 G の確認のまま。Codex は未確認）。機能全体の完了。

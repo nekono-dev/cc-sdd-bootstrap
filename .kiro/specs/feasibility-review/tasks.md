@@ -17,7 +17,7 @@
   - _Requirements: 4.4, 5.7, 5.8, 6.3, 8.1, 8.4, 8.5_
 - [x] 1.3 実機で配置した入口の停止と通過を確かめる
   - 前提: 認証済みの `claude`・`codex`、一時の Codex の設定でのフックの信頼の承認（検証専用の承認の省略を使う）
-  - 一時のリポジトリに配置物と登録を置き、記録のない spec の `/kiro-spec-tasks`・`/kiro-impl`（Codex は `$kiro-…`）が両ツールで入力の停止になり、通過の記録を書いた後は通ることを確かめる。`poc/feasibility-review/run.mjs` に場面 C を足し、結果を `result.md` に追記する
+  - 一時のリポジトリに配置物と登録を置き、記録のない spec の `/kiro-spec-tasks`・`/kiro-impl`（Codex は `$kiro-…`）が両ツールで入力の停止になり、通過の記録を書いた後は通ることを確かめる。実機の場面 C を足し、結果を PoC 文書に残す
   - 確かめられない項目は未確認として結果に残す。前提が崩れたら以降に進まず設計へ戻す
   - _Depends: 1.2_
   - _Requirements: 5.1, 5.2, 5.3, 5.6, 8.1_
@@ -74,7 +74,7 @@
 - [x] 5.3 取り込み後の普通の checkout と worktree での確認
   - 利用者が自己適用の PR を `develop` へ取り込んだ後、普通の checkout と worktree の両方で `update` を実行し、Claude Code で次を確かめる: 実現性の記録（`feasibility.md`）が無い spec への `/kiro-impl` などが止まり、記録がある spec は通ること、worktree からでも記録の場所を見つけられること
   - Codex では、フックの承認（`/hooks`）の後に同じ停止が届くかを確かめ、確かめられなかった項目（追加の文脈の確認、停止理由の見え方）は未確認として結果に残す
-  - 確認の結果が `poc/feasibility-review/result.md` に追記され、`spec.json` の phase とロードマップのチェックが更新される
+  - 確認の結果が PoC 文書に残され、`spec.json` の phase とロードマップのチェックが更新される
   - _Depends: 5.2_
   - _Requirements: 8.1, 8.2_
 
@@ -82,12 +82,12 @@
 - 1.1: 記録の解析は保守的。判定の行は行頭（空白なし）の `- 判定: <語>`（半角コロン）だけを数え、コードフェンス（CommonMark の規則）・HTML コメント・4 個以上の空白のインデント・引用・表の中は読まない。レベル 1・2 の見出しと、`=`・`---`・`***`・`___` の行（setext 見出し・水平線）は節の境界。節の中に水平線を書くと、その後の判定は読まれず null（止める側）になる。記録の書式（3 節・`- 判定:` の行）を人が書くときは、判定の行より前に水平線を置かない。記録は協力的なエージェントの確認漏れを防ぐ注意の関門で、悪意のある偽装を防ぐ安全境界ではない。
 - 1.1: `decideInput` は追加の指示（context）をまだ返さない。2.2・2.3 で足す。停止の対象は `kiro-spec-tasks`（設計）と `kiro-impl`（タスク計画）の表で、2.3 で `kiro-spec-quick`・`kiro-spec-batch` を足す。
 - 1.2: spec のディレクトリと記録は、実体のパスが `<根の実体>/.kiro/specs/<spec>/` の下にあるときだけ読む。`.kiro`・`.kiro/specs`・spec のディレクトリが外へのシンボリックリンクなら「特定できない」（通す）、記録のファイルが外へのリンク・壊れたリンクなら記録なし（止める側）。記録が読めないことは停止の条件で、標準エラーには書かない。入口自身の失敗（不正な JSON・例外）は標準エラーに 1 行を書いて通す。候補の根は今は 2 つ（入力の作業場所の git の根・スクリプトの位置の根）で、worktree の候補は 2.1 で `candidateRoots` に足す。Codex の承認の記録の件数は 11 → 12。
-- 1.3: 実機（Claude Code・Codex）で、記録のない・未通過の spec の `kiro-spec-tasks`・`kiro-impl` の入力が止まり、通過の記録を書くと通ることを確かめた（`poc/feasibility-review/result.md` の場面 C）。Codex は停止の理由が出力に出ない（モデルの応答も作業も無い）。PoC の実行では、`install-cc-sdd.mjs` を先に実行しないと、2 回目以降の入力が「導入中」で止まる。
+- 1.3: 実機（Claude Code・Codex）で、記録のない・未通過の spec の `kiro-spec-tasks`・`kiro-impl` の入力が止まり、通過の記録を書くと通ることを確かめた（実機検証の場面 C）。Codex は停止の理由が出力に出ない（モデルの応答も作業も無い）。PoC の実行では、`install-cc-sdd.mjs` を先に実行しないと、2 回目以降の入力が「導入中」で止まる。
 - 2.1: 候補の根は ① 入力の作業場所の git の根 ② スクリプトの位置の根 ③ `git worktree list --porcelain -z` の各 worktree（先頭 20 個まで。bare・prunable・存在しない・実体の重複は除く）。`-z` が使えない git では `--porcelain` に切り替え、引用符つきのパスは候補に入れない。worktree の一覧の解析は純粋な関数（`feasibility-gate-rules.mjs` の `parseWorktreeListZ`・`parseWorktreeListPorcelain`）。同名の spec が本体と worktree にあるときは、並びの先（入力の作業場所の根）を使う。
 - 2.2: 計画は文言だけだったが、出力に載せないと届かないため、判断の戻り値 `context` と入口の `additionalContext` の出力までを 2.2 に含めた。`kiro-spec-requirements`・`kiro-spec-design`・`kiro-validate-design` は常に追加の指示、`kiro-spec-tasks`・`kiro-impl` は止めないときに追加の指示（止めるときは入力の停止だけ）。`kiro-spec-quick`・`kiro-spec-batch` は 2.3 で扱う。文言は、記録の書式・やり直したら判定を未通過に戻すこと・通過にしてよい条件を共通で含む。「書き込みを機械的に拒否しない」（要件 6.3）は、機械的な拒否を作らないことで満たし、文言には入れていない。
 - 2.3: `kiro-spec-quick`・`kiro-spec-batch` は、spec 名が取れて spec が特定でき、設計が通過でなければ入力を止める（理由に個別の段階のコマンドで確認する案内）。名前なし・説明文が先頭・ディレクトリがまだ無い入力は、止めずに追加の指示で個別の確認を案内する（既知の限界: 名前なしの一括作成は止められない）。設計が通過の名前つきは出力なし。
 - 3.1: 運用の区画 `feasibility-review` は `feasibilityReviewSection(tool)` で両ツールに同じ 8 項目（呼び方だけ違う）。停止の条件は、記録の判定に従う形で書き、断定を避けた。このリポジトリ自身の CLAUDE.md・AGENTS.md への反映は、導入コマンドの更新（自己適用）で行う（この spec の範囲外）。
 - 4.1: 既存の完了済み 5 つの spec の記録は、移行用の記録（設計のやり直しではない）。このタスクは親が直接行い（データの記録で、実装役は使っていない）、記録の根拠の対応は別の提供元のレビューで確かめた（`subagent-delegation` の PoC の対応を 1 件直した）。`test/feasibility-records.test.mjs` が、5 つの記録が通過と読めることと、挙げた PoC の場所が実在することを固定する。
 - 4.2: work-branch-flow の記録は設計・タスク計画ともに通過。feasibility-review の記録は、タスク 5.1（並んだ追加の文脈の実機の確認）が済むまで、タスク計画の確認を未通過にしてある（未解決を残したまま通過にしない）。**5.1 が済んだら、`.kiro/specs/feasibility-review/feasibility.md` のタスク計画の確認の判定を `通過` に更新し、`test/feasibility-records.test.mjs` の期待（`tasks: "fail"`）を `"pass"` に直す。** この記録は親が直接書き、別の提供元のレビューで事実の対応を確かめた。
-- 5.1: 実機（Claude Code・Codex）で、同じ入力に並んだ 2 つのフック（feasibility-gate・work-branch-gate）の追加の文脈が両方届くことを、片方を外した対照つきで確かめた（`poc/feasibility-review/result.md` の場面 D）。対照では、外した側の案内だけが答えから消えた（偽陽性を避けるため）。Codex でも届いた。未確認のまま残す: Codex で停止の理由が利用者に見えるか、停止した入力の後の kiro-gate の先読みの状態。これを受けて、feasibility-review の記録のタスク計画の確認を `通過` に更新した（4.2 の予定どおり）。work-branch-flow の「入力時の案内が届いたか」の未確認も、この確認で解消した（確認した範囲は案内の本文の基底ブランチの文まで）。
-- 5.3: 取り込み後の確認は work-branch-flow の 5.3 と同じ実行（`poc/work-branch-flow/post-merge-check.mjs` の場面 F1）。worktree から本体の checkout の spec と記録を見つけ、記録が無ければ止まり通過なら通ることが、両ツールで確かめられた。最初の実行は同名の spec が worktree にもあって失敗したため、別名にして確かめ直した（試験の作り方の注意）。機能全体の完了。
+- 5.1: 実機（Claude Code・Codex）で、同じ入力に並んだ 2 つのフック（feasibility-gate・work-branch-gate）の追加の文脈が両方届くことを、片方を外した対照つきで確かめた（実機検証の場面 D）。対照では、外した側の案内だけが答えから消えた（偽陽性を避けるため）。Codex でも届いた。未確認のまま残す: Codex で停止の理由が利用者に見えるか、停止した入力の後の kiro-gate の先読みの状態。これを受けて、feasibility-review の記録のタスク計画の確認を `通過` に更新した（4.2 の予定どおり）。work-branch-flow の「入力時の案内が届いたか」の未確認も、この確認で解消した（確認した範囲は案内の本文の基底ブランチの文まで）。
+- 5.3: 取り込み後の確認は work-branch-flow の 5.3 と同じ実行（実機検証の場面 F1）。worktree から本体の checkout の spec と記録を見つけ、記録が無ければ止まり通過なら通ることが、両ツールで確かめられた。最初の実行は同名の spec が worktree にもあって失敗したため、別名にして確かめ直した（試験の作り方の注意）。機能全体の完了。

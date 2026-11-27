@@ -6,9 +6,9 @@
 - **Feature**: `kiro-gate`
 - **Discovery Scope**: New Feature（develop には実装が無い。旧版はタスクまで承認したが未実装）
 - **Key Findings**:
-  - Claude Code: UserPromptSubmit の `prompt` は入力のまま届き（`/kiro-x 本文`）、PreToolUse の拒否の理由はモデルに届き、手順書の Read の後の PostToolUse で読んだことを記録でき、Stop は `stop_hook_active` で 2 回目を通せる（`poc/kiro-gate/`、2026-11-23 に再実行で OK 12）。
-  - Codex: 同じ 4 つのフックがあり、`$kiro-*` も `prompt` の先頭で検出できる。シェル（`tool_name: "Bash"`、`tool_input.command`）で手順書を `cat` で読むので、コマンドの文字列で読み取りを観測する。Stop の 2 回目も通せる（`poc/req-feasibility/codex.sh`）。
-  - 両ツールのフックの入力に `session_id` があり、セッションごとに状態を分けられる（Codex は `poc/codex-hook-path/` で確認）。
+  - Claude Code: UserPromptSubmit の `prompt` は入力のまま届き（`/kiro-x 本文`）、PreToolUse の拒否の理由はモデルに届き、手順書の Read の後の PostToolUse で読んだことを記録でき、Stop は `stop_hook_active` で 2 回目を通せる（実機検証、2026-11-23 に再実行で OK 12。記録は削除済み）。
+  - Codex: 同じ 4 つのフックがあり、`$kiro-*` も `prompt` の先頭で検出できる。シェル（`tool_name: "Bash"`、`tool_input.command`）で手順書を `cat` で読むので、コマンドの文字列で読み取りを観測する。Stop の 2 回目も通せる（実機検証で確認済み）。
+  - 両ツールのフックの入力に `session_id` があり、セッションごとに状態を分けられる（Codex は実機検証で確認済み）。
 
 ## Research Log
 
@@ -19,11 +19,11 @@
 
 ### 読み取りの観測
 - **Findings**: Claude Code は Read の `tool_input.file_path`（絶対の道筋）。Codex は Bash の `tool_input.command` の文字列に手順書の道筋（`.agents/skills/<名前>/SKILL.md`）が含まれるか。
-- Codex の PostToolUse の `tool_response` はコマンドの出力の文字列だけで、終了コードは無い（失敗は `cat: missing.txt: No such file or directory` のような出力になる。`poc/codex-hook-path/` で確認）。
+- Codex の PostToolUse の `tool_response` はコマンドの出力の文字列だけで、終了コードは無い（失敗は `cat: missing.txt: No such file or directory` のような出力になる。実機検証で確認済み）。
 - **Implications**: 道筋を含むかだけで判定すると `ls <手順書>` でも解ける（設計レビューの指摘）。最初のコマンドが読み取りだけのコマンド（`cat`・`head`・`nl`。`sed -i` で書き換えられるので `sed` は含めない。設計レビューの再指摘）で、引数を入力の `cwd` から解いた道筋が手順書と一致するときだけ通す。成功は「応答に手順書の最初の空でない行が含まれる」で確かめる（両ツール共通）。`cat <手順書> && 別のコマンド` は最初が読み取りなので通る（汎用のシェルの解析はしない）。
 
 ### スキルとして展開された場合（利用者との意識合わせで改訂）
-- **Findings**: セッション開始時から一覧にあるスキルを、Claude Code は `/kiro-x`、Codex は `$kiro-x` で呼ぶと、手順書の本文がスキルとして渡る（`poc/first-kiro-command/`、`poc/req-feasibility/` の b）。一覧はセッション開始時に決まり、途中で導入したスキルは載らない。Codex の `/kiro-x` はスキルとして扱われない。
+- **Findings**: セッション開始時から一覧にあるスキルを、Claude Code は `/kiro-x`、Codex は `$kiro-x` で呼ぶと、手順書の本文がスキルとして渡る（実機検証で確認済み。b の場面。記録は削除済み）。一覧はセッション開始時に決まり、途中で導入したスキルは載らない。Codex の `/kiro-x` はスキルとして扱われない。
 - **Implications**: SessionStart で一覧にあった `kiro-*` を記録し、本文が渡る形で呼ばれたら最初から読み取り済みにする（余分な Read を求めない）。読み直しを求めるのは、Codex の `/kiro-x` と、途中で導入して一覧に無いスキルだけ。
 
 ## Design Decisions
@@ -44,5 +44,5 @@
 - 一時ディレクトリの状態ファイルが残る — 小さく、OS の一時ディレクトリの掃除に任せる。
 
 ## References
-- `poc/kiro-gate/result.md`、`poc/req-feasibility/result.md`、`poc/codex-hook-path/result.md`
+- 実機検証の記録（kiro-gate・req-feasibility・codex-hook-path の 3 件。記録は削除済み）
 - `.kiro/specs/installer-core/design.md`（カタログ・フックのコマンドの形）、`.kiro/specs/session-install/design.md`（同じ時点のフック）

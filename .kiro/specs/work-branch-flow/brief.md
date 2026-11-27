@@ -77,5 +77,5 @@ cc-sdd の作業（`/kiro-discovery` から `/kiro-impl` まで）は、`develop
   - (b) brw が新しい worktree（別のディレクトリ）を作った後、セッションの作業場所は元のままでもエージェントはそこで作業する。このとき「現在のブランチ」をどこで判定するか（セッションの作業場所か、操作するファイルの場所か）。判定を誤ると、worktree で作業していても拒否が続く。
   - (c) Stop フック（応答を終えるときのフック）が、Claude Code と Codex の両方で「一度だけ止めて続きをさせる」ことができるか。無限に止め続けない仕組み（再入の印）が要る。
   - (d) `/kiro-validate-impl` を実行したことの記録（kiro-gate の最小の状態を拡張するか）と、PR の有無の判定（`gh pr view` など）が、gh が無い・未認証の環境で安全に働く（止めずに通す）か。
-  - (e) Codex のフックが worktree の中でも本体の checkout の `.codex/hooks.json` を読む前提（`poc/codex-worktree-hooks/`）が、本 spec の新しいフックにも当てはまるか。
+  - (e) Codex のフックが worktree の中でも本体の checkout の `.codex/hooks.json` を読む前提（実機検証で確認済み）が、本 spec の新しいフックにも当てはまるか。
 - このリポジトリで新しいフックを足す spec は、develop に取り込むまでの一時的な状態として、自己適用の後の確認（普通の checkout の写しと取り込み後の worktree）をタスクに置く（roadmap の既定）。

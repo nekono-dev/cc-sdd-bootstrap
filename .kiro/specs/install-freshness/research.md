@@ -2,10 +2,10 @@
 
 ## 調査の範囲
 - 種別: 既存の導入・更新の仕組みへの拡張（軽い調査）＋外部の動作の前提の確認（PoC）。
-- 調べたもの: `lib/plan.mjs`・`lib/target.mjs`・`lib/catalog.mjs`・`lib/cli.mjs`（導入の流れ）、`install-cc-sdd.mjs`（セッション開始のフック）、`poc/session-hooks/`・`poc/codex-hook-trust/`（既存の根拠）。
+- 調べたもの: `lib/plan.mjs`・`lib/target.mjs`・`lib/catalog.mjs`・`lib/cli.mjs`（導入の流れ）、`install-cc-sdd.mjs`（セッション開始のフック）、実機検証の session-hooks・codex-hook-trust（既存の根拠）。
 
 ## 外部の動作の前提と根拠
-詳細・実行手順は `poc/install-freshness/result.md`（2026-11-26、Node.js 22.16.0、npm 10.9.2、Claude Code 2.1.329、Codex CLI 0.172.0）。
+詳細・実行手順は実機検証の記録（削除済み。2026-11-26、Node.js 22.16.0、npm 10.9.2、Claude Code 2.1.329、Codex CLI 0.172.0）。
 
 | 前提 | 結果 | 設計への反映 |
 |---|---|---|
