@@ -2,7 +2,7 @@
 
 ## ギャップ分析（2026-11-25、`/kiro-validate-gap`）
 
-対象: `.kiro/specs/work-branch-flow/requirements.md`（7 要件）。要件は未承認だが、設計の前に分かる食い違いを先に洗い出した。実機の前提は `poc/work-branch-flow/result.md`。
+対象: `.kiro/specs/work-branch-flow/requirements.md`（7 要件）。要件は未承認だが、設計の前に分かる食い違いを先に洗い出した。実機の前提は実機検証で確認済み（記録は削除済み）。
 
 ### 1. 現状の調査
 
@@ -82,7 +82,7 @@
 
 ## 設計の調査と判断（2026-11-25、`/kiro-spec-design`）
 
-- **Discovery Scope**: Extension（既存の配置物の型・設定の項目・フックの登録に沿って足す）。軽い調査（`rules/design-discovery-light.md` 相当）で足りる。外部の資料は要らず、前提は実機の PoC（`poc/work-branch-flow/result.md`）で確かめた。
+- **Discovery Scope**: Extension（既存の配置物の型・設定の項目・フックの登録に沿って足す）。軽い調査（`rules/design-discovery-light.md` 相当）で足りる。外部の資料は要らず、前提は実機検証（記録は削除済み）で確かめた。
 - **Key Findings**:
   - 同じ操作に複数のフックが拒否すると、理由は 1 つしか届かない（Claude Code は後に登録したもの、Codex は先に登録したもの）。追加の文脈は Claude Code で両方届く。
   - Claude Code のフックの `cwd` は Bash の `cd` に追随しない。

@@ -4,17 +4,17 @@
 - **Feature**: `subagent-delegation`
 - **Discovery Scope**: New Feature（撤回した subagent-model-policy・codex-delegation の後継。`dev/codex-support` の実装は引き継がず、PoC の事実だけを使う）。2026-11-24 の改訂は Extension として、installer-core・session-install の実装済みの接点に絞った軽い調査で行った
 - **Key Findings**:
-  - 子の起動は両ツールで PreToolUse から拒否でき、理由は指揮役に届く。Claude Code は `Agent`、Codex は `spawn_agent`（フックの `tool_name` は `collaborationspawn_agent` を含む）。`tool_input.model` は明示したときだけ入る。定義ファイルで起動した子のモデルは `tool_input` に出ない（`poc/subagent-defs/`、`poc/req-feasibility/`）。
-  - 指揮役のモデルは、Codex ではすべてのフックの入力に `model` がある。Claude Code はフックの入力に無く、会話の記録（`transcript_path`）の最後の応答から読む。セッションの最初のツール呼び出しでは読めない（`poc/req-feasibility/claude.sh` の e）。
-  - Claude Code の `.claude/agents/<名前>.md` の `model`・`effort`・`tools` は効く。Codex の `.codex/agents/<名前>.toml` の `model`・`model_reasoning_effort` は効くが、`sandbox_mode = "read-only"` は効かず、子は親の権限で動く（Codex 0.167.0、`poc/subagent-defs/`）。
-  - 推論量: Codex は `spawn_agent` の `reasoning_effort` で起動ごとに指定でき、起動前のフックから見える。子の推論量は「定義の `model_reasoning_effort` → 起動の指定 → モデルの既定値」の順に決まる。Claude Code の `Agent` には推論量の引数が無く、子の推論量は定義の `effort`（無ければ medium）。どちらも指揮役の推論量を引き継がない。環境変数 `CLAUDE_CODE_EFFORT_LEVEL` は指揮役と子を一律に上書きする（`poc/subagent-effort/`、2026-11-24）。
+  - 子の起動は両ツールで PreToolUse から拒否でき、理由は指揮役に届く。Claude Code は `Agent`、Codex は `spawn_agent`（フックの `tool_name` は `collaborationspawn_agent` を含む）。`tool_input.model` は明示したときだけ入る。定義ファイルで起動した子のモデルは `tool_input` に出ない（実機検証で確認済み。記録は削除済み）。
+  - 指揮役のモデルは、Codex ではすべてのフックの入力に `model` がある。Claude Code はフックの入力に無く、会話の記録（`transcript_path`）の最後の応答から読む。セッションの最初のツール呼び出しでは読めない（実機検証の e）。
+  - Claude Code の `.claude/agents/<名前>.md` の `model`・`effort`・`tools` は効く。Codex の `.codex/agents/<名前>.toml` の `model`・`model_reasoning_effort` は効くが、`sandbox_mode = "read-only"` は効かず、子は親の権限で動く（Codex 0.167.0、実機検証で確認済み）。
+  - 推論量: Codex は `spawn_agent` の `reasoning_effort` で起動ごとに指定でき、起動前のフックから見える。子の推論量は「定義の `model_reasoning_effort` → 起動の指定 → モデルの既定値」の順に決まる。Claude Code の `Agent` には推論量の引数が無く、子の推論量は定義の `effort`（無ければ medium）。どちらも指揮役の推論量を引き継がない。環境変数 `CLAUDE_CODE_EFFORT_LEVEL` は指揮役と子を一律に上書きする（実機検証で確認済み、2026-11-24。記録は削除済み）。
   - session-install の設定の読み取りは、入力のたびに項目定義の全項目を検証し、誤りで入力を止める（`install-rules.mjs` の `readInstallConfig`・`decideInstall`）。`subagents` を項目定義に足すと、役割表の誤りで入力が止まる。
-  - 別の提供元の CLI: `codex -a never exec --sandbox <read-only|workspace-write> --model <M> --config 'model_reasoning_effort="<E>"' --cd <根> -`（今の運用）。`claude -p --model <M> --effort <E>` に、読み取り専用は `--tools Read,Grep,Glob`、書き込み可は `--permission-mode acceptEdits --allowedTools Bash`（`poc/subagent-defs/` の c）。Codex から `claude -p` を呼ぶには、Codex のシェルに通信の許可が要る（`poc/req-feasibility/codex.sh` の g）。
+  - 別の提供元の CLI: `codex -a never exec --sandbox <read-only|workspace-write> --model <M> --config 'model_reasoning_effort="<E>"' --cd <根> -`（今の運用）。`claude -p --model <M> --effort <E>` に、読み取り専用は `--tools Read,Grep,Glob`、書き込み可は `--permission-mode acceptEdits --allowedTools Bash`（実機検証の c）。Codex から `claude -p` を呼ぶには、Codex のシェルに通信の許可が要る（実機検証の g）。
 
 ## Research Log
 
 ### 子のモデルの見え方
-- **Sources Consulted**: `poc/subagent-defs/run.mjs`、`poc/req-feasibility/claude.sh`・`codex.sh`、`dev/codex-support` の `poc/subagent-model-policy/result.md`。
+- **Sources Consulted**: 実機検証の記録（subagent-defs・req-feasibility の claude・codex。記録は削除済み）、`dev/codex-support` の PoC 文書（subagent-model-policy）。
 - **Findings**: `tool_input` のキー — Claude Code: `subagent_type`・`description`・`prompt`（`model` は明示時）。Codex: `task_name`・`agent_type`・`fork_turns`・`message`（`model` は明示時）。Codex は履歴の引き継ぎを省くと親と同じモデルになる。
 - **Implications**: 子のモデル = `tool_input.model` → 無ければ `subagent_type`・`agent_type` の定義ファイルの `model` → どちらも無ければ「未指定」（拒否）。定義の `model: inherit` も引き継ぎとして拒否する。
 
@@ -28,7 +28,7 @@
 
 ### 組み込みの子の推論量（2026-11-24）
 - **Context**: 要件 1.13（推論量の上限）・3.10（組み込みの子の起動で上限より上を拒否）の守り方を決める。
-- **Sources Consulted**: `poc/subagent-effort/run.mjs`・`result.md`（Claude Code 2.1.329、Codex CLI 0.167.0）。`codex debug models` の `supported_reasoning_levels`・`default_reasoning_level`。`claude --help` の `--effort`。
+- **Sources Consulted**: 実機検証の記録（subagent-effort。記録は削除済み。Claude Code 2.1.329、Codex CLI 0.167.0）。`codex debug models` の `supported_reasoning_levels`・`default_reasoning_level`。`claude --help` の `--effort`。
 - **Findings**:
   - 指定できる値: Claude Code は `low`・`medium`・`high`・`xhigh`・`max`。Codex は同じ 5 つに `ultra`（「最大の推論と作業の自動の委任」）を足した 6 つで、Luna の系統は `ultra` を受け付けない。Codex のモデルの既定値は low か medium。
   - Claude Code の `Agent` の `tool_input` は `description`・`prompt`・`subagent_type`・`run_in_background`（ほかに `model`・`isolation`）で、推論量の引数は無い。定義の `effort: low`・`xhigh` はそのとおりに効き、`effort` の無い定義は medium だった（指揮役は high）。
@@ -111,7 +111,7 @@
 - **Selected Approach**: ア。上限が外れたまま子が動くことを防ぐ（要件 1.8 の「確定できない設定で委任しない」と揃う）。入力は止めないので 1.12 は守れる。
 
 ### Decision: Codex の役割定義に推論量を書かない（2026-11-24）
-- **Context**: Codex は定義の `model_reasoning_effort` が起動の `reasoning_effort` より優先される（`poc/subagent-effort/`）。定義に書くと、要件 1.6（作業ごとに推論量を選ぶ）が組み込みの子でできなくなる。
+- **Context**: Codex は定義の `model_reasoning_effort` が起動の `reasoning_effort` より優先される（実機検証で確認済み）。定義に書くと、要件 1.6（作業ごとに推論量を選ぶ）が組み込みの子でできなくなる。
 - **Selected Approach**: 生成する Codex の定義には `model` と同じく推論量も書かない。指揮役は `delegate.mjs --resolve-model` が出す名前と推論量（または上限以下で選んだ値）を `spawn_agent` に明示する。フックは起動の値を上限と比べる。Claude Code は起動ごとに変えられないので定義の `effort` に書き、別の推論量が要るときは `delegate.mjs --to same`（`claude -p --effort`）を使う。
 - **Trade-offs**: Codex の定義だけを見ても推論量は分からない（要件 2.2 は `--resolve-model` で補う）。
 
@@ -135,8 +135,8 @@
 - 別名の対応のずれ（新しいモデルの名前）— 格の表は設定で足せる（1.2）。分からないモデルは格を確認できない扱いで通す。
 
 ## References
-- `poc/subagent-defs/result.md`、`poc/req-feasibility/result.md`、`poc/subagent-effort/result.md`
-- `dev/codex-support` の `poc/subagent-model-policy/result.md`（Codex の履歴の引き継ぎとモデル）
+- 実機検証の記録（subagent-defs・req-feasibility・subagent-effort の 3 件。記録は削除済み）
+- `dev/codex-support` ブランチの PoC 文書（subagent-model-policy。Codex の履歴の引き継ぎとモデル）
 - `.kiro/specs/installer-core/design.md`（カタログ・設定の項目定義・フックのコマンドの形）
 
 ## 参照した手順と指針（2026-11-24）

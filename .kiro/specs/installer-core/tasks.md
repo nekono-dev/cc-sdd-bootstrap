@@ -114,7 +114,7 @@
   - _Depends: session-install の全タスク_
   - _Requirements: 9.1, 9.2, 9.3, 9.4_
 - [x] 7.2 自己適用の後の実機の確認のスクリプトを直す
-  - 確認のスクリプト（`poc/self-apply/run.mjs`）を、Claude Code と Codex を確かめる場所（リポジトリの根）をそれぞれ引数で受け取り、kiro-gate の状態ファイルの鍵もその場所から求める形にする。Codex の一時の `CODEX_HOME` の信頼の設定も、受け取った場所に向ける
+  - 確認のスクリプト（自己適用の実機検証用）を、Claude Code と Codex を確かめる場所（リポジトリの根）をそれぞれ引数で受け取り、kiro-gate の状態ファイルの鍵もその場所から求める形にする。Codex の一時の `CODEX_HOME` の信頼の設定も、受け取った場所に向ける
   - Claude Code の判定 2 件（スキルの起動の観測・kiro-gate の拒否の検出）を、2026-11-24 の実行で誤った原因に合わせて直す
   - 引数が無い・場所が git の最上位でないときに使い方を表示して失敗し、`node --check` が通り、7.3 で使う呼び出し方がスクリプトの冒頭の説明にある
   - _Requirements: 9.1_
@@ -122,7 +122,7 @@
 - [x] 7.3 自己適用の後に実機で確かめる（旧 7.2 の保留を外して段取りを直す）
   - 前提: 認証済みの `claude`・`codex`。5.3 と 7.2 の変更がコミットされていること（Codex の確認はコミットからの写しで行うため）
   - Claude Code は自己適用した作業ブランチの worktree で、Codex はこの作業ブランチを `~/.cache/cc-sdd-bootstrap-scratch/` の下に普通の checkout として写した場所（worktree ではない）で、7.2 のスクリプトにより起動する。登録したフックが動き（SessionStart の状態ファイル）、運用の区画が `.kiro/steering/` を読むよう案内し、`/kiro-spec-status`（Codex は `$kiro-spec-status`）がスキルとして動くことを確かめる
-  - 結果を `poc/self-apply/result.md` に記録し、Claude Code・Codex の確認項目がすべて OK になる。develop に取り込んだ後の worktree での Codex の確認は含めない
+  - 結果を実機検証の記録（PoC 文書）に残し、Claude Code・Codex の確認項目がすべて OK になる。develop に取り込んだ後の worktree での Codex の確認は含めない
   - _Depends: 5.3, 7.2_
   - _Requirements: 9.1_
 
@@ -134,7 +134,7 @@
 - 5.1: plan-new・target-new を plan.mjs・target.mjs へ、config の `New` の名前を元の名前へ統合した。旧版の試験を消すときに新しい振る舞いの試験まで消えやすい（レビューで指摘）。統合では変更前の試験の件数と中身を照らし合わせる。
 - 6.2: 通しの試験で、シンボリックリンクの拒否の表示が理由のコードだけ（SYMLINK）だった不具合を見つけ、日本語の理由を出すよう直した。Codex の利用上限に達し、サブエージェントの起動も許可されなかったため、修正とレビュー（kiro-review）は指揮役の会話の中で行った。
 - 7.1: 本番の前に写しのリポジトリ（`~/.cache` の下）で手順 2〜3 を予行した。レビューで 1 回差し戻し（PoC の決まりから「一時ディレクトリで実際の CLI を動かす」条件が抜けた）。運用の区画で「プロジェクト独自の決まりは `.kiro/steering/` から読んでください」が 3 回繰り返される（部品ごとに同じ文を足すため。整理は別途）。
-- 7.2: 自己適用した worktree で `claude -p` と `codex exec` を起動した（`poc/self-apply/run.mjs`、未コミット）。Claude Code はフック・運用の区画の案内・`/kiro-spec-status` が動いた。Codex は区画の案内と `$kiro-spec-status` は動いたが、フックは動かなかった（上の Blocked）。普通のチェックアウト（写し）では Codex のフックが動いた。スクリプトの Claude Code の判定 2 件（スキルの起動の観測・拒否の検出）は誤りの見込みで、直す必要がある。
-- 旧 7.2（今の 7.3）の Blocked は、2026-11-24 の設計の改訂（worktree の Codex は本体の checkout の登録に従い、スクリプトは worktree 側が動く。`poc/codex-worktree-hooks/`）で解いた。Codex の確認は普通の checkout の写しで行う。
+- 7.2: 自己適用した worktree で `claude -p` と `codex exec` を起動した（自己適用の実機検証スクリプト、未コミット）。Claude Code はフック・運用の区画の案内・`/kiro-spec-status` が動いた。Codex は区画の案内と `$kiro-spec-status` は動いたが、フックは動かなかった（上の Blocked）。普通のチェックアウト（写し）では Codex のフックが動いた。スクリプトの Claude Code の判定 2 件（スキルの起動の観測・拒否の検出）は誤りの見込みで、直す必要がある。
+- 旧 7.2（今の 7.3）の Blocked は、2026-11-24 の設計の改訂（worktree の Codex は本体の checkout の登録に従い、スクリプトは worktree 側が動く）で解いた。Codex の確認は普通の checkout の写しで行う。
 - 7.2（2026-11-24 の改訂後）: `claude -p` で先頭に書いたスラッシュコマンドは、stream-json に手順書の本文も Skill の呼び出しも出ない。スキルの証拠は init の `skills`・`slash_commands` と、手順書の Step 1 の Read（順不同）にする（本物の出力: `~/.cache/cc-sdd-bootstrap-scratch/claude-skill-events-2026-11-24.jsonl`）。kiro-gate の拒否は `is_error` の tool_result に限る。実装役（Codex）は「起動しない」の指示があっても実機の CLI を起動したことがあるので、指示に起動の禁止をはっきり書き、報告の RED の主張は指揮役が実データで確かめる。
-- 7.3: 写したばかりの checkout（または新しい worktree）の最初の Codex のセッションは、cc-sdd を最初の入力で入れるため、開始時に読む AGENTS.md と SessionStart の一覧が無い（`poc/self-apply/result.md`）。確認は導入の後の 2 回目の実行で全件 OK。
+- 7.3: 写したばかりの checkout（または新しい worktree）の最初の Codex のセッションは、cc-sdd を最初の入力で入れるため、開始時に読む AGENTS.md と SessionStart の一覧が無い（実機検証の記録）。確認は導入の後の 2 回目の実行で全件 OK。

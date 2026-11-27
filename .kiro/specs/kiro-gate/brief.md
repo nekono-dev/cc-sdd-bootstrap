@@ -8,7 +8,7 @@ cc-sdd のスキルは、`disable-model-invocation: true` のものや導入直�
 旧要件は、手順書の先読みに加えて、roadmap を読んで brief の欠けで終了を止める判定（旧要件 3.2〜3.4・4）、セッション開始時の spec 状態の知らせ（旧要件 5）、手順書が無いときの停止（旧要件 2）まで持ち、5 種類のフックを使う設計になっていた。前の 2 つは先読みの強制とは別の成果物の検査で、最後の 1 つは session-install の入力の停止と重なる。
 
 ## Current State
-- 未実装。要件・設計・タスク・PoC（`poc/kiro-gate/`）がある。
+- 未実装。要件・設計・タスク・PoC（記録は削除済み）がある。
 - PoC で確認済み: UserPromptSubmit の `prompt` は入力のまま届く。PreToolUse の拒否は Bash を止め、手順書の Read は通せる。拒否の理由はモデルに届き、モデルは手順書を読んでやり直す。
 
 ## Desired Outcome

@@ -17,7 +17,7 @@
 | このリポジトリの決まり：`/kiro-*` は SKILL.md を Read して実行 | 削除 | 運用の区画（session-install・kiro-gate の案内）が受け持つ |
 | このリポジトリの決まり：サブエージェントの model 指定、子に Codex を使う（呼び方・モデル・指示の書き方） | 削除し、subagent-delegation の役割表と運用の区画へ | 「子はすべて Codex」は 2026-11-23 の方針（作る役は同じ提供元、レビューは別の提供元）で置き換わる。指示のファイルの置き場所・Codex は CLAUDE.md を読まない点は運用の区画にある |
 | cc-sdd の導入（SessionStart フック、失敗時の停止、再試行） | 削除 | 運用の区画（session-install の案内）が受け持つ |
-| cc-sdd の導入：配置物や導入コマンドを変えたら `node bin/cc-sdd-bootstrap.mjs update` を実行してコミット、版を上げたら `poc/self-install/run.sh` で確かめる | `project-rules.md` | このリポジトリ固有。PoC のスクリプト名は実装後の名前に合わせる |
+| cc-sdd の導入：配置物や導入コマンドを変えたら `node bin/cc-sdd-bootstrap.mjs update` を実行してコミット、版を上げたら実機で再確認する（結果は PoC 文書に残す） | `project-rules.md` | このリポジトリ固有。PoC のスクリプト名は実装後の名前に合わせる |
 | ブランチ（BRW の宣言、push・PR・マージの許可） | `project-rules.md` | |
 | 書き方（日本語、専門用語の言い換え） | `project-rules.md` | |
 | 管理区画と `@.kiro/settings/cc-sdd-guide.md` の取り込み | 削除 | 標準の文書そのものが CLAUDE.md になる |

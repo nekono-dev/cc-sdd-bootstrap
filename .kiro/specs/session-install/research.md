@@ -6,16 +6,16 @@
 - **Feature**: `session-install`
 - **Discovery Scope**: Extension（develop の `install-cc-sdd.mjs`・`install-rules.mjs`・`install-gate.mjs` を組み直す）
 - **Key Findings**:
-  - セッション中に入れたスキルは、Claude Code・Codex のどちらでも同じセッションの一覧に載らない。起動前に入れれば最初のセッションから使え、最初の入力時のフックで入れて「手順書を直接読む」よう伝えれば、両方とも手順書を読んでから作業する（`poc/req-feasibility/`）。
-  - 準備スクリプトで起動前に入れたクラウドのセッションでは、CLAUDE.md が無くても最初の `/kiro-steering` がスキルとして実行された（`poc/first-kiro-command/result.md`）。
-  - `--overwrite force` の導入で CLAUDE.md・AGENTS.md は標準の文書に丸ごと置き換わり、末尾に区画を足すだけで入れ直しても 1 つになる（`poc/req-feasibility/doc-append.sh`）。
-  - Codex の UserPromptSubmit も `decision: "block"` で入力を止められ、`additionalContext` がモデルに届く。Codex のフックはセッションの作業場所で動くので、スクリプトは自分の位置から根を求める（`poc/codex-hook-path/`）。
+  - セッション中に入れたスキルは、Claude Code・Codex のどちらでも同じセッションの一覧に載らない。起動前に入れれば最初のセッションから使え、最初の入力時のフックで入れて「手順書を直接読む」よう伝えれば、両方とも手順書を読んでから作業する。
+  - 準備スクリプトで起動前に入れたクラウドのセッションでは、CLAUDE.md が無くても最初の `/kiro-steering` がスキルとして実行された。
+  - `--overwrite force` の導入で CLAUDE.md・AGENTS.md は標準の文書に丸ごと置き換わり、末尾に区画を足すだけで入れ直しても 1 つになる。
+  - Codex の UserPromptSubmit も `decision: "block"` で入力を止められ、`additionalContext` がモデルに届く。Codex のフックはセッションの作業場所で動くので、スクリプトは自分の位置から根を求める。
 
 ## Research Log
 
 ### 導入の時点
 - **Context**: 要件 1・2。
-- **Sources Consulted**: `poc/req-feasibility/claude.sh`（a〜c）、`poc/req-feasibility/codex.sh`（a〜d）、`poc/first-kiro-command/`。
+- **Sources Consulted**: 実機検証（両ツールの最初の入力時の導入。確認項目は Claude Code が a〜c、Codex が a〜d）、実機検証（起動前の導入で最初の `/kiro-*`）。
 - **Findings**: SessionStart で入れたスキルは一覧に載らない（両ツール）。UserPromptSubmit で導入してから追加の文脈で「SKILL.md を直接読む」と伝えると、モデルは手順書を読む。対話モードの Claude Code では、一覧に無い `/kiro-*` はフックに届く前に拒否される（以前の調査）。
 - **Implications**: 導入は「起動前（引数なしの CLI）」と「最初の入力時（UserPromptSubmit）」の 2 か所。SessionStart では導入しない（待ち時間だけ増えて同じセッションで使えない）。SessionStart は状態を知らせるだけにする（3.6）。
 
@@ -56,5 +56,5 @@
 - 利用者が `.claude/skills/kiro-*` に独自のスキルを置くと消える — 運用の区画で「`kiro-` で始まる独自のスキルを置かない」と案内する。
 
 ## References
-- `poc/req-feasibility/result.md`、`poc/first-kiro-command/result.md`、`poc/codex-hook-path/result.md`
+- 実機検証（記録は削除済み）: 両ツールの最初の入力時の導入、起動前の導入で最初の `/kiro-*`、Codex のフックのコマンドの書き方
 - `.kiro/specs/installer-core/design.md`（カタログ・運用の区画のファイル・フックのコマンドの形）

@@ -76,6 +76,23 @@ function runSessionStart(repo, tool, input = '{"session_id":"test"}') {
   return result;
 }
 
+/**
+ * 止められたことを確かめ、停止の案内の文章（追加の文脈）を返す。
+ * 入力は `decision: "block"` ではなく、停止の案内を載せた追加の文脈で止める（応答の文章を必ず作らせるため）。
+ * @param {object} output - フックの標準出力を JSON として読んだもの
+ * @param {string | null} [prompt] - 止めた入力（指定すると案内に入っていることも確かめる。null なら「取得できませんでした」）
+ */
+function stopNotice(output, prompt) {
+  assert.equal(Object.hasOwn(output, 'decision'), false, 'decision を含んではならない');
+  assert.equal(output.hookSpecificOutput.hookEventName, 'UserPromptSubmit');
+  const text = output.hookSpecificOutput.additionalContext;
+  assert.match(text, /【入力の停止】/);
+  assert.match(text, /--- 停止の案内 ---/);
+  if (prompt === null) assert.ok(text.includes('止めた入力: （取得できませんでした）'));
+  else if (prompt !== undefined) assert.ok(text.includes(`止めた入力: ${prompt}`), `止めた入力が案内に入る: ${prompt}`);
+  return text;
+}
+
 function runPromptHook(repo, tool, prompt = '最初の依頼', { mode = 'ok', env = {}, input = null } = {}) {
   const logPath = path.join(repo.fakeBin, `npx-calls-prompt-${process.pid}-${Date.now()}-${Math.random().toString(16).slice(2)}.jsonl`);
   const result = spawnSync(process.execPath, [repo.entry, 'user-prompt-submit', '--tool', tool], {
@@ -116,10 +133,9 @@ test('導入失敗は入力を止め、再試行成功後は通す', (t) => {
   const repo = makeRepo(); t.after(repo.cleanup); repo.putSections();
   const failed = runPromptHook(repo, 'claude', '依頼', { mode: 'fail' });
   assert.equal(failed.status, 0);
-  const blocked = JSON.parse(failed.stdout);
-  assert.equal(blocked.decision, 'block');
-  assert.match(blocked.reason, /fake npx failure|終了コード/);
-  assert.ok(blocked.reason.includes(RETRY_COMMAND));
+  const text = stopNotice(JSON.parse(failed.stdout), '依頼');
+  assert.match(text, /fake npx failure|終了コード/);
+  assert.ok(text.includes(RETRY_COMMAND));
   assert.ok(repo.read(FAILURE_RECORD));
   const recovered = runPromptHook(repo, 'claude');
   assert.equal(recovered.status, 0);
@@ -132,10 +148,10 @@ test('壊れた設定と判定例外は理由と再試行方法を示して止�
     const repo = makeRepo({ config: '{broken' }); t.after(repo.cleanup);
     const result = runPromptHook(repo, 'codex', '', { input });
     assert.equal(result.status, 0);
-    const output = JSON.parse(result.stdout);
-    assert.equal(output.decision, 'block');
-    assert.match(output.reason, /JSON|判定できなかった/);
-    assert.ok(output.reason.includes(RETRY_COMMAND));
+    // 入力の解析に成功した後の判定の失敗では元の入力を案内に入れ、解析自体に失敗したときは「取得できませんでした」にする
+    const text = stopNotice(JSON.parse(result.stdout), input === 'not json' ? null : 'x');
+    assert.match(text, /JSON|判定できなかった/);
+    assert.ok(text.includes(RETRY_COMMAND));
     assert.equal(result.npxCalls.length, 0);
   }
 });
@@ -151,8 +167,7 @@ test('導入中の新しい印と古い印はいずれも止め、古い印の�
     const result = runPromptHook(repo, 'codex');
     assert.equal(result.status, 0);
     const output = JSON.parse(result.stdout);
-    assert.equal(output.decision, 'block');
-    assert.match(output.reason, stale ? /rm \.cache\/cc-sdd-install\.lock/ : /別のセッションで導入中/);
+    assert.match(stopNotice(output), stale ? /rm \.cache\/cc-sdd-install\.lock/ : /別のセッションで導入中/);
     assert.equal(result.npxCalls.length, 0);
   }
 });
@@ -174,7 +189,7 @@ test('ほぼ同時の入力では一つだけ導入し、もう一方を止め�
   });
   const results = await Promise.all([run(), run()]);
   assert.ok(results.every(({ status }) => status === 0));
-  assert.equal(results.filter(({ stdout }) => JSON.parse(stdout).decision === 'block').length, 1);
+  assert.equal(results.filter(({ stdout }) => JSON.parse(stdout).hookSpecificOutput.additionalContext.includes('【入力の停止】')).length, 1);
   const calls = fs.readFileSync(logPath, 'utf8').trim().split(/\r?\n/);
   assert.equal(calls.length, 2);
   fs.rmSync(logPath, { force: true });
@@ -583,10 +598,9 @@ test('区画の書き直しの失敗: 入力を止め、元の文書と失敗の
     const failed = via === 'hook' ? runPromptHook(repo, 'claude') : runEntry(repo);
     if (via === 'hook') {
       assert.equal(failed.status, 0, failed.stderr);
-      const blocked = JSON.parse(failed.stdout);
-      assert.equal(blocked.decision, 'block');
-      assert.match(blocked.reason, /区画/);
-      assert.ok(blocked.reason.includes(RETRY_COMMAND));
+      const text = stopNotice(JSON.parse(failed.stdout), '最初の依頼');
+      assert.match(text, /区画/);
+      assert.ok(text.includes(RETRY_COMMAND));
     } else {
       assert.equal(failed.status, 1);
       assert.match(failed.stdout, /区画/);
@@ -676,7 +690,7 @@ test('区画の書き直しの失敗: 一時ファイルの後片付けも失敗
     const before = repo.read('CLAUDE.md');
     const env = { NODE_OPTIONS: writePreload(repo), PRELOAD_TMP_FAIL: '1' };
     const failed = via === 'hook' ? runPromptHook(repo, 'claude', '依頼', { env }) : runEntry(repo, [], { env });
-    if (via === 'hook') assert.equal(JSON.parse(failed.stdout).decision, 'block');
+    if (via === 'hook') stopNotice(JSON.parse(failed.stdout));
     else assert.equal(failed.status, 1);
     assert.deepEqual(failed.npxCalls, []);
     assert.equal(repo.read('CLAUDE.md'), before);
@@ -704,8 +718,7 @@ test('区画の書き直し: 印を取った後の再判定が導入・失敗な
     const result = via === 'hook' ? runPromptHook(repo, 'claude', '依頼', { env }) : runEntry(repo, [], { env });
     if (via === 'hook') {
       const out = JSON.parse(result.stdout);
-      assert.equal(out.decision, 'block');
-      assert.match(out.reason, /JSON/);
+      assert.match(stopNotice(out, '依頼'), /JSON/);
     } else {
       assert.equal(result.status, 1);
       assert.match(result.stdout, /JSON/);
@@ -722,7 +735,7 @@ test('区画の書き直し: 終わりの目印の無い配置物の文章では
     repo.write('.agent-hooks/cc-sdd-bootstrap/agent-section-claude.md', `${SECTION_BEGIN_MARKER}\n\n終わりの目印なし\n`);
     const before = { c: repo.read('CLAUDE.md'), a: repo.read('AGENTS.md') };
     const result = via === 'hook' ? runPromptHook(repo, 'claude') : runEntry(repo);
-    if (via === 'hook') assert.equal(JSON.parse(result.stdout).decision, 'block');
+    if (via === 'hook') stopNotice(JSON.parse(result.stdout));
     else assert.equal(result.status, 1);
     assert.deepEqual(result.npxCalls, []);
     assert.equal(repo.read('CLAUDE.md'), before.c);

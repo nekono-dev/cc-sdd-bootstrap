@@ -32,7 +32,7 @@ cc-sdd（Kiro 方式の仕様駆動開発のスキル集）の運用一式を、
 | codex-delegation | 同上、28 タスク中 9 完了 | **撤回**（subagent-delegation へ） | MCP の探査・自作の Codex MCP・ジョブの記録と別プロセス制御（約 2,800 行）。最終的な実行は `codex exec` で、管理入口を通した起動の成功も未確認 |
 | plugin-skill | brief のみ | **撤回** | 大目的への寄与が間接的。必要になったら改めて起こす |
 
-- `dev/codex-support`（`c47d0df`）は消さず、取り込まずに残す。PoC で分かった事実（`poc/subagent-model-policy/result.md`、`poc/codex-delegation-live/result.md` の Codex のフックの実機確認）は subagent-delegation の調査記録へ引き継ぐ。
+- `dev/codex-support`（`c47d0df`）は消さず、取り込まずに残す。PoC で分かった事実（Codex のフックの実機確認。そのブランチの PoC の記録）は subagent-delegation の調査記録へ引き継ぐ。
 - 撤回した spec の文書は `dev/codex-support` と git の履歴にある。develop からは消す。
 
 ## Scope
@@ -44,7 +44,7 @@ cc-sdd（Kiro 方式の仕様駆動開発のスキル集）の運用一式を、
 
 - cc-sdd に関わる成果物はこのリポジトリに置かない（cc-sdd は MIT。本リポジトリは Unlicense）。
 - Node.js 22 以上、外部パッケージなし。
-- Claude Code・Codex の動作に依存する前提は、設計の承認前に PoC で確かめる。PoC は再実行できるスクリプトで残す。
+- Claude Code・Codex の動作に依存する前提は、設計の承認前に PoC で確かめる。PoC の内容と結果は、その spec の PoC 文書（`poc/<段階>_<通し番号>.md`）に残す（2026-11-26、利用者の判断。スクリプトはリポジトリに置かない）。
 - 厳密さのためにコードを増やさない。フックは「判定できないときは通す」か「止める」かを部品ごとに決めて明記し、どちらでも短く保つ。
 - 指揮役と同じモデル、指揮役より上の格のモデルでサブエージェントを起動しない。役割ごとのモデルは設定で決める。
 - 2 つの提供元を使える環境では、作る役（実装・修正）は指揮役と同じ提供元の下位のモデル、レビューは別の提供元が作業単位ごとに 1 回行い、指揮役はレビューをやり直さない（レビューの重複によるトークンの浪費を避ける。2026-11-23、利用者の指示）。2 つの提供元は必須条件にしない。
@@ -59,7 +59,7 @@ cc-sdd（Kiro 方式の仕様駆動開発のスキル集）の運用一式を、
   - フックの登録: Claude Code（`.claude/settings.json`）と Codex のフックの設定の両方に、installer-core が自分の印のある項目だけを書く。
   - 運用の区画: CLAUDE.md と AGENTS.md は cc-sdd の導入で標準の文書として作り直し、コミットしない。installer-core が区画の文章を配置し、session-install が導入のたびに末尾へ書き足す。中身は session-install・kiro-gate・subagent-delegation の案内と、プロジェクト独自の決まり（`.kiro/steering/`）を読む案内（2026-11-23、利用者の指示）。
   - ツール起動前のフック: kiro-gate と subagent-delegation が同じ時点で動く。
-  - git の worktree での Codex のフック: Codex は worktree の中でも本体の checkout の `.codex/hooks.json` を読み、スクリプトは worktree 側のものが動く（`poc/codex-worktree-hooks/`、2026-11-24）。本体の checkout が未導入か古い版の間は、worktree の Codex でフックが動かない（kiro-gate・subagent-delegation の強制も効かず、止まらずに通る）。各 spec はこの前提で設計を見直す。このリポジトリで新しいフックを足す spec では、develop に取り込むまでの一時的な状態として扱い、自己適用の後の確認（普通の checkout の写しと、取り込み後の worktree）をタスクに置く（2026-11-24、利用者の指示）。
+  - git の worktree での Codex のフック: Codex は worktree の中でも本体の checkout の `.codex/hooks.json` を読み、スクリプトは worktree 側のものが動く（実機検証、2026-11-24）。本体の checkout が未導入か古い版の間は、worktree の Codex でフックが動かない（kiro-gate・subagent-delegation の強制も効かず、止まらずに通る）。各 spec はこの前提で設計を見直す。このリポジトリで新しいフックを足す spec では、develop に取り込むまでの一時的な状態として扱い、自己適用の後の確認（普通の checkout の写しと、取り込み後の worktree）をタスクに置く（2026-11-24、利用者の指示）。
 
 ## Existing Spec Updates
 
@@ -88,7 +88,7 @@ cc-sdd（Kiro 方式の仕様駆動開発のスキル集）の運用一式を、
 - 2026-11-20〜22: subagent-model-policy・codex-delegation を `dev/codex-support` で実装したが、実機の検証のたびに厳密さのための改訂が重なった。
 - 2026-11-22: 単純化の discovery で、上の「単純化の決定」のとおり見直した。
 - 2026-11-23: 実装中に要件の改訂（subagent-delegation 5.13・5.14）と実機での新しい事実（Codex は追加の文脈に必ず従う）が見つかり、実装が止まった。実現性を設計・タスクの段階で根拠付きで確かめるため、feasibility-review を足した（利用者の指示。cc-sdd には手を入れず外から指示する）。
-- 2026-11-24: 改訂した installer-core・session-install・kiro-gate を実装し、develop に取り込んだ（#3）。worktree の中の Codex のフックの道筋を確かめた（`poc/codex-worktree-hooks/`）。
+- 2026-11-24: 改訂した installer-core・session-install・kiro-gate を実装し、develop に取り込んだ（#3）。worktree の中の Codex のフックの道筋を確かめた（実機検証）。
 - 2026-11-25: installer-core・session-install・kiro-gate・subagent-delegation の実装が develop に入った（subagent-delegation は PR #4。worktree の Codex での確認 4.8 も OK）。残りは feasibility-review。
 - 2026-11-25: Codex のフックの承認の手間を省くため、codex-hook-trust を足した（利用者の指示。承認の記録の自動書き込みと子の回避指定の併用）。
 - 2026-11-25: codex-hook-trust を実装し、develop に取り込んだ（PR #6）。取り込み後の worktree と普通の checkout での確認（5.3）も PASS。Codex のクラウドセッションとプロジェクトの信頼の付与は範囲外。
