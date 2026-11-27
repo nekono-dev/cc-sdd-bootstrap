@@ -9,6 +9,7 @@ const payloadFiles = [
   'install-cc-sdd.mjs',
   'install-rules.mjs',
   'config-schema.mjs',
+  'stop-notice-rules.mjs',
 ];
 /** 承認の記録の配置物。trust: false の導入先では配らない（動的 import が失敗する古い導入先の再現） */
 const trustPayloadFiles = [

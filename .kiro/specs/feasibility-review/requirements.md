@@ -28,7 +28,7 @@ feasibility-review は、設計とタスク計画の実現性を、推測では�
 - **対象**：`/kiro-spec-quick`・`/kiro-spec-batch` の入力の時点の停止（設計・タスクの各段階を内部で続けて実行し、途中で止められないため。2026-11-25、利用者の判断）、要件の段階の実機検証の要否の判定、設計・タスク計画の段階の実現性の確認とその記録、記録に基づく `/kiro-spec-tasks`・`/kiro-impl` の入力の停止と通す手順の案内、実機の確認をタスク計画の最初に置く求め、実装中の食い違いのときの段階の戻し方の案内、運用の区画の文章、Claude Code と Codex の両方への適用。
 - **対象外**：cc-sdd のスキルの改変・複製、spec.json・tasks.md など cc-sdd が持つファイルへの印や項目の追加、PoC の中身の正しさの自動判定、実装中の requirements.md・design.md への書き込みの拒否、自然文の依頼への機械的な強制、既存の完了済み spec の設計のやり直し。
 - **cc-sdd との関係**：実現性の観点は、cc-sdd のレビュー（`/kiro-validate-design` と `/kiro-spec-tasks` の独立したレビュー）を使うときに、外から追加の指示として渡す。cc-sdd のファイルの形は変えず、cc-sdd が自然に PoC を作って確かめられるよう、指示と記録の置き場所を spec のディレクトリの中に用意する。
-- **kiro-gate との関係**：`/kiro-*` で始まる入力の検出の規則は kiro-gate と同じものを使う。手順書の先読みの拒否は kiro-gate が扱う。入力の停止の理由は利用者に示される（Codex ではモデルの応答が無い）。追加の指示は、複数のフックの文脈が並んで届く（Claude Code で確認。実機検証の記録は削除済み）。
+- **kiro-gate との関係**：`/kiro-*` で始まる入力の検出の規則は kiro-gate と同じものを使う。手順書の先読みの拒否は kiro-gate が扱う。入力の停止の理由は、停止の案内として応答の文章で届く（2026-11-27、visible-stop で、`decision: "block"` による停止からモデルに話させる出力へ変更。従来の停止はリモートセッションの画面に理由が出なかった）。追加の指示は、複数のフックの文脈が並んで届く（Claude Code で確認。実機検証の記録は削除済み）。
 - **work-branch-flow との関係**：同じ入力の時点で動く。作業ブランチへの誘導は work-branch-flow が扱い、feasibility-review はそれを妨げない。
 - **installer-core・session-install との関係**：設定ファイルの項目の定義、フックの登録、運用の区画の文章の配置は installer-core が、導入のたびの書き足しは session-install が扱う。この仕様は、判定の内容と記録の意味と停止の条件を定める。
 - **強制の前提**：機械的な強制の対象は、フックが有効で、対象の入力を判定できる環境とする。Codex のフックの信頼が承認されていない環境では、運用の区画の文章で促すが、機械的な強制は保証しない。
@@ -99,13 +99,13 @@ feasibility-review は、設計とタスク計画の実現性を、推測では�
 2. When 利用者が `/kiro-impl <spec 名>` の入力を送り、その spec の実現性の記録に、タスク計画の確認が通った判定が無い, the feasibility-review shall 入力を止める。
 3. If 実現性の記録が存在しない、または想定の形で読めない, then the feasibility-review shall その spec の入力を止める。
 4. The feasibility-review shall 5.3 の停止を、この仕組みの導入前に作られた spec にも同じように適用する。
-5. When feasibility-review が入力を止める, the feasibility-review shall 止めた理由（どの段階の確認が通っていないか）と、通すための手順（確認の実施と記録、または不要と判定する場合はその判定と理由を記録に残すこと）を利用者に示す。
+5. When feasibility-review が入力を止める, the feasibility-review shall 止めた理由（どの段階の確認が通っていないか）と、通すための手順（確認の実施と記録、または不要と判定する場合はその判定と理由を記録に残すこと）を応答の文章（停止の案内）で利用者に示す。
 6. When 実現性の記録の該当する段階が通った判定になる, the feasibility-review shall 同じ入力を再び送ったときに入力を止めない。
 7. If 入力から対象の spec を特定できない（spec 名が無い、対応するディレクトリが無い、など）, then the feasibility-review shall 入力を止めずに通す。
 8. The feasibility-review shall 止めたことの記録を、リポジトリの管理対象に残さない。
 9. While 実現性の記録が実機検証を不要と判定し、その理由が残っている, the feasibility-review shall その判定を実機検証に関する未確認とは扱わない。
 10. When 利用者が `/kiro-spec-quick <spec 名>` または `/kiro-spec-batch` の入力（`/` と `$` の形を含む）を送り、これらが設計・タスクの各段階を 1 回の入力の中で続けて実行する, the feasibility-review shall 入力の時点で、対象の spec の実現性の記録に設計の確認が通った判定が無ければ入力を止める。
-11. When feasibility-review が 5.10 の入力を止める, the feasibility-review shall 止めた理由と、個別の段階のコマンド（`/kiro-spec-requirements`・`/kiro-spec-design` など）で実現性の確認を済ませてから再び送る手順を利用者に示す。
+11. When feasibility-review が 5.10 の入力を止める, the feasibility-review shall 止めた理由と、個別の段階のコマンド（`/kiro-spec-requirements`・`/kiro-spec-design` など）で実現性の確認を済ませてから再び送る手順を応答の文章（停止の案内）で利用者に示す。
 12. If `/kiro-spec-batch` の入力から対象の spec を特定できない（roadmap に複数の spec がある、など）, then the feasibility-review shall 入力を止めずに通し、運用の区画の文章で、個別の段階のコマンドで実現性の確認を行うよう促す。
 
 ### Requirement 6: 実装中の食い違いのときの段階の戻し方
@@ -136,7 +136,7 @@ feasibility-review は、設計とタスク計画の実現性を、推測では�
 #### 受け入れ基準
 
 1. The feasibility-review shall Claude Code と Codex の両方に、同じ規則で追加の指示と入力の停止を適用する。
-2. When feasibility-review の停止と kiro-gate の追加の文脈・work-branch-flow の追加の文脈が同じ入力に重なる, the feasibility-review shall 入力を止める場合は理由を利用者に示し、止めない場合は自分の追加の指示を他の仕組みの追加の文脈と並べてエージェントに届ける。
+2. When feasibility-review の停止と kiro-gate の追加の文脈・work-branch-flow の追加の文脈が同じ入力に重なる, the feasibility-review shall 入力を止める場合は理由を応答の文章（停止の案内）で利用者に示し、止めない場合は自分の追加の指示を他の仕組みの追加の文脈と並べてエージェントに届ける。
 3. While Codex のフックの信頼が承認されていない, the feasibility-review shall 機械的な強制が働かないことを許容し、運用の区画の文章で同じ運用を促す。
 4. If feasibility-review のフックが入力を解釈できない、または内部で失敗する, then the feasibility-review shall 入力を止めずに通す。
 5. The feasibility-review shall 5.3 の停止（記録が無いとき）と 8.4 の通過（フック自体の失敗）を区別し、前者は spec を特定できた場合に限って止める。
