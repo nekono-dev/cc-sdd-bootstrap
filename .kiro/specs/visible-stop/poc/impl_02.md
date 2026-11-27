@@ -31,3 +31,9 @@
 - 実施内容の要点: 3.1 まで終えた後の配置物（`.agent-hooks/cc-sdd-bootstrap/` の `*.mjs` 全体）を、使い捨てのリポジトリ（`main`、`alpha`・`beta` に `spec.json` だけ。実現性の記録なし）に置き、実物の `feasibility-gate.mjs`・`kiro-gate.mjs`・`work-branch-gate.mjs` を登録した。Claude Code（haiku 2 回、sonnet 1 回、sonnet の auto モード 1 回）と Codex（2 回）に、`/kiro-spec-quick alpha`（Codex は `$` 形）と `/kiro-spec-tasks alpha beta -y`（同）を送った。環境と版は上と同じ。
 - 結果: 6 回すべてで、停止の案内が応答の文章として出た（止めた入力、`alpha` の実現性の記録が無いこと、次にやること）。Claude Code の応答のターン数は 3、Codex は応答の文章あり。`spec.json` 以外のファイルは作られず、ブランチは `main` のまま、子のエージェントも起動されなかった。手順書の読み取り（`Read`）は Claude Code の 4 回すべてで起きた（kiro-gate の終了の停止による。許容した範囲）。Codex は起きなかった。作業が進んだ観測は無かった。
 - 導入の停止（上の 5 回）と合わせて、要件 6.2・6.3 の両ツール・両経路の確認が揃った。リモートセッションの画面（6.1）は、タスク 4.2 の利用者の確認に残る。
+
+## 追記: リモートセッションの画面での確認（2026-11-27、タスク 4.2 の途中経過）
+- 実施内容の要点: 利用者が、手元のマシンのリモートセッション（Claude Code 2.1.329、sonnet、auto モード）で、記録の無い spec `screen-check-demo`（確認用のブランチにだけある）に、`/kiro-spec-quick screen-check-demo` を単独の入力として送った。セッションの記録（イベント）を読んで結果を確かめた。
+- 結果: 入力は `UserPromptSubmit operation blocked by hook` で止まり、`num_turns=0`、応答の文章は 1 件も無かった。停止の理由は通知の欄にだけ出ていた。このセッションが読むフックは、visible-stop の変更を含まないメインの checkout（`main`）のものだったため、旧い方式（`decision: "block"`）の動作であり、無応答の再現にあたる。止める条件（spec を特定でき、記録が無い）は正しく働いた。
+- 先に送った、先頭が `/` でない文章（ブランチの切り替えの依頼に続けて `/kiro-spec-quick …` を含むもの）は、関門の対象外のため止まらず、通常どおり応答が作られた（`num_turns=10`）。spec を特定できない入力（`/kiro-spec-quick test-undefined-spec`、spec のディレクトリが無い）も止まらず、応答が作られた。
+- 未確認: 停止の案内が応答の文章として画面に出ること（要件 6.1）。確認には、この変更を含む `main` の checkout を、リモートセッションが読む状態にしてから、同じ入力を送る必要がある。確認できたら、この下に結果を追記する。
