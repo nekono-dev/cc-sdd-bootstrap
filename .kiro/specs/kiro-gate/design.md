@@ -58,7 +58,7 @@ graph TB
 
 - 状態のキー: `sha256(<根の絶対の道筋> + "\0" + <session_id>)`。根は `kiro-gate.mjs` の位置から求め（`../..`）、入力の `cwd` は使わない（3.5・3.6）。
 - 状態の置き場所: `<os.tmpdir()>/cc-sdd-bootstrap-kiro-gate/<キー>.json`（3.4）。中身はセッション開始時に一覧にあったスキルの名前（`listed`）と、今のターンの先読みの状態（`turn`）。
-- 本文が渡る形の扱い（2.4）: セッション開始時から一覧にあるスキルを、本文が渡る形（Claude Code の `/kiro-*`、Codex の `$kiro-*`）で呼んだときは、手順書の本文がスキルとして渡るので、最初から読み取り済みにする（追加の文脈も出さない）。読み直しを求めるのは、Codex の `/kiro-*`（スキルとして扱われず、ただの文になる）と、セッションの途中で導入して一覧に無いスキルだけ（PoC: `poc/first-kiro-command/`・`poc/req-feasibility/` の b）。
+- 本文が渡る形の扱い（2.4）: セッション開始時から一覧にあるスキルを、本文が渡る形（Claude Code の `/kiro-*`、Codex の `$kiro-*`）で呼んだときは、手順書の本文がスキルとして渡るので、最初から読み取り済みにする（追加の文脈も出さない）。読み直しを求めるのは、Codex の `/kiro-*`（スキルとして扱われず、ただの文になる）と、セッションの途中で導入して一覧に無いスキルだけ（PoC: 実機検証で確認済み。記録は削除済み、b の場面）。
 
 ### Technology Stack
 
@@ -82,7 +82,7 @@ test/
 ### Modified Files
 - `lib/catalog.mjs` — kiro-gate の項目を足す（下の「カタログの項目」）。
 - `package.json` — `files` に 2 つのスクリプトを足す。
-- `poc/kiro-gate/run.sh` — 実装後の確認に、配置したスクリプトを使う形を足す（Claude Code）。Codex は `poc/req-feasibility/codex.sh` の c・d・e を流用する。
+- 実機の確認のスクリプト（PoC の記録は削除済み） — 実装後の確認に、配置したスクリプトを使う形を足す（Claude Code）。Codex は実機検証で使った手順の c・d・e を流用する。
 
 ## System Flows
 
@@ -223,4 +223,4 @@ function messageStop(state: TurnState): string;              // 同上（2.6）
   - `decideStop`: 未読の 1 回目は止め、`stopBlocked` または `stop_hook_active` なら通す（2.6・2.7）。
 - **入口（一時ディレクトリ、標準入力）**: SessionStart で一覧を記録 → 一覧にあるスキルの Claude Code の `/kiro-x` は拒否しない（2.4）→ Stop・自然文の入力・手順書の無い `/kiro-y` を挟んだ後の `/kiro-x` も拒否しない（`listed` が残る）。一覧に無いスキル（SessionStart の後に作った手順書）で UserPromptSubmit → PreToolUse 拒否 → PostToolUse で読み取り → PreToolUse 通過、の一連。次の `/kiro-*` で未読に戻る、自然文で解除（1.4・1.5・4.7）。手順書が無いと状態を作らない（3.3）。別の `session_id`・別の根の状態を使わない（3.5）。`cwd` を変えても同じ根を使う（3.6）。状態がリポジトリの中に作られない（3.4）。壊れた JSON の入力で出力なし・終了 0・標準エラーに理由（3.1・3.2）。
 - **カタログの試験**: 対応表の行が要件 4.1 と同じ、Codex の文章にだけ 4.6 の一文がある。
-- **実機（PoC 済み）**: Claude Code は `poc/kiro-gate/run.sh`、Codex は `poc/req-feasibility/codex.sh`（c・d・e）。実装後は配置したスクリプトで同じ確認を行う。
+- **実機（PoC 済み）**: Claude Code と Codex で実機検証済み（Codex は c・d・e。記録は削除済み）。実装後は配置したスクリプトで同じ確認を行う。

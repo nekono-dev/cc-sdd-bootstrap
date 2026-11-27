@@ -56,7 +56,6 @@ test('配布物は入口・本体・カタログの配置物に限られる', (t
   assert.ok(!files.has('.agent-hooks/cc-sdd-bootstrap/installed.json'), '配置の記録が同梱されています');
   for (const file of files) {
     assert.ok(!file.startsWith('test/'), `テストファイルが同梱されています: ${file}`);
-    assert.ok(!file.startsWith('poc/'), `PoC ファイルが同梱されています: ${file}`);
     assert.ok(!file.startsWith('.kiro/'), `.kiro のファイルが同梱されています: ${file}`);
     assert.ok(!/^skills\/kiro-[^/]+(?:\/|$)/.test(file), `cc-sdd 本体のスキルが同梱されています: ${file}`);
     assert.ok(!/(?:^|\/)settings\/templates(?:\/|$)/.test(file), `cc-sdd 本体の雛形が同梱されています: ${file}`);

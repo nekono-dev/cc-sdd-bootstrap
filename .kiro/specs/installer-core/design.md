@@ -2,7 +2,7 @@
 
 > 改訂（2026-11-23）: 単純化後の要件に合わせて書き直した。旧版（配置記録・改変検出・対話・CLAUDE.md の管理区画）は git の履歴にある。
 >
-> 改訂（2026-11-24）: タスク 7.2 で、Codex は git の worktree（同じリポジトリの別の作業フォルダ）の中でも本体の checkout の `.codex/hooks.json` だけを読むことが分かった（`poc/codex-worktree-hooks/`）。フックのコマンドはセッションの作業場所で動くので、今のコマンドの形のままで worktree 側のスクリプトが呼ばれる。登録の形は変えず、worktree での前提（本体の checkout にも導入が要る）を導入の案内と実機の確認の段取りに足した。
+> 改訂（2026-11-24）: タスク 7.2 で、Codex は git の worktree（同じリポジトリの別の作業フォルダ）の中でも本体の checkout の `.codex/hooks.json` だけを読むことが分かった。フックのコマンドはセッションの作業場所で動くので、今のコマンドの形のままで worktree 側のスクリプトが呼ばれる。登録の形は変えず、worktree での前提（本体の checkout にも導入が要る）を導入の案内と実機の確認の段取りに足した。
 
 ## Overview
 
@@ -52,7 +52,7 @@
 - カタログの形（項目の名前・意味）の変更 → session-install・kiro-gate・subagent-delegation の追加分を見直す。`generated`（設定から作るファイル）は subagent-delegation の設計で足した（2026-11-23）。
 - 運用の区画のファイルの道筋・目印の行の変更 → session-install の書き足しを見直す。
 - フックのコマンドの形（根の求め方・見分けの文字列）の変更 → 各フックのスクリプトの起動のされ方を見直す。
-- Codex がフックの設定を読む場所の変更（今は worktree でも本体の checkout の `.codex/hooks.json`。Codex の版を上げたとき `poc/codex-worktree-hooks/run.sh` で確かめる）→ 導入の案内と、下流のフックの「登録とスクリプトの版がずれる」前提を見直す。
+- Codex がフックの設定を読む場所の変更（今は worktree でも本体の checkout の `.codex/hooks.json`。Codex の版を上げたとき実機で再確認し、結果は PoC 文書に残す）→ 導入の案内と、下流のフックの「登録とスクリプトの版がずれる」前提を見直す。
 - 設定の項目定義の形の変更 → 設定を読むフック（session-install・subagent-delegation）を見直す。
 - 配置先ディレクトリの道筋の変更 → すべての下流を見直す。
 
@@ -127,9 +127,6 @@ test/
 ├── target.test.mjs             # 道筋の安全確認と適用・途中の失敗の報告
 ├── cli.test.mjs                # 引数の解析・使い方・表示の文言
 └── cli.e2e.test.mjs            # 一時の git リポジトリでの init → update → uninstall の通し
-poc/
-├── codex-worktree-hooks/       # worktree での Codex のフックの読まれ方・信頼の承認・実際の配置物での導入（2026-11-24、設計の根拠）
-└── self-apply/run.mjs          # 自己適用の後の実機の確認（7.2）。起動する場所を引数で受け取る
 ```
 
 ### Modified Files
@@ -353,7 +350,7 @@ function removeHooks(input: { file: string; text: string | null }): { text: stri
 - 形: `{ "hooks": { "<イベント>": [ { "matcher"?: string, "hooks": [ { "type": "command", "command": string, "timeout"?: number } ] } ] } }`（両ツール共通）。
 - 一式のコマンド = `hooks` の中の `command` に `OWNED_MARKER` を含むもの。統合は「各組から一式のコマンドだけを外し（外して空になった組は捨てる）、そのツール向けのカタログの組を各イベントの最後に足す」。同じ組にある利用者のコマンド、利用者の組、その他の鍵は順序も保つ（4.2。今の `settings-hooks.mjs` の選別を引き継ぐ）。同じ版での再実行は同じ文字列になる（4.3）。
 - JSON として読めない、または `hooks` が期待の形でない場合は `HooksError`（4.4・7.4）。`removeHooks` も同じ選別で一式のコマンドだけを外し、空になった組とイベントの配列は消す。
-- **git の worktree での Codex**（`poc/codex-worktree-hooks/result.md`）: Codex は worktree の中でも本体の checkout の `.codex/hooks.json` だけを読む（worktree 側のファイルは、本体側に無くても読まれない）。コマンドはセッションの作業場所で動くので、`$(git rev-parse --show-toplevel)` は worktree の根になり、worktree 側の配置物のスクリプトが呼ばれる。そのため、コマンドの形は変えない（本体側の道筋を書き込む形や、利用者の全体の設定への登録は採らない。後者は要件 8.2 のリポジトリの外への書き込みになる）。
+- **git の worktree での Codex**（実機検証で確認）: Codex は worktree の中でも本体の checkout の `.codex/hooks.json` だけを読む（worktree 側のファイルは、本体側に無くても読まれない）。コマンドはセッションの作業場所で動くので、`$(git rev-parse --show-toplevel)` は worktree の根になり、worktree 側の配置物のスクリプトが呼ばれる。そのため、コマンドの形は変えない（本体側の道筋を書き込む形や、利用者の全体の設定への登録は採らない。後者は要件 8.2 のリポジトリの外への書き込みになる）。
   - 結果として、worktree では「登録（どのイベントで何を呼ぶか）」は本体の checkout の版、「スクリプトの中身」は worktree の版になる。本体側に登録があれば、cc-sdd の導入のフック（session-install が SessionStart・UserPromptSubmit に登録する）が、Codex の作業の前に worktree へ cc-sdd を入れる（実際の配置物で確認。PoC の場面 9）。
   - 本体側が未導入ならフックは動かず、登録が worktree に無いスクリプトを指すとそのフックは失敗するだけでセッションは止まらない（PoC の場面 4・6）。AGENTS.md とスキルはコミットしないので、作ったばかりの worktree ではこのとき AGENTS.md も無い。そのため、本体側が揃うまでは worktree で Codex を起動する前に導入のコマンド（`node .agent-hooks/cc-sdd-bootstrap/install-cc-sdd.mjs`。session-install の再試行と同じもの）を手で実行するよう案内する（4.5）。
   - 信頼の承認は、本体の checkout の `.codex/hooks.json` に対して行う。対話の画面の `codex` を worktree で起動すると、確認の画面の出どころに本体側のファイルが示され、承認の記録も本体側のファイルの道筋で残る。1 回の承認でその worktree にも効く。`codex exec` は未承認のフックを黙って飛ばすので、最初の承認は対話の画面で行う（PoC の場面 7・8）。
@@ -451,13 +448,13 @@ function runCli(argv: string[], io: { cwd: string; stdout: Writable; stderr: Wri
   - `blocks`: 片方だけ・逆順・複数組で `BlockError`。区画の外の文章は変わらない（6.2）。
 - **カタログの試験**: カタログのファイルが同梱に実在し `package.json` の `files` と一致する（3.1・8.7）。cc-sdd 本体の道筋（`skills/kiro-*`・`settings/templates`）を含まない（3.5）。`.gitignore` の行が共有物に当たらない（6.4）。区画の文章に cc-sdd の標準の文書の見出し（`# Agentic SDLC and Spec-Driven Development`）が無い（5.3）。
 - **通しの試験（一時の git リポジトリ）**: `init` → 配置先・2 つのフックの設定・`.gitignore`・設定ファイルが揃う（1.1・2.1・4.1・6.1）→ 利用者のフックと `.gitignore` の行を足して `update` → 利用者の分が残る（4.2・6.2）→ 再実行で変更なし（1.5）→ CLAUDE.md・AGENTS.md に区画を足して `uninstall` → 登録と区画だけ外れ、標準の文書の部分・設定・配置物・`.gitignore` が残る（7.1・7.2）。git の最上位でない・シンボリックリンクの経路で何も変わらない（8.1・8.2）。書き込みの途中の失敗（書けないディレクトリ）で表示が出る（8.5）。
-- **実機の確認（PoC 済み）**: Codex のフックのコマンドの形は `poc/codex-hook-path/run.mjs`、worktree での読まれ方と信頼の承認は `poc/codex-worktree-hooks/run.sh`・`result.md`、worktree での実際の配置物による cc-sdd の導入は `poc/codex-worktree-hooks/real-install.sh`。
+- **実機の確認（PoC 済み）**: Codex のフックのコマンドの形、worktree での読まれ方と信頼の承認、worktree での実際の配置物による cc-sdd の導入は、実機で確かめた（記録は削除済み）。
 - **案内の文言（`cli.test.mjs`）**: `init`・`update` の成功の表示に、Codex の最初の承認は対話の画面で行うこと、worktree では本体の checkout の導入と承認が要ること、揃うまでは起動前に導入のコマンドを実行することが含まれる（4.5）。
 - **自己適用の後の実機の確認（9.1、`handoff-self-apply.md` の手順 4）**: `claude -p` と `codex exec` を起動し、登録したフックが動き、運用の区画が `.kiro/steering/` を読むよう案内し、`/kiro-spec-status`（Codex は `$kiro-spec-status`）がスキルとして動くことを確かめる。場所は次のとおり分ける。
   - Claude Code: 自己適用した作業ブランチの worktree（Claude Code は worktree の `.claude/settings.json` を読む。2026-11-24 に確認済み）。
   - Codex: 自己適用した作業ブランチを、`~/.cache` の下に普通の checkout として写した場所（worktree ではない）。このリポジトリの本体の checkout（develop）に自己適用が取り込まれるまで、worktree では Codex のフックが動かないため。
   - 本体の checkout に取り込まれた後の worktree での Codex のフックの確認は、develop への取り込み（利用者の許可が要る）の後の作業とし、このタスクには含めない。
-  - 確認のスクリプト（`poc/self-apply/run.mjs`）は起動する場所を引数で受け取り、Claude Code の判定 2 件（スキルの起動の観測・拒否の検出）を直してから使う。
+  - 確認のスクリプト（自己適用の実機検証用）は起動する場所を引数で受け取り、Claude Code の判定 2 件（スキルの起動の観測・拒否の検出）を直してから使う。
 
 ## Migration Strategy
 

@@ -1,12 +1,12 @@
 {
   "files": {
-    ".agent-hooks/cc-sdd-bootstrap/agent-section-claude.md": "743c6b6a87408fc857bef06f85597dd64489d970d1371525b007a7cb17ffb769",
-    ".agent-hooks/cc-sdd-bootstrap/agent-section-codex.md": "b55cf4bb64d687f59cb85e2be80ba00ed4eafa8f941c354cb939a6d232bd52c1",
-    ".agent-hooks/cc-sdd-bootstrap/codex-trust-rules.mjs": "88f9359273ab236db2dba2fb210ebbeb328cf91820bc5e91f64b273712434f7d",
+    ".agent-hooks/cc-sdd-bootstrap/agent-section-claude.md": "ed252e880b4b8065490e94a33a9d57496ab31c6e4bd97bde77bc6ccf801b1ac4",
+    ".agent-hooks/cc-sdd-bootstrap/agent-section-codex.md": "101393e770b58374e978fdc8087420daebc602d0e5122970eb28aabe563fa591",
+    ".agent-hooks/cc-sdd-bootstrap/codex-trust-rules.mjs": "0a95af15bb24f90d3a6fdf47e0bd0a9ba4bd05902b41526331a2e6f5c28d8518",
     ".agent-hooks/cc-sdd-bootstrap/codex-trust.mjs": "e2a2d918ea245e2b6bf92bfb97a31f874c9ac6cd70ddc09beb1cf70d7ba0f590",
     ".agent-hooks/cc-sdd-bootstrap/config-schema.mjs": "832dfd4a069f7ed03a628767d0f4a4f905978f3e0292e1b45b1d7993ab8d835a",
     ".agent-hooks/cc-sdd-bootstrap/delegate.mjs": "1363604740a02b3a68fbfa8d9c617a45357c3bdddf82d892341d064c7e649434",
-    ".agent-hooks/cc-sdd-bootstrap/feasibility-gate-rules.mjs": "88d97fefbae64b2f25140189ef7919d56bbf5cd251ad39afc686065bc783b69a",
+    ".agent-hooks/cc-sdd-bootstrap/feasibility-gate-rules.mjs": "2a260640cd7ba4595c6e87755e8a18be38585c6aee6dd3b8b474b3fd0ce9b2a3",
     ".agent-hooks/cc-sdd-bootstrap/feasibility-gate.mjs": "2339b961b951d21d599dfbf6ebc33514a85d443c6b3bbf36212d14980b461f5a",
     ".agent-hooks/cc-sdd-bootstrap/freshness-rules.mjs": "2f2062a3b922746396d7bb8837f308e2962f9871814a241686686220520afb8c",
     ".agent-hooks/cc-sdd-bootstrap/freshness.mjs": "b24a15fb89179f5f963ac25701056c205a2ac137e8acfe494365abb5fcc951d1",

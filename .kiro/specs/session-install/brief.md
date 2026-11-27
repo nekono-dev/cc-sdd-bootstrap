@@ -4,7 +4,7 @@
 
 ## Problem
 cc-sdd の導入物はライセンスが異なるのでコミットしない（大目的①）。今の仕組みはセッション開始時に入れ直すが、次の穴と重さがある。
-- **初回に `/kiro-*` が使えない**: セッション開始時のフック（SessionStart）で入れたスキルは、そのセッションのスキル一覧に載らない。対話モードでは `/kiro-*` が「Unknown command」と表示されて終わり、どのフックにも届かない（`poc/session-hooks/result.md` の b、`poc/kiro-gate/result.md` の対話モードの確認）。clone 直後やクラウドの新しい環境の最初のセッションで、cc-sdd を使い漏らす。
+- **初回に `/kiro-*` が使えない**: セッション開始時のフック（SessionStart）で入れたスキルは、そのセッションのスキル一覧に載らない。対話モードでは `/kiro-*` が「Unknown command」と表示されて終わり、どのフックにも届かない（実機検証の session-hooks の b、kiro-gate の対話モードの確認）。clone 直後やクラウドの新しい環境の最初のセッションで、cc-sdd を使い漏らす。
 - **Codex に入らない**: Claude Code 向け（`--claude-skills`）だけを入れている。
 - **余計な仕組み**: 雛形をコミットできる例外（`keepTemplates`、旧要件 6）、全ファイルの内容照合による入れ直しの判定（旧要件 2）、複数の導入対象への一般化（旧要件 3.9）。
 
@@ -43,6 +43,6 @@ cc-sdd の導入物はライセンスが異なるのでコミットしない（�
 - **Adjacent**: kiro-gate（手順書が無いときの停止は、ここの入力の停止に寄せて重複させない）
 
 ## Constraints
-- 設計前の PoC: Codex に SessionStart に当たるフックがあるか（UserPromptSubmit・PreToolUse・Stop は `dev/codex-support` の `poc/codex-delegation-live/result.md` と `.codex/hooks.json` で確認済み）、Codex の `/kiro-*`（スキル）が初回にどう扱われるか、手元の初回の導入をどのフックで始められるか。
-- 同時に始まったセッションの導入は重なる（`poc/session-hooks/result.md` の d）。今の「排他なし・記録を先に書いて成功で消す」方式を残すかを設計で決める。
+- 設計前の PoC: Codex に SessionStart に当たるフックがあるか（UserPromptSubmit・PreToolUse・Stop は `dev/codex-support` の実機検証（codex-delegation-live）と `.codex/hooks.json` で確認済み）、Codex の `/kiro-*`（スキル）が初回にどう扱われるか、手元の初回の導入をどのフックで始められるか。
+- 同時に始まったセッションの導入は重なる（実機検証の session-hooks の d）。今の「排他なし・記録を先に書いて成功で消す」方式を残すかを設計で決める。
 - クラウドセッションではパッケージのレジストリへの通信が要る（既定で許可されている）。

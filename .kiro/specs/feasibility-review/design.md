@@ -35,7 +35,7 @@
 - 手順書の先読みの拒否（kiro-gate）、作業ブランチの確保と PR（work-branch-flow）、子のモデルの確認（subagent-delegation）。
 - フックの登録の仕組み・運用の区画の組み立て（installer-core）。設定の項目は足さない。
 - cc-sdd のレビュー（`/kiro-validate-design`・`/kiro-spec-tasks` の独立したレビュー）の中身。観点を追加の指示と運用の文章で渡すだけ。
-- PoC の作り方・置き場所の規則（steering の `poc/<前提ごと>/`。この spec は求めるだけ）。
+- PoC の作り方・置き場所の規則（steering の、前提ごとの置き場所の規則。この spec は求めるだけ）。
 
 ### Allowed Dependencies
 - Node.js 22 の標準モジュール（`node:fs/promises`・`node:path`・`node:child_process`。`git` は引数の配列で起動する）。
@@ -47,13 +47,13 @@
 - `detectCommand` の形の変更。
 - cc-sdd の spec の置き場所・コマンドの引数の形（`/kiro-spec-tasks <名前> [-y]`・`/kiro-impl <名前> [番号…]`・`/kiro-spec-quick <名前> [--auto]`）の変更。
 - 実現性の記録の見出し・判定の語の変更（既存の記録の書き直しが要る）。
-- フックの入力・入力の停止（`decision: "block"`）の出力の形の変更（Claude Code・Codex の版）。`poc/feasibility-review/` を再実行する。
+- フックの入力・入力の停止（`decision: "block"`）の出力の形の変更（Claude Code・Codex の版）。実機で再確認し、結果は PoC 文書に残す。
 
 ## Architecture
 
 ### Existing Architecture Analysis
 - 配置物は「入口＋純粋な判定」の組。登録は `lib/catalog.mjs`（`hooks`・`agentSections`・`files`）と `package.json` の `files`（structure.md）。
-- 入力の停止は `install-cc-sdd.mjs` の UserPromptSubmit が `{"decision":"block","reason":…}` を出す先例がある。両ツールで効く（`poc/req-feasibility/result.md`）。
+- 入力の停止は `install-cc-sdd.mjs` の UserPromptSubmit が `{"decision":"block","reason":…}` を出す先例がある。両ツールで効く（実機検証で確認済み。記録は削除済み）。
 - kiro-gate は根を「スクリプトの位置」から求める。worktree で作業すると、spec が本体の checkout に無いことがある。この spec では `cwd` と worktree の一覧からも探す（下記）。
 
 ### Architecture Pattern & Boundary Map
@@ -69,7 +69,7 @@ graph TB
 ```
 
 - **Selected pattern**: 新しい入口＋純粋な判定。状態を持たない（記録のファイルが唯一の状態）。kiro-gate を拡張しない。
-- **観点が使われた証拠は記録に求める。** 追加の文脈はレビューには届くが、手順書が決めた出力の形には反映されない（`poc/feasibility-review/result.md` の A）。そのため、関門が見るのは「文脈を渡したか」ではなく「記録に通過の判定があるか」。
+- **観点が使われた証拠は記録に求める。** 追加の文脈はレビューには届くが、手順書が決めた出力の形には反映されない（実機検証の A）。そのため、関門が見るのは「文脈を渡したか」ではなく「記録に通過の判定があるか」。
 - **子のレビュー役への観点**: Codex は子の依頼文が暗号化されてフックから読めない（同 B）。両ツールで同じ規則にするため、機械的な検査は持たず、運用の区画の文章（親が依頼文に入れる。同 B3 で両ツール OK）と、記録の確認で担保する。
 - **spec のディレクトリの特定**: 候補の根を順に探し、`.kiro/specs/<名前>/` が最初に見つかったものを使う。候補は ① 入力の `cwd` の git の根、② スクリプトの位置から求めた根、③ ① で `git worktree list --porcelain` に出る各 worktree の根。どこにも無ければ「特定できない」として通す（5.7）。
 - **停止の出力**（2026-11-27 改訂: visible-stop）: 当初は `decision: "block"` で止め、理由を利用者に直接示す設計だった。リモートセッションの画面には理由が出ず、モデルも動かないため無応答になったので、停止の案内と止める指示を追加の文脈で渡し、モデルに応答の文章を作らせる形に変えた（`.kiro/specs/visible-stop/`）。止める条件と理由の文面（止めた理由と通す手順。5.5）は変えない。
@@ -96,8 +96,6 @@ test/
 ├── <既存の 5 spec>/feasibility.md    # 実現性の記録（installer-core・session-install・kiro-gate・subagent-delegation・codex-hook-trust）
 ├── work-branch-flow/feasibility.md   # この 2 つの spec 自身の記録
 └── feasibility-review/feasibility.md
-poc/feasibility-review/
-└── run.mjs                       # 配置した入口を使う確認の場面（C）を足す
 ```
 
 ### Modified Files
@@ -333,7 +331,7 @@ function messageBlock(spec: string, stage: "design" | "tasks", reason: "no-recor
 - 入力の JSON が不正で通る（8.4）。リポジトリの中に状態のファイルが作られない（5.8）。
 - カタログ・`package.json` の `files` の一致、運用の区画の文章が両ツールで同じ項目を含む（7.1〜7.4）。
 
-### E2E（実機。`poc/feasibility-review/run.mjs` の場面 C）
+### E2E（実機。実機検証の場面 C）
 - 実際の配置物を入れた一時リポジトリで、記録のない spec の `/kiro-spec-tasks`・`/kiro-impl`（Codex は `$kiro-…`）が、両ツールで入力の停止になり、通過の記録を書いた後は通ること。
 - kiro-gate と並んで追加の文脈が出る入力（`/kiro-spec-design`）で、両方の文脈が届くこと（Claude Code）。
 
@@ -346,10 +344,10 @@ flowchart LR
     C --> D[自己適用で停止が有効]
 ```
 
-- 既存の完了済み 5 つの spec には、実現性の記録を足す（要件 5.4）。内容は、実現性の確認が既に行われた（実装・検証済み、PoC は `poc/` に残る）ことを示す短い記録で、3 つの判定をすべて埋める。設計のやり直しではない。
+- 既存の完了済み 5 つの spec には、実現性の記録を足す（要件 5.4）。内容は、実現性の確認が既に行われた（実装・検証済み。PoC の記録は削除済み）ことを示す短い記録で、3 つの判定をすべて埋める。設計のやり直しではない。
 - この 2 つの spec 自身の記録は、設計・タスクの確認の後に足す。自己適用の直後に `/kiro-impl` が止まらないようにする。
 - 取り込み後の worktree の Codex は、本体の checkout にも同じ登録が入るまでフックが動かない（roadmap の取り込み後の確認の対象）。
 
 ## Supporting References
-- 実機の前提と結果: `poc/feasibility-review/result.md`（A: 文脈の反映、B1〜B3: 子の依頼文）、`poc/work-branch-flow/result.md`（同じイベントに複数のフック、入力の停止の見え方）、`poc/req-feasibility/result.md`（入力の停止・Stop）。
+- 実機の前提と結果: 実機検証で確認済み（記録は削除済み。A: 文脈の反映、B1〜B3: 子の依頼文、同じイベントに複数のフック・入力の停止の見え方、入力の停止・Stop）。
 - 調査と判断の記録: 同じディレクトリの `research.md`。

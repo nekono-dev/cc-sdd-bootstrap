@@ -40,7 +40,7 @@
 
 ### Revalidation Triggers
 - `kiro-gate-rules.mjs` の `detectCommand` の形の変更（この spec の対象の検出が変わる）。
-- フックの入力の形（`cwd`・`session_id`・`stop_hook_active`・`tool_name`・`tool_input`）の変更、拒否と停止の出力の形の変更（Claude Code・Codex の版）。`poc/work-branch-flow/` を再実行する。
+- フックの入力の形（`cwd`・`session_id`・`stop_hook_active`・`tool_name`・`tool_input`）の変更、拒否と停止の出力の形の変更（Claude Code・Codex の版）。実機で再確認し、結果は PoC 文書に残す。
 - 設定の項目の追加・名前の変更（installer-core の項目定義と導入先の設定ファイル）。
 - 同じイベントに動く別のフックの追加（拒否の理由が 1 つしか届かないため、重なる場面を見直す）。
 
@@ -68,7 +68,7 @@ graph TB
 
 - **Selected pattern**: 新しい入口＋純粋な判定（既存の型）。kiro-gate を拡張しない（その spec の境界は「先読みの強制だけ」）。
 - **Domain boundaries**: 「いまどのブランチか」の判定（git）と「何を拒否するか」の判断（rules）を分け、判断は入力（ブランチ・状態・設定）から結果だけを計算する。
-- **現在のブランチの取得（3.13）**: 判定する場所は、次の順で最初に求められたもの。① 操作の入力から求めた作業場所（`workDirOf`: Claude Code の `Write`・`Edit`・`Read` などの対象の絶対パスのディレクトリ、`Bash` の先頭の `cd <絶対パス> &&`、Codex の `apply_patch` の対象パス（`cwd` からの相対を解く）と Bash の `cwd`＝`workdir`）② 状態に記録した直近の作業場所 ③ 入力の `cwd`（無ければプロセスの作業場所）。そこで `git branch --show-current` を実行する。Claude Code のフックの `cwd` は Bash の `cd` に追随せず、worktree へ移った同じセッションでは本体の checkout のブランチが見える。①②で実際の作業場所のブランチを使うことで、この誤検出と、PR の停止が働かない穴（4.4・5.1）を減らす（`poc/work-branch-flow/result.md` の C・E3 で、対象パスの場所からのブランチが worktree の作業に正しく効くことを確認済み）。パスの無い操作が続くと記録が古いままになりうるが、その場合も直前の作業場所のブランチを使う。
+- **現在のブランチの取得（3.13）**: 判定する場所は、次の順で最初に求められたもの。① 操作の入力から求めた作業場所（`workDirOf`: Claude Code の `Write`・`Edit`・`Read` などの対象の絶対パスのディレクトリ、`Bash` の先頭の `cd <絶対パス> &&`、Codex の `apply_patch` の対象パス（`cwd` からの相対を解く）と Bash の `cwd`＝`workdir`）② 状態に記録した直近の作業場所 ③ 入力の `cwd`（無ければプロセスの作業場所）。そこで `git branch --show-current` を実行する。Claude Code のフックの `cwd` は Bash の `cd` に追随せず、worktree へ移った同じセッションでは本体の checkout のブランチが見える。①②で実際の作業場所のブランチを使うことで、この誤検出と、PR の停止が働かない穴（4.4・5.1）を減らす（実機検証の C・E3 で、対象パスの場所からのブランチが worktree の作業に正しく効くことを確認済み）。パスの無い操作が続くと記録が古いままになりうるが、その場合も直前の作業場所のブランチを使う。
 - **brw との併存**: 拒否の対象から「ブランチの作成・切り替え」（`git switch`・`git checkout`・`git branch`・`git worktree`）を除き、それを試みた時点で拒否をやめる。brw がその操作を拒否して `brw create` を案内しても、work-branch-flow は以後拒否しないので行き詰まらない（E2 の失敗を避ける）。
 - **拒否の理由の届き方**: 同じ操作への複数の拒否は理由が 1 つしか届かない（Claude Code は後に登録したもの、Codex は先に登録したもの）。そのため、対象の入力を受けた時点で追加の文脈として案内を先に届け（3.12）、拒否は最大 2 回にする（3.5）。
 
@@ -90,8 +90,6 @@ graph TB
 test/
 ├── work-branch-gate-rules.test.mjs   # 規則の単体試験
 └── work-branch-gate.test.mjs         # 一時の git リポジトリと標準入力での入口の試験
-poc/work-branch-flow/
-└── run.mjs                       # 配置した入口を使う確認の場面（F）を足す
 ```
 
 ### Modified Files
@@ -253,7 +251,7 @@ function messageStop(branch: string): string;
 
 **Implementation Notes**
 - `classifyToolCall` は粗い分類: 読み取り専用の道具名（`Read`・`Glob`・`Grep`・`LS`・`ToolSearch`・`WebFetch`・`WebSearch`・`TodoWrite` など）は `read`。シェル（`Bash`）は、リダイレクト・連結・サブシェルを含まない単純なコマンドで、先頭の語が `git switch|checkout|branch|worktree` なら `branch`、`ls`・`cat`・`head`・`tail`・`nl`・`pwd`・`grep`・`rg`・`find`・`git status|log|diff|show|fetch|rev-parse|remote|ls-remote` なら `read`。それ以外はすべて `work`。誤って `work` と分類しても、最大 2 回の拒否で済む。
-  - 実機（`poc/work-branch-flow/result.md` の場面 F）で、モデルが切り替えを `&&`・`||`・`( )` でつないだ複合コマンドで実行し、連結をすべて「作業」とする分類では切り替えが 2 回拒否されて諦めることが分かった。Bash は引用符の外の区切り（`&&`・`||`・`;`・`|`・改行・`( )`）で部分に分け、各部分を分類して合わせる（どれかが作業・分類できない構造〔リダイレクト・コマンド置換・単独の `&`・空の部分など〕なら作業、作業が無く切り替えがあれば切り替え、全部読み取りなら読み取り）。引用符は外した値で判定し、行継続は取り除いてから判定する。
+  - 実機（実機検証の場面 F）で、モデルが切り替えを `&&`・`||`・`( )` でつないだ複合コマンドで実行し、連結をすべて「作業」とする分類では切り替えが 2 回拒否されて諦めることが分かった。Bash は引用符の外の区切り（`&&`・`||`・`;`・`|`・改行・`( )`）で部分に分け、各部分を分類して合わせる（どれかが作業・分類できない構造〔リダイレクト・コマンド置換・単独の `&`・空の部分など〕なら作業、作業が無く切り替えがあれば切り替え、全部読み取りなら読み取り）。引用符は外した値で判定し、行継続は取り除いてから判定する。
 - `messageDeny`・`messageGuidance` は、現在のブランチ名、作業用ブランチへ切り替えてから続けること、既存の作業用ブランチがあればそこへ・無ければ新規作成、どれか分からなければ利用者に尋ねること、作れないときは理由を利用者に伝えて止まること、を含める。`kiro-impl` では「その spec を格納した作業用ブランチがリモートにある場合はそこへ切り替える。ローカルに spec が無い可能性がある」を足す。
 - `messagePrContext` は、`kiro-validate-impl` が GO で、エージェントが基底ブランチの上にいなければ（基底の上なら PR を求めない）、作業ブランチの push と PR の作成を通常の操作で試みること（設定の既定の運用であり利用者の事前の指示として扱うこと）、NO-GO なら PR を作らず報告すること、別の仕組みが拒否して別の手順を案内したら従うこと、タイトル・本文は作業の内容から作ることを含める。
 
@@ -352,7 +350,7 @@ function messageStop(branch: string): string;
 - 状態ファイルが os.tmpdir の下にだけ作られ、リポジトリの中に何も作られない（3.11・5.6）。
 - カタログ・設定項目・`package.json` の `files` の一致、運用の区画に特定の仕組みの名前が無いこと（6.5）。
 
-### E2E（実機。`poc/work-branch-flow/run.mjs` の場面 F）
+### E2E（実機。実機検証の場面 F）
 - 実際の配置物を入れた一時リポジトリで、Claude Code と Codex それぞれが、基底ブランチで対象の入力を受けて作業ブランチへ移ってから作業すること（拒否→案内→切り替え）。
 - brw を重ねた構成（Claude Code）で、`git switch -c` が brw に拒否され、`brw create` へ進めること（行き詰まらない）。
 - kiro-gate と重なる入力（手順書の未読と基底ブランチが同時）で、最終的に両方の案内が届くこと。
@@ -362,5 +360,5 @@ function messageStop(branch: string): string;
 - 自己適用（このリポジトリ）の後は、本体の checkout が `develop` のままなら、対象の入力で拒否が働く。worktree の中の Codex は、本体の checkout にも同じ登録が入るまでフックが動かない（roadmap の取り込み後の確認の対象）。
 
 ## Supporting References
-- 実機の前提と結果: `poc/work-branch-flow/result.md`（A・B・C・D・E・同じイベントへの複数のフック）。
+- 実機の前提と結果: 実機検証で確認済み（記録は削除済み。A・B・C・D・E・同じイベントへの複数のフック）。
 - 調査と判断の記録: 同じディレクトリの `research.md`。

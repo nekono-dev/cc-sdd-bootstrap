@@ -13,7 +13,7 @@ cc-sdd の作業では、実装・レビュー・設計・調査・デバッグ�
 
 ## Current State
 - 手作業の運用は回っている: `codex -a never exec --sandbox <read-only|workspace-write> --model <モデル> --config 'model_reasoning_effort="medium"' --cd <ルート> - < <指示のファイル>`。実装は Luna（`gpt-6-luna`）・書き込み可、レビュー・調査・デバッグは Sol（`gpt-6.1-sol`）・読み取り専用。
-- `dev/codex-support` の PoC で確認済みの事実（`poc/subagent-model-policy/result.md`）: Claude Code の Agent の起動前フック（PreToolUse）で子の起動を拒否でき、理由が親に届く。Codex の子の起動（`spawn_agent`）もフックで拒否できる。Codex は履歴の引き継ぎを省くと親と同じモデルになる。Claude Code の指揮役のモデルは、初回の起動では値を得られない例があった。
+- `dev/codex-support` の PoC で確認済みの事実（記録は同ブランチの PoC 文書）: Claude Code の Agent の起動前フック（PreToolUse）で子の起動を拒否でき、理由が親に届く。Codex の子の起動（`spawn_agent`）もフックで拒否できる。Codex は履歴の引き継ぎを省くと親と同じモデルになる。Claude Code の指揮役のモデルは、初回の起動では値を得られない例があった。
 
 ## Desired Outcome
 - **役割表**: 設定に「役割 → 指揮役と同じ／別のベンダ・モデル・推論量・権限（読み取り専用／書き込み可）」とモデルの格の小さな表を置く。指揮役より上の格の子は拒否する。
@@ -47,5 +47,5 @@ cc-sdd の作業では、実装・レビュー・設計・調査・デバッグ�
 
 ## Constraints
 - 「厳密さのためにコードを増やさない」。判定できないときに止めるか通すかを、部品ごとに決めて明記する。
-- 設計前の PoC: Claude Code で指揮役のモデルをフックからどう得るか（得られないときの扱いを含む）、Codex の子の起動でモデルと推論量の指定をどう確かめるか、`claude -p` を子として起動するときのモデル・権限の指定。`dev/codex-support` の `poc/subagent-model-policy/` を出発点にしてよい。
+- 設計前の PoC: Claude Code で指揮役のモデルをフックからどう得るか（得られないときの扱いを含む）、Codex の子の起動でモデルと推論量の指定をどう確かめるか、`claude -p` を子として起動するときのモデル・権限の指定。`dev/codex-support` の PoC（同ブランチ）を出発点にしてよい。
 - 子の起動は書き込みの呼び出しを 1 つずつ行い、読み取りと重ねない（今の運用の決まり）。
